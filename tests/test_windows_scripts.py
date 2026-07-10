@@ -39,6 +39,18 @@ def test_schedule_settings_use_settings_cli_contract():
     assert "--get" in script
     assert "--set" in script
     assert "--all-day" in script
+    assert "'--json'" in script
+
+
+def test_stop_all_exit_waits_for_stop_script():
+    script = read_script("qq-onebot-tray.ps1")
+    handler = script[script.index("$stopExitItem.add_Click"):]
+    assert "Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1' -Wait" in handler
+
+
+def test_stop_script_returns_success_after_best_effort_cleanup():
+    script = read_script("stop-qq-onebot-whitelist-hidden.ps1")
+    assert script.rstrip().endswith('exit 0')
 
 
 def test_tray_shortcut_uses_absolute_windows_powershell():

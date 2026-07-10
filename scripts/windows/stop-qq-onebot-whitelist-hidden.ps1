@@ -37,3 +37,4 @@ foreach ($p in $procs) {
 }
 
 Write-Host 'Stopped QQ OneBot whitelist bot and NapCat if they were running.'
+exit 0

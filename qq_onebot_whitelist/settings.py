@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import yaml
@@ -33,6 +34,7 @@ def write_analysis_windows(path: str | Path, windows: list[str]) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='config.yaml')
+    parser.add_argument('--json', action='store_true')
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument('--get', action='store_true')
     action.add_argument('--set')
@@ -44,7 +46,7 @@ def main() -> int:
         windows = write_analysis_windows(args.config, [])
     else:
         windows = write_analysis_windows(args.config, [item.strip() for item in args.set.split(',') if item.strip()])
-    print('\n'.join(windows) if windows else '全天')
+    print(json.dumps(windows) if args.json else ('\n'.join(windows) if windows else '全天'))
     return 0
 
 

@@ -25,6 +25,12 @@ def test_high_without_substantive_evidence_falls_back_to_review():
     assert quality.value_level == 'review'
 
 
+def test_low_with_substantive_evidence_falls_back_to_review():
+    quality = parse_context_quality('## 概览\n包含 ComfyUI 工作流参数。\n## 内容判定\nAI相关：否\n价值等级：低')
+
+    assert quality.value_level == 'review'
+
+
 def test_content_judgment_is_removed_from_display_summary():
     quality = parse_context_quality('## 概览\n包含 LoRA 训练经验。\n## 内容判定\nAI相关：是\n价值等级：高\n判断理由：可复用')
 

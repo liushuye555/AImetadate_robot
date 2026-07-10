@@ -11,11 +11,16 @@ $mutex = New-Object System.Threading.Mutex($true, 'Local\QQOneBotWhitelistTray',
 if (-not $createdNew) { exit 0 }
 
 function Invoke-BotScript {
-    param([string]$Name)
+    param([string]$Name, [switch]$Wait)
     $path = Join-Path $PSScriptRoot $Name
-    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+    $arguments = @(
         '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$path`""
-    ) -WorkingDirectory $BotDir -WindowStyle Hidden | Out-Null
+    )
+    if ($Wait) {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $BotDir -WindowStyle Hidden -Wait | Out-Null
+    } else {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $BotDir -WindowStyle Hidden | Out-Null
+    }
 }
 
 function Open-Path {
@@ -55,7 +60,7 @@ $exitItem.add_Click({
     [System.Windows.Forms.Application]::Exit()
 })
 $stopExitItem.add_Click({
-    Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1'
+    Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1' -Wait
     $tray.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })

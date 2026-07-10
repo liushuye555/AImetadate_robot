@@ -91,8 +91,8 @@ $allDayButton.Add_Click({
 })
 
 try {
-    $current = Invoke-Settings -Arguments @('--get')
-    $windows = @($current -split "`r?`n" | Where-Object { $_ -match '^\d{2}:\d{2}-\d{2}:\d{2}$' })
+    $current = Invoke-Settings -Arguments @('--get', '--json')
+    $windows = @($current | ConvertFrom-Json)
     $textBox.Lines = $windows
     [void]$form.ShowDialog()
 } catch {

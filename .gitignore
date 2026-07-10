@@ -9,6 +9,7 @@ __pycache__/
 data/
 logs/
 run/
+runtime/
 
 scripts/windows/launcher.config.ps1
 *.lnk

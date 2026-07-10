@@ -4,7 +4,7 @@ from qq_onebot_whitelist.store import Store
 
 def test_resource_link_report_filters_dedupes_and_keeps_better_context(tmp_path):
     store = Store(tmp_path / 'bot.db')
-    store.record_link(scope='group:1', user_id='u1', url='https://v.kuaishou.com/J7sMUhrZ', message_text='快手极速版')
+    store.record_link(scope='group:1', user_id='u1', url='https://v.kuaishou.com/example-test', message_text='测试短视频分享')
     store.record_link(scope='group:1', user_id='u1', url='https://civitai.com/models/123/model?utm=abc', message_text='好用的 lora')
     store.record_link(scope='group:1', user_id='u2', url='https://civitai.com/models/123/model', message_text='重复')
 

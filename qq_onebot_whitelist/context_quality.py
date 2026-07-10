@@ -63,6 +63,8 @@ def parse_context_quality(summary: str) -> ContextQuality:
     empty_claim = bool(re.search(r'无有效.*(?:讨论|内容)|无需输出总结|已过滤', display))
     if parsed_level == 'high' and (not evidence or empty_claim or relevant is False):
         parsed_level = 'review'
+    if parsed_level == 'low' and evidence:
+        parsed_level = 'review'
     if relevant is None or level_raw is None:
         parsed_level = 'review'
 

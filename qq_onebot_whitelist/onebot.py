@@ -129,6 +129,7 @@ def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) 
 
 async def ai_context_loop(config_path: str | Path, store: Store) -> None:
     running = False
+    current = load_config(config_path)
     while True:
         try:
             should_run, pending, current = should_run_ai_context(config_path, store, datetime.now())

@@ -33,3 +33,14 @@ def test_invalid_windows_do_not_change_config(tmp_path):
         pass
 
     assert path.read_text(encoding='utf-8') == original
+
+
+def test_get_cli_can_emit_json_for_windows_tray(tmp_path, capsys, monkeypatch):
+    from qq_onebot_whitelist.settings import main
+
+    path = tmp_path / 'config.yaml'
+    path.write_text('ai_context:\n  allowed_windows: []\n', encoding='utf-8')
+    monkeypatch.setattr('sys.argv', ['settings', '--config', str(path), '--get', '--json'])
+
+    assert main() == 0
+    assert capsys.readouterr().out.strip() == '[]'

@@ -23,10 +23,10 @@
 - 高价值链接：`data/view/resources.html`
 - 高价值文件/工作流：`data/view/files.html`
 
-浏览器可直接打开：
+从项目根目录可直接打开：
 
-```text
-file:///C:/Users/eryis/workspace/qq-onebot-whitelist/data/view/index.html
+```powershell
+Start-Process ".\data\view\index.html"
 ```
 
 ## 快速启动（Windows 托盘）
@@ -39,24 +39,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\insta
 
 之后打开“QQ OneBot Bot”快捷方式。机器人会在后台启动，并在系统托盘提供：打开本地页面、查看日志、停止服务和退出托盘。
 
-NapCat 路径保存在不进入 Git 的 `scripts/windows/launcher.config.ps1`；首次使用可复制 `launcher.config.ps1.example`。
+NapCat 默认位于项目内 `runtime/NapCat.Shell.Windows.Node`，该运行目录不进入 Git。`scripts/windows/launcher.config.ps1` 只用于可选路径覆盖。
 
 命令行后台启动：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\eryis\workspace\qq-onebot-whitelist\scripts\windows\start-qq-onebot-whitelist-hidden.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\start-qq-onebot-whitelist-hidden.ps1"
 ```
 
 命令行停止 bot 和 NapCat：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\eryis\workspace\qq-onebot-whitelist\scripts\windows\stop-qq-onebot-whitelist-hidden.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-qq-onebot-whitelist-hidden.ps1"
 ```
 
 前台运行 bot：
 
-```bash
-cd /c/Users/eryis/workspace/qq-onebot-whitelist
+```powershell
 uv run python -m qq_onebot_whitelist.onebot --config config.yaml
 ```
 
@@ -80,3 +79,15 @@ run/                        PID 文件
 ```
 
 不要手动删除 `data/images/ai/` 或 `data/bot.db`。`data/view/` 是可重建视图，不是唯一数据源。
+
+## 分析时段
+
+默认全天允许分析。可通过托盘“Set analysis windows”、直接编辑 `config.yaml`，或白名单用户私聊机器人发送：
+
+```text
+分析时段 查看
+分析时段 设置 00:30-08:30,12:00-13:00
+分析时段 全天
+```
+
+多个时间段和跨午夜时间段均受支持，修改后无需重启。

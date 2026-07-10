@@ -719,7 +719,7 @@ git commit -m "feat: add tray schedule settings and local startup"
 ### Task 7: Stop Services and Move NapCat into the Project
 
 **Files:**
-- Move runtime directory: `D:\Hermes\Data\tools\napcat\NapCat.Shell.Windows.Node` → `runtime/NapCat.Shell.Windows.Node`
+- Move runtime directory: `<旧NapCat目录>` → `runtime/NapCat.Shell.Windows.Node`
 - Modify: `.gitignore`
 - Modify: `docs/外部依赖.md`
 - Modify: `docs/使用说明.md`
@@ -751,7 +751,7 @@ Then verify no process command line contains `qq_onebot_whitelist.onebot` or the
 Resolve and assert:
 
 ```powershell
-$source = (Resolve-Path -LiteralPath 'D:\Hermes\Data\tools\napcat\NapCat.Shell.Windows.Node').Path
+$source = (Resolve-Path -LiteralPath '<旧NapCat目录>').Path
 $workspace = (Resolve-Path '.').Path
 $target = [IO.Path]::GetFullPath((Join-Path $workspace 'runtime\NapCat.Shell.Windows.Node'))
 if(-not $target.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar)){throw 'Target escapes workspace'}

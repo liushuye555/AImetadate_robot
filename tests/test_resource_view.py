@@ -7,7 +7,7 @@ from qq_onebot_whitelist.store import Store
 def test_write_resource_pages_keeps_old_records_and_filters_low_value(tmp_path):
     db = tmp_path / 'bot.db'
     store = Store(db)
-    store.record_link(scope='group:1', user_id='u1', url='https://v.kuaishou.com/J7sMUhrZ', message_text='快手极速版')
+    store.record_link(scope='group:1', user_id='u1', url='https://v.kuaishou.com/example-test', message_text='测试短视频分享')
     store.record_link(scope='group:1', user_id='u2', url='https://civitai.com/models/123/model?utm=abc', message_text='好用的 lora')
     store.record_file(scope='group:1', user_id='u3', file_name='workflow.json', file_size=1024, url='https://long.url/x', kind='workflow', raw={})
 

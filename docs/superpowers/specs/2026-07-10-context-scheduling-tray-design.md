@@ -113,7 +113,7 @@ AI 判定后增加确定性校验：
 迁移步骤：
 
 1. 停止机器人及 NapCat 相关进程。
-2. 确认源目录为 `D:\Hermes\Data\tools\napcat\NapCat.Shell.Windows.Node`。
+2. 确认源目录为本机旧 NapCat 安装目录。
 3. 移动整个目录到项目内 `runtime\NapCat.Shell.Windows.Node`。
 4. 验证目标目录存在 `napcat.bat`，源目录已不存在。
 5. 将 `runtime/` 加入 `.gitignore`，不提交约 334MB 的运行程序和数据。
