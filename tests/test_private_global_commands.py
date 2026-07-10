@@ -6,8 +6,9 @@ def private_event(text='链接'):
     return {'post_type': 'message', 'message_type': 'private', 'user_id': 200000001, 'message': text, 'raw_message': text}
 
 
-def test_help_says_slash_is_optional():
-    assert '可省略 /' in HELP_TEXT
+def test_help_displays_commands_without_slash():
+    assert '1. 帮助' in HELP_TEXT
+    assert '可省略 /' not in HELP_TEXT
 
 
 def test_private_link_command_reads_all_scopes(tmp_path):

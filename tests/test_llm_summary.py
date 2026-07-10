@@ -56,3 +56,12 @@ def test_summary_redacts_secrets_and_removes_llm_preamble():
     assert result.startswith('## 概览')
     assert 'sk-abcdefghijklmnopqrstuvwxyz' not in result
     assert '[已脱敏密钥]' in result
+
+
+def test_normalize_summary_drops_everything_before_first_heading():
+    text = '好的，已对69条消息进行过滤。\n过滤规则严格遵守。\n\n## 本批概览\n- 有效内容'
+
+    result = normalize_summary_output(text)
+
+    assert result.startswith('## 本批概览')
+    assert '过滤规则' not in result

@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from .config import AppConfig, load_config
+from .context_quality import parse_context_quality
 from .llm_summary import LLMConfig, summarize_records_with_fallback
 from .store import Store, raw_message_ids, reply_to_message_id
 
@@ -157,13 +158,23 @@ def analyze_scope(
         if dry_run:
             continue
         summary = summarize_records_with_fallback(records, primary, fallback)
+        quality = parse_context_quality(summary)
         store.record_ai_context_batch(
             scope=batch_scope,
             start_message_id=records[0]['id'],
             end_message_id=records[-1]['id'],
             model=active_model,
-            summary=summary,
-            raw_json=json.dumps({'message_count': len(records), 'provider': config.ai_context_provider, 'users': user_alias_map(records)}, ensure_ascii=False),
+            summary=quality.display_summary,
+            raw_json=json.dumps({
+                'message_count': len(records),
+                'provider': config.ai_context_provider,
+                'users': user_alias_map(records),
+                'quality': {
+                    'ai_relevant': quality.ai_relevant,
+                    'value_level': quality.value_level,
+                    'reason': quality.reason,
+                },
+            }, ensure_ascii=False),
         )
         print(summary[:300].replace('\n', ' | '))
     print(f'analyzed {total} messages in {chunks} chunks for {scope or "all"}')

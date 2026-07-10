@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from .policy import extract_text, is_keepalive_event
 from .summary import summarize_records
 from .llm_summary import LLMConfig, summarize_records_with_fallback
+from .settings import read_analysis_windows, write_analysis_windows
 
 HELP_TEXT = '''管理员菜单：
-1. /帮助：查看本菜单
+1. 帮助：查看本菜单
 2. 资源：查看最近资源线索摘要
 3. 链接：查看链接（私聊看全部，群里看本群）
 4. 最近总结 [条数]：总结消息（私聊看全部最近记录，群里看本群）
 5. 图片信息：查看最近处理图片（私聊看全部，群里看本群）
 6. 刷新分类：重建本地图片/资源视图
 
-说明：可省略 /，例如“帮助”“链接”“图片信息”都可以。
+7. 分析时段 查看/设置/全天：私聊调整 AI 分析时间
+
+说明：直接发送指令即可；旧的 / 前缀仍兼容。
 
 本地入口：
 - 总入口：data/view/index.html
@@ -78,13 +82,39 @@ def format_resources(store, *, limit: int = 20) -> str:
     return '\n'.join(lines)
 
 
-def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 100, max_summary_limit: int = 500, view_builder=None) -> str:
+def handle_analysis_windows_command(text: str, *, is_private: bool, config_path: str | Path) -> str | None:
+    command = text.strip().lstrip('/').strip()
+    if not command.startswith('分析时段'):
+        return None
+    if not is_private:
+        return '分析时段只能由白名单用户私聊修改。'
+    argument = command[len('分析时段'):].strip()
+    if argument in {'', '查看'}:
+        windows = read_analysis_windows(config_path)
+        return '当前允许分析时段：' + ('、'.join(windows) if windows else '全天')
+    if argument == '全天':
+        write_analysis_windows(config_path, [])
+        return '已设置分析时段：全天'
+    if argument.startswith('设置'):
+        values = [item.strip() for item in argument[len('设置'):].strip().split(',') if item.strip()]
+        try:
+            windows = write_analysis_windows(config_path, values)
+        except ValueError as exc:
+            return str(exc)
+        return '已设置分析时段：' + ('、'.join(windows) if windows else '全天')
+    return '用法：分析时段 查看；分析时段 设置 00:30-08:30,12:00-13:00；分析时段 全天'
+
+
+def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 100, max_summary_limit: int = 500, view_builder=None, config_path: str | Path = 'config.yaml') -> str:
     text = extract_text(event)
     normalized = text.lower().replace(' ', '')
     scope = scope_for_event(event)
     is_private = event.get('message_type') == 'private'
     if is_keepalive_event(event):
         return '在，冒个泡。'
+    schedule_reply = handle_analysis_windows_command(text, is_private=is_private, config_path=config_path)
+    if schedule_reply is not None:
+        return schedule_reply
     if view_builder is not None and is_refresh_command(normalized):
         return format_view_counts(view_builder())
     if normalized in {'资源', '文件', '链接线索', '资源总结', '文件线索'}:
@@ -123,4 +153,4 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
                 fallback = summarize_records(records)
                 return f'大模型总结失败，已回退规则总结。\n原因：{type(exc).__name__}\n\n{fallback}'
         return summarize_records(records)
-    return '已收到。发送 @机器人 /帮助 查看可用指令。'
+    return '已收到。发送 @机器人 帮助 查看可用指令。'

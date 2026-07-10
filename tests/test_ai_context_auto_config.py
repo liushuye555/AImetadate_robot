@@ -11,10 +11,9 @@ ai_context:
   chunk_size: 200
   auto_interval_minutes: 15
   min_new_messages: 300
-  allowed_windows:
-    - "00:30-08:30"
+  allowed_windows: []
 ''', encoding='utf-8')
     cfg = load_config(path)
     assert cfg.ai_context_auto_interval_minutes == 15
     assert cfg.ai_context_min_new_messages == 300
-    assert cfg.ai_context_allowed_windows == ['00:30-08:30']
+    assert cfg.ai_context_allowed_windows == []

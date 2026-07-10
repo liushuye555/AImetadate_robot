@@ -50,5 +50,4 @@ ai_context:
   min_new_messages: 300
   # 只在这些本地时间窗口调用 LLM；留空 [] 表示全天允许。
   # 支持跨午夜窗口，例如 "23:00-07:00"。
-  allowed_windows:
-    - "00:30-08:30"
+  allowed_windows: []

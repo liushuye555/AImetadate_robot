@@ -6,6 +6,7 @@ import os
 import yaml
 
 from .policy import BotConfig
+from .schedule import normalize_time_windows
 
 
 @dataclass(slots=True)
@@ -75,5 +76,5 @@ def load_config(path: str | Path) -> AppConfig:
         ai_context_max_chunks=(int(ai_context['max_chunks']) if ai_context.get('max_chunks') is not None else None),
         ai_context_auto_interval_minutes=int(ai_context.get('auto_interval_minutes') or 15),
         ai_context_min_new_messages=int(ai_context.get('min_new_messages') or 300),
-        ai_context_allowed_windows=[str(x) for x in (ai_context.get('allowed_windows') or [])],
+        ai_context_allowed_windows=normalize_time_windows([str(x) for x in (ai_context.get('allowed_windows') or [])]),
     )

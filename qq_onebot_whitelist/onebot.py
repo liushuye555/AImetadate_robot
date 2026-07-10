@@ -116,29 +116,35 @@ async def send_private(ws, user_id: str, text: str) -> None:
     await ws.send(json.dumps({'action': 'send_private_msg', 'params': {'user_id': user_id, 'message': text}}, ensure_ascii=False))
 
 
-async def ai_context_loop(config: AppConfig, store: Store) -> None:
+def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) -> tuple[bool, int, AppConfig]:
+    current = load_config(config_path)
+    scopes = [scope for scope in configured_scopes(current, current.data_dir / 'bot.db') if scope]
+    pending = sum(
+        store.count_messages_after(str(scope), store.last_ai_context_end_message_id(str(scope)))
+        for scope in scopes
+    )
+    allowed = is_in_time_windows(now, current.ai_context_allowed_windows)
+    return pending >= current.ai_context_min_new_messages and allowed, pending, current
+
+
+async def ai_context_loop(config_path: str | Path, store: Store) -> None:
     running = False
     while True:
         try:
-            scopes = [s for s in configured_scopes(config, config.data_dir / 'bot.db') if s]
-            pending = 0
-            for scope in scopes:
-                last = store.last_ai_context_end_message_id(str(scope))
-                pending += store.count_messages_after(str(scope), last)
-            allowed_now = is_in_time_windows(datetime.now(), config.ai_context_allowed_windows)
-            if pending >= config.ai_context_min_new_messages and allowed_now and not running:
+            should_run, pending, current = should_run_ai_context(config_path, store, datetime.now())
+            if should_run and not running:
                 running = True
                 try:
                     print(f'ai_context auto run starting, pending messages={pending}')
-                    await asyncio.to_thread(analyze_configured, 'config.yaml')
+                    await asyncio.to_thread(analyze_configured, str(config_path))
                     print('ai_context auto run finished')
                 finally:
                     running = False
-            elif pending >= config.ai_context_min_new_messages and not allowed_now:
-                print(f'ai_context waiting for allowed window, pending messages={pending}, windows={config.ai_context_allowed_windows}')
+            elif pending >= current.ai_context_min_new_messages:
+                print(f'ai_context waiting for allowed window, pending messages={pending}, windows={current.ai_context_allowed_windows}')
         except Exception as exc:
             print(f'ai_context_loop failed: {type(exc).__name__}: {exc}')
-        await asyncio.sleep(max(1, config.ai_context_auto_interval_minutes) * 60)
+        await asyncio.sleep(max(1, current.ai_context_auto_interval_minutes) * 60)
 
 
 async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
@@ -236,7 +242,7 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
     return event.get('message_type') == 'group' and str(event.get('group_id') or '') in config.blocked_groups
 
 
-async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store) -> bool:
+async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
     if event.get('post_type') != 'message':
         return False
     if is_blocked_event(event, config):
@@ -250,6 +256,7 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         default_summary_limit=config.default_summary_limit,
         max_summary_limit=config.max_summary_limit,
         view_builder=lambda: sync_image_files(Path.cwd()),
+        config_path=config_path,
     )
     await send_reply(ws, event, reply)
     return True
@@ -265,7 +272,7 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
         print(f'startup history catch-up failed: {type(exc).__name__}: {exc}')
 
 
-async def run(config: AppConfig) -> None:
+async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
     try:
@@ -276,7 +283,7 @@ async def run(config: AppConfig) -> None:
     async with websockets.connect(config.onebot_ws_url) as ws:
         startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
         report_task = asyncio.create_task(daily_report_loop(ws, config, store))
-        ai_task = asyncio.create_task(ai_context_loop(config, store))
+        ai_task = asyncio.create_task(ai_context_loop(config_path, store))
         try:
             async for raw in ws:
                 try:
@@ -284,7 +291,7 @@ async def run(config: AppConfig) -> None:
                 except Exception:
                     continue
                 try:
-                    await handle_event(ws, event, config, store)
+                    await handle_event(ws, event, config, store, config_path)
                 except Exception as exc:
                     print(f'handle_event failed: {type(exc).__name__}: {exc}')
         finally:
@@ -298,7 +305,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='OneBot whitelist @ bot')
     parser.add_argument('--config', default='config.yaml')
     args = parser.parse_args()
-    asyncio.run(run(load_config(args.config)))
+    asyncio.run(run(load_config(args.config), args.config))
     return 0
 
 

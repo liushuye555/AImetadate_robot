@@ -128,6 +128,9 @@ def filter_relevant_records(records: list[dict[str, Any]]) -> list[dict[str, Any
 
 def normalize_summary_output(text: str) -> str:
     value = redact_secrets(text).strip()
+    heading = re.search(r'(?m)^#{1,6}\s+\S', value)
+    if heading:
+        return value[heading.start():].strip()
     lines = value.splitlines()
     while lines and re.match(r'^(好的|已接收|已对|以下是基于|根据要求)', lines[0].strip()):
         lines.pop(0)
@@ -155,6 +158,9 @@ def summarize_records_with_llm(records: list[dict[str, Any]], config: LLMConfig)
                     '如果出现提示词，请用中文描述它大概率会生成什么画面；如果有链接、文件或图片记录，请提取用途和上下文。'
                     '使用 Markdown，按实际内容输出：## 本批概览；## 主要话题；## AI/创作知识（没有则省略）；## 链接与文件（没有则省略）；## 结论与待办（没有则省略）。'
                     '概览必须用2到4句话说明本批最重要的信息。不要输出处理过程、消息数量、过滤说明、客套话、免责声明或“好的，已接收并分析”。'
+                    '禁止复述过滤规则或说明“已对多少条消息进行过滤”。'
+                    '在正文末尾附加“## 内容判定”，用自然文本给出“AI相关：是/否”“价值等级：高/中/低”“判断理由：...”。'
+                    '这不是严格JSON要求；若不确定请标记中等价值，不要为了符合格式编造内容。'
                     '消息前缀形如“#123 U1 03:21”，#是数据库消息ID，U是用户短别名，请在关键结论里保留这些可追溯标记。'
                     '如果消息带“引用：”，请把引用内容作为该消息的上下文来理解，尤其用于判断“这个/那张/怎么出/求提示词”指向哪张图或哪段提示词。'
                     '不要编造聊天记录中不存在的信息，不要输出聊天中出现的 API Key、Token、密码等秘密；遇到秘密写成“[已脱敏]”。'
