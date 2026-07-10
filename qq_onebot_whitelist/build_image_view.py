@@ -10,9 +10,7 @@ import shutil
 import sqlite3
 from urllib.parse import quote
 
-from .scope_names import display_scope
-from .content_utils import redact_secrets
-from .html_render import render_markdown
+from .context_view import build_context_view
 
 CATEGORY_NAMES = {
     'ai_metadata': '01_AI元数据',
@@ -60,56 +58,6 @@ def group_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
             names[group_id] = name
             names[scope] = name
     return names
-
-
-def context_summary(conn: sqlite3.Connection, scope: str, message_db_id: int | None = None) -> str:
-    try:
-        row = None
-        if message_db_id is not None:
-            row = conn.execute(
-                '''SELECT summary FROM ai_context_batches
-                   WHERE scope = ? AND start_message_id <= ? AND end_message_id >= ?
-                   ORDER BY id DESC LIMIT 1''',
-                (scope, message_db_id, message_db_id),
-            ).fetchone()
-        if row:
-            return redact_secrets(str(row['summary'] or ''))
-        row = conn.execute(
-            'SELECT summary FROM ai_context_batches WHERE scope = ? ORDER BY id DESC LIMIT 1',
-            (scope,),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return ''
-    return redact_secrets(str(row['summary'] if row and row['summary'] else ''))
-
-
-def write_context_html(context_dir: Path, items: list[dict[str, str]]) -> None:
-    cards = []
-    if not items:
-        cards.append('<article class="card"><div><h2>当前没有仍存在的 03_AI上下文 图片</h2><p class="muted">旧记录的源图可能已被预算/候选清理；后续新保存的上下文图会出现在这里。</p></div></article>')
-    for item in items:
-        summary_html = render_markdown(item['summary'] or '暂无批摘要')
-        cards.append(
-            '<article class="card">'
-            f'<div class="image-pane"><a href="{html.escape(url_path(item["image_rel"]))}"><img src="{html.escape(url_path(item["image_rel"]))}" loading="lazy"></a></div>'
-            f'<div class="content"><h2>#{html.escape(item["id"])} · {html.escape(item["scope"])}</h2>'
-            f'<p class="muted">{html.escape(item["meta"])}</p>'
-            f'<h3>批次摘要</h3><div class="markdown">{summary_html}</div>'
-            f'<details><summary>查看图片附近原始上下文</summary><pre>{html.escape(redact_secrets(item["text_excerpt"] or "无"))}</pre></details>'
-            '</div></article>'
-        )
-    doc = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
-<title>03_AI上下文</title>
-<style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:1440px;margin:0 auto;padding:24px;background:#0d0f13;color:#eef1f6}
-h1{font-size:26px}.card{display:grid;grid-template-columns:minmax(240px,380px) minmax(0,1fr);gap:24px;padding:20px;margin:20px 0;background:#171a21;border:1px solid #2b313d;border-radius:16px}.image-pane{align-self:start;position:sticky;top:18px}
-img{width:100%;max-height:70vh;object-fit:contain;border-radius:12px;background:#000}.muted{color:#aab2c0}.markdown{line-height:1.65;background:#11141a;padding:16px 20px;border-radius:12px;overflow-wrap:anywhere}.markdown h2,.markdown h3{margin-top:1.25em}.markdown pre,details pre{white-space:pre-wrap;overflow:auto;background:#090b0f;padding:12px;border-radius:9px}.markdown code{background:#272d38;padding:.12em .35em;border-radius:4px}.markdown table{border-collapse:collapse;width:100%}.markdown th,.markdown td{border:1px solid #394150;padding:8px;text-align:left}.table-wrap{overflow:auto}.markdown blockquote{margin:1em 0;padding:.2em 1em;border-left:4px solid #668bc4;color:#c7cfdb}details{margin-top:18px}summary{cursor:pointer;color:#9fc2ff}
-@media(max-width:820px){body{padding:14px}.card{grid-template-columns:1fr;padding:14px}.image-pane{position:static}}
-</style><body><h1>03_AI上下文</h1>
-<p class="muted">摘要已渲染 Markdown；原始附近上下文默认折叠，并统一脱敏。</p>
-''' + '\n'.join(cards) + '</body></html>'
-    context_dir.mkdir(parents=True, exist_ok=True)
-    (context_dir / 'index.html').write_text(doc, encoding='utf-8')
 
 
 def write_view_index(view: Path, counts: dict[str, int]) -> None:
@@ -182,7 +130,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
     counts: dict[str, int] = {}
-    context_items: list[dict[str, str]] = []
+    context_items: list[dict[str, object]] = []
     for row in rows:
         src = source_path(project_dir, row['kept_path'])
         if not src.exists():
@@ -214,13 +162,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
             image_rel = os.path.relpath(dst, view / cat).replace(os.sep, '/')
             context_items.append({
                 'id': str(row['id']),
-                'scope': display_scope(str(row['scope'] or ''), group_names),
+                'scope': str(row['scope'] or ''),
                 'image_rel': image_rel,
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
+                'seen_at': str(row['seen_at'] or ''),
                 'text_excerpt': str(row['text_excerpt'] or ''),
-                'summary': context_summary(conn, str(row['scope'] or ''), message_db_id),
+                'message_db_id': message_db_id,
             })
-    write_context_html(view / CATEGORY_NAMES['nearby_ai_context'], context_items)
+    build_context_view(conn, view / CATEGORY_NAMES['nearby_ai_context'], context_items, group_names)
     conn.close()
     readme = view / 'README.txt'
     readme.write_text(
