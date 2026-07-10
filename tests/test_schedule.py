@@ -23,3 +23,8 @@ def test_normalize_time_windows_accepts_multiple_ranges():
 def test_normalize_time_windows_rejects_invalid_ranges(value):
     with pytest.raises(ValueError):
         normalize_time_windows([value])
+
+
+def test_equal_window_boundaries_are_rejected():
+    with pytest.raises(ValueError):
+        normalize_time_windows(['08:00-08:00'])

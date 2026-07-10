@@ -1,6 +1,11 @@
 import sqlite3
 
 from qq_onebot_whitelist.build_image_view import build_view
+from qq_onebot_whitelist.context_view import _date
+
+
+def test_context_dates_convert_sqlite_utc_to_local_timezone():
+    assert _date('2026-07-09 16:30:00') == '2026-07-10'
 
 
 def test_context_batches_split_by_quality_and_hide_low(tmp_path):

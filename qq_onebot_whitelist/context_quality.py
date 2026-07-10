@@ -7,10 +7,11 @@ import re
 from .content_utils import redact_secrets
 
 
-AI_EVIDENCE = (
-    'prompt', '提示词', 'negative', 'tag', 'lora', 'checkpoint', '模型', '工作流', 'workflow',
-    'comfyui', 'sampler', '采样', 'steps', 'cfg', 'seed', '节点', '训练', '放大', '重绘', 'controlnet',
+AI_EVIDENCE_WORDS = (
+    'prompt', 'negative', 'tag', 'lora', 'checkpoint', 'workflow', 'comfyui', 'sampler',
+    'steps', 'cfg', 'seed', 'controlnet',
 )
+AI_EVIDENCE_TEXT = ('提示词', '模型', '工作流', '采样', '节点', '训练', '放大', '重绘')
 
 
 @dataclass(slots=True)
@@ -23,7 +24,10 @@ class ContextQuality:
 
 def has_substantive_ai_evidence(text: str) -> bool:
     lowered = text.lower()
-    return any(token in lowered for token in AI_EVIDENCE)
+    return any(token in lowered for token in AI_EVIDENCE_TEXT) or any(
+        re.search(rf'(?<![a-z0-9_]){re.escape(token)}(?![a-z0-9_])', lowered)
+        for token in AI_EVIDENCE_WORDS
+    )
 
 
 def _json_fields(text: str) -> dict:

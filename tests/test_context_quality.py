@@ -36,3 +36,9 @@ def test_content_judgment_is_removed_from_display_summary():
 
     assert quality.display_summary == '## 概览\n包含 LoRA 训练经验。'
     assert quality.reason == '可复用'
+
+
+def test_tag_substring_inside_english_word_is_not_ai_evidence():
+    quality = parse_context_quality('## 概览\nstage lighting discussion.\n## 内容判定\nAI相关：是\n价值等级：高')
+
+    assert quality.value_level == 'review'

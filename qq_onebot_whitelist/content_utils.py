@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 SECRET_PATTERNS = [
     re.compile(r'(?i)\b(sk-[a-z0-9_-]{12,})\b'),
     re.compile(r'(?i)\b(bearer\s+)[a-z0-9._~+/=-]{16,}'),
-    re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*)["\']?[^\s"\']{8,}'),
+    re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*)["\']?[^\s"\'&]{8,}'),
 ]
 
 

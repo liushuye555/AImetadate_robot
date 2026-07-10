@@ -50,7 +50,17 @@ def test_stop_all_exit_waits_for_stop_script():
 
 def test_stop_script_returns_success_after_best_effort_cleanup():
     script = read_script("stop-qq-onebot-whitelist-hidden.ps1")
+    assert 'Test-OwnedProcess' in script
+    assert 'if ($remaining)' in script
+    assert 'exit 1' in script
     assert script.rstrip().endswith('exit 0')
+
+
+def test_start_script_only_reuses_owned_processes():
+    script = read_script("start-qq-onebot-whitelist-hidden.ps1")
+    assert "Test-OwnedProcessByPidFile" in script
+    assert "Test-OwnedProcessByPidFile -PidPath $botPid -Needle $BotDir" in script
+    assert '$_.CommandLine -like "*$BotDir*"' in script
 
 
 def test_tray_shortcut_uses_absolute_windows_powershell():

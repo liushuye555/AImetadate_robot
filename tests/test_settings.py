@@ -44,3 +44,17 @@ def test_get_cli_can_emit_json_for_windows_tray(tmp_path, capsys, monkeypatch):
 
     assert main() == 0
     assert capsys.readouterr().out.strip() == '[]'
+
+
+def test_parallel_writes_leave_valid_yaml(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / 'config.yaml'
+    path.write_text('ai_context:\n  allowed_windows: []\n', encoding='utf-8')
+    values = [['00:30-08:30'], ['12:00-13:00']]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(write_analysis_windows, path, values[index % 2]) for index in range(40)]
+        for future in futures:
+            future.result()
+
+    assert read_analysis_windows(path) in values

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import tempfile
+import time
 
 import yaml
 
@@ -12,7 +15,13 @@ from .schedule import normalize_time_windows
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
-    return yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    for attempt in range(20):
+        try:
+            return yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
 
 
 def read_analysis_windows(path: str | Path) -> list[str]:
@@ -25,9 +34,23 @@ def write_analysis_windows(path: str | Path, windows: list[str]) -> list[str]:
     normalized = normalize_time_windows(windows)
     raw = _read_yaml(target)
     raw.setdefault('ai_context', {})['allowed_windows'] = normalized
-    temporary = target.with_suffix(target.suffix + '.tmp')
-    temporary.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding='utf-8')
-    temporary.replace(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=target.parent, prefix=target.name + '.', suffix='.tmp', delete=False) as file:
+        temporary = Path(file.name)
+        yaml.safe_dump(raw, file, allow_unicode=True, sort_keys=False)
+        file.flush()
+        os.fsync(file.fileno())
+    try:
+        for attempt in range(20):
+            try:
+                temporary.replace(target)
+                break
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.01)
+    finally:
+        temporary.unlink(missing_ok=True)
     return normalized
 
 

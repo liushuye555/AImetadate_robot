@@ -17,6 +17,8 @@ def normalize_time_windows(windows: list[str]) -> list[str]:
         start_hour, start_minute, end_hour, end_minute = map(int, match.groups())
         if start_hour > 23 or end_hour > 23 or start_minute > 59 or end_minute > 59:
             raise ValueError(f'无效时间段：{value}')
+        if (start_hour, start_minute) == (end_hour, end_minute):
+            raise ValueError(f'无效时间段：{value}，开始和结束时间不能相同')
         result.append(value)
     return result
 

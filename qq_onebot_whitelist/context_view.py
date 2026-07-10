@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+from datetime import datetime, timezone
 import html
 import json
 import sqlite3
@@ -31,7 +32,15 @@ def _quality(raw_json: str | None) -> str:
 
 def _date(value: object) -> str:
     text = str(value or '').strip()
-    return text[:10] if len(text) >= 10 else '日期未知'
+    if len(text) < 10:
+        return '日期未知'
+    try:
+        parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone().strftime('%Y-%m-%d')
+    except ValueError:
+        return text[:10]
 
 
 def _scope_key(scope: str) -> str:

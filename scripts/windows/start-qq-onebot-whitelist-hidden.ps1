@@ -29,13 +29,14 @@ function Test-PortOpen {
     }
 }
 
-function Test-ProcessByPidFile {
-    param([string]$PidPath)
+function Test-OwnedProcessByPidFile {
+    param([string]$PidPath, [string]$Needle)
     if (-not (Test-Path $PidPath)) { return $false }
     $text = Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1
     $procId = 0
     if (-not [int]::TryParse($text, [ref]$procId)) { return $false }
-    return [bool](Get-Process -Id $procId -ErrorAction SilentlyContinue)
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    return [bool]($process -and $process.CommandLine -and $process.CommandLine -like "*$Needle*")
 }
 
 function Test-CommandLineContains {
@@ -61,7 +62,7 @@ function Start-HiddenProcess {
 $napcatPid = Join-Path $PidDir 'napcat.pid'
 $botPid = Join-Path $PidDir 'bot.pid'
 
-$napcatRunning = (Test-PortOpen 6099) -or (Test-ProcessByPidFile $napcatPid) -or (Test-CommandLineContains $NapcatDir)
+$napcatRunning = (Test-PortOpen 6099) -or (Test-OwnedProcessByPidFile -PidPath $napcatPid -Needle $NapcatDir) -or (Test-CommandLineContains $NapcatDir)
 if ($napcatRunning) {
     Write-Host 'NapCat already appears to be running; skipping NapCat start.'
 } else {
@@ -85,14 +86,14 @@ if (-not $onebotReady) {
     exit 2
 }
 
-$botProc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*qq_onebot_whitelist.onebot*' -and $_.Name -in @('cmd.exe','uv.exe','python.exe') } | Select-Object -First 1
-$botRunning = (Test-ProcessByPidFile $botPid) -or [bool]$botProc
+$botProc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*qq_onebot_whitelist.onebot*' -and $_.CommandLine -like "*$BotDir*" -and $_.Name -in @('cmd.exe','uv.exe','python.exe') } | Select-Object -First 1
+$botRunning = (Test-OwnedProcessByPidFile -PidPath $botPid -Needle $BotDir) -or [bool]$botProc
 if ($botRunning) {
     Write-Host 'QQ OneBot whitelist bot already appears to be running; skipping bot start.'
 } else {
     Start-HiddenProcess -Name 'QQ OneBot whitelist bot' `
         -WorkingDirectory $BotDir `
-        -Command 'uv run python -m qq_onebot_whitelist.onebot --config config.yaml' `
+        -Command ('uv run python -m qq_onebot_whitelist.onebot --config "' + $Config + '"') `
         -LogPath (Join-Path $LogDir 'bot.log') `
         -PidPath $botPid
 }

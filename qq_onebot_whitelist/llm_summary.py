@@ -230,6 +230,6 @@ def _format_records(records: list[dict[str, Any]]) -> str:
         if quoted:
             line += f'\n  ↳ 引用：{redact_secrets(quoted[:300])}'
         if links:
-            line += '\n  ↳ 链接：' + '，'.join(str(x) for x in links[:6])
+            line += '\n  ↳ 链接：' + '，'.join(redact_secrets(str(x)) for x in links[:6])
         lines.append(line[:1500])
     return '\n'.join(lines)

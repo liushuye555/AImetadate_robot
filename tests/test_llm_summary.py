@@ -1,6 +1,6 @@
 import json
 
-from qq_onebot_whitelist.llm_summary import LLMConfig, filter_relevant_records, normalize_summary_output, summarize_records_with_llm
+from qq_onebot_whitelist.llm_summary import LLMConfig, _format_records, filter_relevant_records, normalize_summary_output, summarize_records_with_llm
 
 
 def test_filter_relevant_records_removes_empty_short_and_at_all_noise():
@@ -65,3 +65,15 @@ def test_normalize_summary_drops_everything_before_first_heading():
 
     assert result.startswith('## 本批概览')
     assert '过滤规则' not in result
+
+
+def test_format_records_redacts_passwords_and_secrets_in_links():
+    text = _format_records([{
+        'id': 1,
+        'user_id': 'u',
+        'text': 'password=super-secret-value',
+        'links': ['https://example.test/?token=sk-abcdefghijklmnopqrstuvwxyz'],
+    }])
+
+    assert 'super-secret-value' not in text
+    assert 'sk-abcdefghijklmnopqrstuvwxyz' not in text

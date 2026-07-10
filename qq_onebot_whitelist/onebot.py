@@ -129,7 +129,7 @@ def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) 
 
 async def ai_context_loop(config_path: str | Path, store: Store) -> None:
     running = False
-    current = load_config(config_path)
+    current = None
     while True:
         try:
             should_run, pending, current = should_run_ai_context(config_path, store, datetime.now())
@@ -145,7 +145,7 @@ async def ai_context_loop(config_path: str | Path, store: Store) -> None:
                 print(f'ai_context waiting for allowed window, pending messages={pending}, windows={current.ai_context_allowed_windows}')
         except Exception as exc:
             print(f'ai_context_loop failed: {type(exc).__name__}: {exc}')
-        await asyncio.sleep(max(1, current.ai_context_auto_interval_minutes) * 60)
+        await asyncio.sleep(max(1, current.ai_context_auto_interval_minutes if current else 1) * 60)
 
 
 async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
