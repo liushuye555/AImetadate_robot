@@ -1,0 +1,54 @@
+onebot:
+  # NapCat/Lagrange 的 OneBot v11 正向 WebSocket 地址。
+  ws_url: "ws://127.0.0.1:3001"
+
+listen:
+  # 黑名单群：不记录、不分析、不回复。
+  blocked_groups: []
+
+reply:
+  # 群聊默认必须直接 @ 机器人；私聊无需 @。
+  require_at_in_group: true
+  # 群主/管理员可触发回复，但群内仍受 require_at_in_group 约束。
+  allow_group_admins: true
+  whitelist_users:
+    # - "你的QQ号"
+  whitelist_groups:
+    # - "允许触发回复的群号"
+
+summary:
+  default_limit: 100
+  max_limit: 500
+
+images:
+  # 兼容旧配置；data/images/ai 是长期归档，不执行预算删除。
+  max_archive_mb: 500
+  # 只适用于 data/images/candidates 临时候选。
+  candidate_ttl_hours: 24
+
+storage:
+  data_dir: "data"
+
+startup_history:
+  enabled: true
+  # blacklist = 自动获取群列表，跳过 listen.blocked_groups。
+  mode: blacklist
+  # true = 尽量全量翻页；依靠消息唯一键去重。
+  all: true
+  max_pages: 200
+  count: 50
+
+ai_context:
+  enabled: true
+  provider: ds_v4_flash
+  # all_groups = 所有非黑名单群。
+  scopes: all_groups
+  chunk_size: 200
+  # 常驻 bot 每隔多少分钟检查一次新增消息。
+  auto_interval_minutes: 15
+  # 累计新增消息达到该值后触发增量分析。
+  min_new_messages: 300
+  # 只在这些本地时间窗口调用 LLM；留空 [] 表示全天允许。
+  # 支持跨午夜窗口，例如 "23:00-07:00"。
+  allowed_windows:
+    - "00:30-08:30"
