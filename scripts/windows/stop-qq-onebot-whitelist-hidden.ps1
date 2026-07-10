@@ -1,10 +1,11 @@
 $ErrorActionPreference = 'Continue'
 
 $BotDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$NapcatNeedle = $env:NAPCAT_DIR
+$NapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+if ($env:NAPCAT_DIR) { $NapcatDir = $env:NAPCAT_DIR }
 $LauncherConfig = Join-Path $PSScriptRoot 'launcher.config.ps1'
 if (Test-Path $LauncherConfig) { . $LauncherConfig }
-if ($NapcatDir) { $NapcatNeedle = $NapcatDir }
+$NapcatNeedle = $NapcatDir
 $PidDir = Join-Path $BotDir 'run'
 
 function Stop-TreeByPid {

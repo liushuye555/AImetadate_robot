@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 $BotDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$NapcatDir = $env:NAPCAT_DIR
+$NapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+if ($env:NAPCAT_DIR) { $NapcatDir = $env:NAPCAT_DIR }
 $LauncherConfig = Join-Path $PSScriptRoot 'launcher.config.ps1'
 if (Test-Path $LauncherConfig) { . $LauncherConfig }
-if (-not $NapcatDir) { throw "NapCat path is not configured. Copy launcher.config.ps1.example to launcher.config.ps1." }
 $LogDir = Join-Path $BotDir 'logs'
 $PidDir = Join-Path $BotDir 'run'
 
@@ -92,7 +92,7 @@ if ($botRunning) {
 } else {
     Start-HiddenProcess -Name 'QQ OneBot whitelist bot' `
         -WorkingDirectory $BotDir `
-        -Command 'if exist .env call .env && uv run python -m qq_onebot_whitelist.onebot --config config.yaml' `
+        -Command 'uv run python -m qq_onebot_whitelist.onebot --config config.yaml' `
         -LogPath (Join-Path $LogDir 'bot.log') `
         -PidPath $botPid
 }

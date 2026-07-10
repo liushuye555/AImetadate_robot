@@ -3,10 +3,10 @@ setlocal
 
 REM One-click launcher for NapCat + QQ OneBot whitelist bot.
 REM This script does not depend on Hermes. It starts both long-running processes
-REM in minimized command windows and writes logs under C:\Users\eryis\workspace\qq-onebot-whitelist\logs.
+REM in minimized command windows and writes logs under the project logs directory.
 
-set "NAPCAT_DIR=D:\Hermes\Data\tools\napcat\NapCat.Shell.Windows.Node"
-set "BOT_DIR=C:\Users\eryis\workspace\qq-onebot-whitelist"
+for %%I in ("%~dp0..\..") do set "BOT_DIR=%%~fI"
+if not defined NAPCAT_DIR set "NAPCAT_DIR=%BOT_DIR%\runtime\NapCat.Shell.Windows.Node"
 set "LOG_DIR=%BOT_DIR%\logs"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
@@ -37,7 +37,7 @@ echo Waiting for NapCat WebUI/OneBot to initialize...
 timeout /t 8 /nobreak >nul
 
 echo Starting QQ OneBot whitelist bot...
-start "QQ-OneBot-Whitelist-Bot" /min cmd /c "cd /d "%BOT_DIR%" && if exist .env call .env && uv run python -m qq_onebot_whitelist.onebot --config config.yaml >> "%LOG_DIR%\bot.log" 2>&1"
+start "QQ-OneBot-Whitelist-Bot" /min cmd /c "cd /d "%BOT_DIR%" && uv run python -m qq_onebot_whitelist.onebot --config config.yaml >> "%LOG_DIR%\bot.log" 2>&1"
 
 echo.
 echo Started.

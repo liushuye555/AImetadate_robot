@@ -1,1 +1,2 @@
+# Optional override. By default NapCat is loaded from the project's runtime directory.
 $NapcatDir = 'D:\path\to\NapCat.Shell.Windows.Node'

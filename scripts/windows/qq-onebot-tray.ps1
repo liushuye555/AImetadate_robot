@@ -27,10 +27,11 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $startItem = $menu.Items.Add('Start / check status')
 $viewItem = $menu.Items.Add('Open local pages')
 $logsItem = $menu.Items.Add('Open logs')
+$settingsItem = $menu.Items.Add('Set analysis windows')
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $stopItem = $menu.Items.Add('Stop bot and NapCat')
-$exitItem = $menu.Items.Add('Exit tray (keep services running)')
 $stopExitItem = $menu.Items.Add('Stop all and exit')
+$exitItem = $menu.Items.Add('Exit tray (keep services running)')
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = [System.Drawing.SystemIcons]::Application
@@ -44,6 +45,7 @@ $startItem.add_Click({
 })
 $viewItem.add_Click({ Open-Path $ViewPath })
 $logsItem.add_Click({ Open-Path $LogDir })
+$settingsItem.add_Click({ Invoke-BotScript 'set-analysis-windows.ps1' })
 $stopItem.add_Click({
     Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1'
     $tray.ShowBalloonTip(2500, 'QQ OneBot', 'Stop command sent.', [System.Windows.Forms.ToolTipIcon]::Info)
