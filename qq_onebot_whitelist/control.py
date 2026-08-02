@@ -299,6 +299,40 @@ def cmd_custom(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    """重新生成 data/view 报告视图，并输出分类列表。"""
+    try:
+        from .build_image_view import build_view
+        counts = build_view(REPO_ROOT)
+        categories = []
+        for name, count in sorted(counts.items()):
+            categories.append({"name": name, "count": count, "url": name + "/index.html"})
+        print(json.dumps({"categories": categories}, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
+def cmd_view_list(args: argparse.Namespace) -> int:
+    """快速列出现有报告分类（不重建视图）。"""
+    try:
+        view = REPO_ROOT / "data" / "view"
+        categories = []
+        if view.exists():
+            exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+            for p in sorted(view.iterdir()):
+                if not p.is_dir():
+                    continue
+                count = sum(1 for f in p.rglob("*") if f.is_file() and f.suffix.lower() in exts)
+                categories.append({"name": p.name, "count": count, "url": p.name + "/index.html"})
+        print(json.dumps({"categories": categories}, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -307,6 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     collection_parser.add_argument("state", choices=("on", "off"))
     custom_parser = sub.add_parser("custom", help="inspect custom collection records")
     custom_parser.add_argument("--rule", default=None, help="filter by rule name")
+    sub.add_parser("view", help="rebuild report views")
+    sub.add_parser("view-list", help="list existing report categories")
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -330,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "collection": cmd_collection,
         "custom": cmd_custom,
+        "view": cmd_view,
+        "view-list": cmd_view_list,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,

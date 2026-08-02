@@ -231,6 +231,16 @@ int main(int argc, char *argv[]) {
     QObject::connect(reports, &ReportsPage::sendRequested, reportControl, [reportControl] {
         reportControl->run({"-m", "qq_onebot_whitelist.control", "report-send"});
     });
+    QObject::connect(reports, &ReportsPage::viewRequested, reportControl, [reportControl] {
+        reportControl->run({"-m", "qq_onebot_whitelist.control", "view"});
+    });
+    QObject::connect(reportControl, &ServiceControl::finished, reports, [reports](bool ok, QString out) {
+        if (!ok) return;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isObject() && doc.object().contains("categories"))
+            reports->setCategories(doc.object().value("categories").toArray().toVariantList());
+    });
+    reportControl->run({"-m", "qq_onebot_whitelist.control", "view-list"});
     reports->setNextTime("日报发送时间可在设置页配置");
 
     // 启动时查询一次数据概况

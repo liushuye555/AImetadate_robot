@@ -58,6 +58,16 @@ def test_echo_unlimited_window_consecutive():
     assert onebot.echo_reply_text(text_event("1", "x"), config) == "x"
 
 
+def test_cmd_view_list_prints_categories(tmp_path, monkeypatch, capsys):
+    view = tmp_path / "data" / "view"
+    (view / "01_AI元数据").mkdir(parents=True)
+    (view / "01_AI元数据" / "a.png").write_bytes(b"x")
+    monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
+    assert control.cmd_view_list(None) == 0
+    out = capsys.readouterr().out
+    assert "01_AI元数据" in out and '"count": 1' in out
+
+
 def test_collection_allows_defaults_true():
     config = AppConfig()
     assert onebot.collection_allows("123", "images", config) is True

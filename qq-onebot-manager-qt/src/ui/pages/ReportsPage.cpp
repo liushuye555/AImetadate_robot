@@ -1,10 +1,14 @@
 #include "ReportsPage.h"
 #include "../Strings.h"
+#include <QJsonObject>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QGroupBox>
 
 ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
@@ -19,6 +23,25 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
     }
     entries->addStretch();
     layout->addLayout(entries);
+
+    auto *galleryGroup = new QGroupBox(Strings::zh("gallery"), this);
+    auto *galleryLayout = new QVBoxLayout(galleryGroup);
+    m_categories = new QListWidget(galleryGroup);
+    galleryLayout->addWidget(m_categories);
+    connect(m_categories, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
+        const QString url = item->data(Qt::UserRole).toString();
+        if (!url.isEmpty()) emit openRequested("data/view/" + url);
+    });
+    auto *galleryButtons = new QHBoxLayout;
+    auto *openGallery = new QPushButton(Strings::zh("openGallery"), galleryGroup);
+    auto *rebuild = new QPushButton(Strings::zh("rebuildView"), galleryGroup);
+    galleryButtons->addWidget(openGallery);
+    galleryButtons->addWidget(rebuild);
+    galleryButtons->addStretch();
+    galleryLayout->addLayout(galleryButtons);
+    layout->addWidget(galleryGroup);
+    connect(openGallery, &QPushButton::clicked, this, [this] { emit openRequested("data/view/index.html"); });
+    connect(rebuild, &QPushButton::clicked, this, [this] { emit viewRequested(); });
 
     m_nextTime = new QLabel(this);
     m_nextTime->setObjectName("muted");
@@ -44,3 +67,16 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
 
 void ReportsPage::setPreview(const QString &text) { m_preview->setPlainText(text); }
 void ReportsPage::setNextTime(const QString &text) { m_nextTime->setText(text); }
+
+void ReportsPage::setCategories(const QVariantList &categories) {
+    m_categories->clear();
+    for (const QVariant &category : categories) {
+        const QJsonObject obj = category.toJsonObject();
+        const QString name = obj.value("name").toString();
+        const int count = obj.value("count").toInt();
+        const QString url = obj.value("url").toString();
+        auto *item = new QListWidgetItem(QString("%1  ·  %2 张").arg(name).arg(count), m_categories);
+        item->setData(Qt::UserRole, url);
+        m_categories->addItem(item);
+    }
+}

@@ -116,6 +116,53 @@ def make_link_or_copy(src: Path, dst: Path) -> str:
             return 'url'
 
 
+def write_category_gallery(cat_dir: Path) -> None:
+    """为图片分类目录生成图库页（缩略图网格 + 灯箱预览）。"""
+    if (cat_dir / 'index.html').exists():
+        return  # 已有专门页面（如 03_AI上下文）则不覆盖
+    image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
+    images = sorted(
+        (p for p in cat_dir.rglob('*') if p.is_file() and p.suffix.lower() in image_exts),
+        key=lambda p: str(p).lower(),
+    )
+    if not images:
+        return
+    rels = [os.path.relpath(p, cat_dir).replace(os.sep, '/') for p in images]
+    cells = ''.join(
+        f'<a class="cell" href="{url_path(r)}"><img loading="lazy" src="{url_path(r)}" alt=""></a>'
+        for r in rels
+    )
+    doc = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<title>{title}</title>
+<style>
+body{{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:#0d0f13;color:#eef1f6}}
+header{{padding:18px 22px;position:sticky;top:0;background:#0d0f13ee;backdrop-filter:blur(8px);z-index:2;border-bottom:1px solid #262d3a}}
+h1{{font-size:18px;margin:0 0 4px}}
+.muted{{color:#8b96a8;font-size:13px}}
+#back{{color:#8ab4ff;text-decoration:none;font-size:13px;margin-right:14px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;padding:16px 22px}}
+.cell{{display:block;border-radius:8px;overflow:hidden;background:#171b23}}
+.cell img{{width:100%;height:180px;object-fit:cover;display:block}}
+#overlay{{display:none;position:fixed;inset:0;background:#000d;z-index:10;align-items:center;justify-content:center;cursor:zoom-out}}
+#overlay img{{max-width:92vw;max-height:92vh;border-radius:6px}}
+</style></head><body>
+<header><a id="back" href="../index.html">← 返回</a><h1>{title}</h1><div class="muted">{count} 张</div></header>
+<div class="grid">{cells}</div>
+<div id="overlay"><img id="lightbox" src=""></div>
+<script>
+const cells=[...document.querySelectorAll('.cell')];const overlay=document.getElementById('overlay');const img=document.getElementById('lightbox');let cur=0;
+function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
+cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();show(i);}}));
+overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.display='none';}});
+document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(e.key==='Escape')overlay.style.display='none';if(e.key==='ArrowLeft')show(cur-1);if(e.key==='ArrowRight')show(cur+1);}}}});
+</script></body></html>'''.format(
+        title=html.escape(cat_dir.name),
+        count=len(images),
+        cells=cells,
+    )
+    (cat_dir / 'index.html').write_text(doc, encoding='utf-8')
+
+
 def build_view(project_dir: Path) -> dict[str, int]:
     db = project_dir / 'data' / 'bot.db'
     view = project_dir / 'data' / 'view'
@@ -171,6 +218,12 @@ def build_view(project_dir: Path) -> dict[str, int]:
             })
     build_context_view(conn, view / CATEGORY_NAMES['nearby_ai_context'], context_items, group_names)
     conn.close()
+    # 为每个分类生成图库页（已存在专门页面的分类跳过）
+    for cat_dir in sorted((p for p in view.iterdir() if p.is_dir()), key=lambda p: p.name):
+        try:
+            write_category_gallery(cat_dir)
+        except Exception as exc:
+            print(f'gallery generation failed for {cat_dir.name}: {type(exc).__name__}: {exc}')
     readme = view / 'README.txt'
     readme.write_text(
         '这是图片分类视图，按数据库筛选结果生成。\n'
