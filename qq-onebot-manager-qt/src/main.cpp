@@ -13,7 +13,9 @@
 #include "core/StatusMonitor.h"
 #include "ui/MainWindow.h"
 #include "ui/Strings.h"
+#include "ui/pages/LogsPage.h"
 #include "ui/pages/OverviewPage.h"
+#include "ui/pages/ReportsPage.h"
 #include "ui/pages/SettingsPage.h"
 #include "ui/theme/ThemeManager.h"
 
@@ -25,8 +27,8 @@ static QWidget *makePlaceholder(const char *key, QWidget *parent) {
 
 static QWidget *makeOverview(QWidget *parent) { return new OverviewPage(parent); }
 static QWidget *makeSettings(QWidget *parent) { return new SettingsPage(parent); }
-static QWidget *makeLogs(QWidget *parent) { return makePlaceholder("logs", parent); }
-static QWidget *makeReports(QWidget *parent) { return makePlaceholder("reports", parent); }
+static QWidget *makeLogs(QWidget *parent) { return new LogsPage(parent); }
+static QWidget *makeReports(QWidget *parent) { return new ReportsPage(parent); }
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -103,6 +105,25 @@ int main(int argc, char *argv[]) {
     });
     QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
     configBridge->fetch();
+
+    auto *reports = qobject_cast<ReportsPage *>(window.pageWidget("reports"));
+    auto *reportControl = new ServiceControl(&window);
+    QObject::connect(reports, &ReportsPage::openRequested, [](const QString &rel) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/" + rel));
+    });
+    QObject::connect(reports, &ReportsPage::previewRequested, reportControl, [reportControl] {
+        reportControl->run({"-m", "qq_onebot_whitelist.control", "report-preview"});
+    });
+    QObject::connect(reportControl, &ServiceControl::finished, reports, [reports](bool ok, QString out) {
+        if (!ok) return;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isObject())
+            reports->setPreview(doc.object().value("content").toString());
+    });
+    QObject::connect(reports, &ReportsPage::sendRequested, reportControl, [reportControl] {
+        reportControl->run({"-m", "qq_onebot_whitelist.control", "report-send"});
+    });
+    reports->setNextTime("日报发送时间可在设置页配置");
 
     // 启动时查询一次数据概况
     fetchStats();
