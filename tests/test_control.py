@@ -75,32 +75,20 @@ def test_stop_kills_pid_files(tmp_path, monkeypatch):
     assert any("222" in " ".join(c) for c in killed)
 
 
-def test_stats_counts(monkeypatch):
-    class FakeStore:
-        def recent_files(self, **kw):
-            return [{"file_name": "a.zip"}, {"file_name": "b.zip"}]
+def test_stats_counts_real_db(tmp_path):
+    import sqlite3
 
-        def recent_link_records(self, **kw):
-            return [{"url": "https://x"}, {"url": "https://y"}]
+    from qq_onebot_whitelist.store import Store
 
-        def last_daily_report_sent_at(self):
-            return None
-
-    monkeypatch.setattr(
-        "qq_onebot_whitelist.maintenance.sync_image_files",
-        lambda project_dir: {
-            "image_duplicates_removed": 0,
-            "missing_cleared": 0,
-            "empty_candidate_dirs": 0,
-            "01_AI元数据": 8,
-            "02_群友好评": 4,
-            "resource_links": 5,
-            "resource_files": 3,
-        },
-    )
-    out = control.build_stats(FakeStore())
-    assert out["images"] == 12
-    assert out["links"] == 2
+    store = Store(tmp_path / "bot.db")
+    store.record_link(scope="g1", user_id="u1", url="https://x", message_text="hi", quoted_text="", kind="link")
+    conn = sqlite3.connect(store.path)
+    conn.execute("INSERT INTO images (scope, user_id, sha256) VALUES (?, ?, ?)", ("g1", "u1", "abc"))
+    conn.commit()
+    conn.close()
+    out = control.build_stats(store)
+    assert out["links"] == 1
+    assert out["images"] == 1
     assert out["lastReport"] is None
 
 

@@ -119,23 +119,17 @@ def cmd_restart(args: argparse.Namespace) -> int:
 
 def build_stats(store) -> dict:
     try:
-        from .maintenance import sync_image_files
-        counts = sync_image_files(REPO_ROOT)
-        non_image_keys = {
-            "image_duplicates_removed",
-            "missing_cleared",
-            "empty_candidate_dirs",
-            "resource_links",
-            "resource_files",
-        }
-        images = sum(value for key, value in counts.items() if key not in non_image_keys)
+        import sqlite3
+        conn = sqlite3.connect(store.path)
+        try:
+            links = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+            images = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+        finally:
+            conn.close()
     except Exception as exc:
-        print(f"stats image count failed: {type(exc).__name__}: {exc}")
-        images = 0
-    try:
-        links = len(store.recent_link_records(limit=100000))
-    except Exception:
+        print(f"stats db count failed: {type(exc).__name__}: {exc}")
         links = 0
+        images = 0
     try:
         last_report = store.last_daily_report_sent_at()
         last_report = last_report.isoformat(timespec="seconds") if last_report else None
@@ -251,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
