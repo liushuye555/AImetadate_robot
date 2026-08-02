@@ -84,9 +84,9 @@ def test_cleanup_expired_candidates(tmp_path):
         "kept_path": str(old_path), "retention_reason": "candidate",
     }, raw={})
     conn = sqlite3.connect(db_dir / "bot.db")
+    old_seen = (datetime.now() - timedelta(hours=48)).isoformat()
     conn.execute(
-        "UPDATE images SET seen_at=? WHERE sha256='old1'",
-        (datetime.now() - timedelta(hours=48)).isoformat(),
+        "UPDATE images SET seen_at=? WHERE sha256='old1'", (old_seen,)
     )
     conn.commit()
     conn.close()
