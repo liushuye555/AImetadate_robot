@@ -89,12 +89,13 @@ def _image_cards(items: list[dict[str, object]], prefix: str) -> str:
     cards = []
     for item in items:
         image_url = _url_path(prefix + str(item['image_rel']))
+        context_text = str(item.get('context_text') or item.get('text_excerpt') or '无').strip() or '无'
         cards.append(
             '<article class="card">'
             f'<a href="{html.escape(image_url)}"><img src="{html.escape(image_url)}" loading="lazy"></a>'
             f'<p>#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
             '<details><summary>查看图片附近原始上下文</summary>'
-            f'<pre>{html.escape(redact_secrets(str(item.get("text_excerpt") or "无")))}</pre></details>'
+            f'<pre>{html.escape(redact_secrets(context_text))}</pre></details>'
             '</article>'
         )
     return '<div class="images">' + ''.join(cards) + '</div>'

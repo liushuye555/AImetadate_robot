@@ -234,6 +234,20 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 message_db_id = int(raw['message_db_id']) if raw.get('message_db_id') is not None else None
             except Exception:
                 message_db_id = None
+            # 图片行只存了元数据 excerpt（无元数据图为空）；真正的"附近上下文"
+            # 是聊天消息，通过 message_db_id 从 messages 表取回（含图片消息本身+前 7 条）
+            nearby_context = ''
+            if message_db_id is not None:
+                try:
+                    ctx_rows = conn.execute(
+                        'SELECT text FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT 8',
+                        (str(row['scope'] or ''), int(message_db_id)),
+                    ).fetchall()
+                    nearby_context = '\n'.join(
+                        str(r[0]) for r in ctx_rows if str(r[0] or '').strip()
+                    )
+                except Exception:
+                    nearby_context = ''
             image_rel = os.path.relpath(dst, view / cat).replace(os.sep, '/')
             context_items.append({
                 'id': str(row['id']),
@@ -242,6 +256,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                 'seen_at': str(row['seen_at'] or ''),
                 'text_excerpt': str(row['text_excerpt'] or ''),
+                'context_text': nearby_context,
                 'message_db_id': message_db_id,
             })
     build_context_view(conn, view / CATEGORY_NAMES['nearby_ai_context'], context_items, group_names)
