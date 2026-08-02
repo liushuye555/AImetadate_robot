@@ -15,6 +15,7 @@ public:
     explicit SettingsPage(QWidget *parent = nullptr);
     void setSchema(const QVariant &schema);
     void setSavedMessage(const QString &text);
+    void showError(const QString &text);
     QComboBox *languageCombo() const { return m_language; }
     QComboBox *themeCombo() const { return m_theme; }
     QCheckBox *autoStartBox() const { return m_autoStart; }
@@ -27,6 +28,7 @@ signals:
     void notificationsToggled(bool enabled);
 private:
     QJsonObject buildPatch() const;
+    QWidget *buildGeneralSection();
     void markDirty();
     QVBoxLayout *m_sections = nullptr;
     QPushButton *m_save = nullptr;

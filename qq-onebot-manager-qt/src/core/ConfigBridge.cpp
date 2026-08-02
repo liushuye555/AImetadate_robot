@@ -1,6 +1,7 @@
 #include "ConfigBridge.h"
 #include "Paths.h"
 #include <QJsonDocument>
+#include <QProcessEnvironment>
 
 ConfigBridge::ConfigBridge(QObject *parent) : QObject(parent) {
     connect(&m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
@@ -34,6 +35,9 @@ void ConfigBridge::runArgs(const QStringList &args) {
     m_proc.setProgram(Paths::pythonExe());
     m_proc.setArguments(args);
     m_proc.setWorkingDirectory(Paths::repoRoot());
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert("PYTHONUTF8", "1"); // 保证子进程输出 UTF-8，避免无控制台时按 GBK 编码导致 JSON 解析失败
+    m_proc.setProcessEnvironment(env);
     m_proc.start();
 }
 

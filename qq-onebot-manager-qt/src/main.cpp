@@ -103,7 +103,10 @@ int main(int argc, char *argv[]) {
 
     auto *settings = qobject_cast<SettingsPage *>(window.pageWidget("settings"));
     auto *configBridge = new ConfigBridge(&window);
-    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, &SettingsPage::setSchema);
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, [settings](bool ok, const QVariant &schema) {
+        if (ok) settings->setSchema(schema);
+        else settings->showError("配置加载失败");
+    });
     QObject::connect(settings, &SettingsPage::saveRequested, configBridge, &ConfigBridge::save);
     QObject::connect(configBridge, &ConfigBridge::saved, settings, [settings](bool ok, const QString &msg) {
         settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));

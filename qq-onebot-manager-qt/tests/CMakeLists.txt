@@ -14,3 +14,21 @@ add_executable(tst_configbridge
 target_include_directories(tst_configbridge PRIVATE ../src)
 target_link_libraries(tst_configbridge PRIVATE Qt6::Test Qt6::Core)
 add_test(NAME tst_configbridge COMMAND tst_configbridge)
+
+add_executable(tst_settingspage
+    tst_settingspage.cpp
+    ../src/ui/pages/SettingsPage.cpp
+    ../src/ui/Strings.cpp
+    ../src/core/AutoStart.cpp
+)
+target_include_directories(tst_settingspage PRIVATE ../src)
+target_link_libraries(tst_settingspage PRIVATE Qt6::Test Qt6::Widgets ole32 shell32)
+add_test(NAME tst_settingspage COMMAND tst_settingspage)
+
+add_executable(tst_configfetch
+    tst_configfetch.cpp
+    ../src/core/ConfigBridge.cpp
+)
+target_include_directories(tst_configfetch PRIVATE ../src)
+target_link_libraries(tst_configfetch PRIVATE Qt6::Test Qt6::Core)
+add_test(NAME tst_configfetch COMMAND tst_configfetch)

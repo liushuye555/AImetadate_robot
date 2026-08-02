@@ -25,25 +25,7 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
     scroll->setWidget(container);
     outer->addWidget(scroll, 1);
 
-    // 通用设置
-    auto *general = new QGroupBox(Strings::zh("general"), container);
-    auto *generalForm = new QFormLayout(general);
-    m_language = new QComboBox(general);
-    m_language->addItem("跟随系统", "auto");
-    m_language->addItem("中文", "zh-CN");
-    m_language->addItem("English", "en-US");
-    m_theme = new QComboBox(general);
-    m_theme->addItem("浅色", "light");
-    m_theme->addItem("深色", "dark");
-    m_autoStart = new QCheckBox(general);
-    m_autoStart->setChecked(AutoStart::isEnabled());
-    m_notifications = new QCheckBox(general);
-    m_notifications->setChecked(true);
-    generalForm->addRow(Strings::zh("language"), m_language);
-    generalForm->addRow(Strings::zh("theme"), m_theme);
-    generalForm->addRow(Strings::zh("autoStart"), m_autoStart);
-    generalForm->addRow(Strings::zh("notifications"), m_notifications);
-    m_sections->addWidget(general);
+    m_sections->addWidget(buildGeneralSection());
 
     connect(m_language, &QComboBox::currentIndexChanged, this, [this] {
         emit languageChanged(m_language->currentData().toString());
@@ -74,6 +56,27 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
     });
 }
 
+QWidget *SettingsPage::buildGeneralSection() {
+    auto *general = new QGroupBox(Strings::zh("general"), this);
+    auto *generalForm = new QFormLayout(general);
+    m_language = new QComboBox(general);
+    m_language->addItem("跟随系统", "auto");
+    m_language->addItem("中文", "zh-CN");
+    m_language->addItem("English", "en-US");
+    m_theme = new QComboBox(general);
+    m_theme->addItem("浅色", "light");
+    m_theme->addItem("深色", "dark");
+    m_autoStart = new QCheckBox(general);
+    m_autoStart->setChecked(AutoStart::isEnabled());
+    m_notifications = new QCheckBox(general);
+    m_notifications->setChecked(true);
+    generalForm->addRow(Strings::zh("language"), m_language);
+    generalForm->addRow(Strings::zh("theme"), m_theme);
+    generalForm->addRow(Strings::zh("autoStart"), m_autoStart);
+    generalForm->addRow(Strings::zh("notifications"), m_notifications);
+    return general;
+}
+
 void SettingsPage::setSchema(const QVariant &schemaVariant) {
     QLayoutItem *child;
     while ((child = m_sections->takeAt(0)) != nullptr) {
@@ -81,7 +84,8 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         delete child;
     }
     m_fields.clear();
-    // 通用分组在最后重建（先删掉旧的再重插，保持顺序：通用在最上）
+    // 通用分组必须先重建，否则页面被清空后只剩空白
+    m_sections->addWidget(buildGeneralSection());
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     QMap<QString, QFormLayout *> sections;
     for (const QJsonValue &value : items) {
@@ -132,6 +136,8 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         sections[section]->addRow(text, field);
         m_fields.insert(key, field);
     }
+    if (items.isEmpty())
+        m_message->setText(Strings::zh("error") + ": schema 为空");
     m_dirty = false;
     m_save->setEnabled(false);
 }
@@ -159,4 +165,8 @@ void SettingsPage::setSavedMessage(const QString &text) {
         m_dirty = false;
         m_save->setEnabled(false);
     }
+}
+
+void SettingsPage::showError(const QString &text) {
+    m_message->setText(Strings::zh("error") + ": " + text);
 }
