@@ -1,8 +1,10 @@
 import struct
 import zlib
+from pathlib import Path
 
 from qq_onebot_whitelist.image_meta import parse_image_metadata
 from qq_onebot_whitelist.image_policy import should_keep_image
+from qq_onebot_whitelist.images import existing_content_path, process_image_url
 
 
 def png_chunk(kind: bytes, payload: bytes) -> bytes:
@@ -50,3 +52,36 @@ def test_ai_png_is_kept(tmp_path):
 
     assert keep is True
     assert reason == 'ai_metadata'
+
+
+def test_existing_content_prefers_archive_over_candidate_and_extension(tmp_path):
+    archive = tmp_path / 'ai' / 'ab' / 'abcdef.jpg'
+    candidate = tmp_path / 'candidates' / 'ab' / 'abcdef.png'
+    archive.parent.mkdir(parents=True)
+    candidate.parent.mkdir(parents=True)
+    archive.write_bytes(b'image')
+    candidate.write_bytes(b'image')
+
+    assert existing_content_path('abcdef', tmp_path / 'ai', tmp_path / 'candidates') == archive
+
+
+def test_kept_duplicate_promotes_existing_candidate(monkeypatch, tmp_path):
+    candidate = tmp_path / 'candidates' / 'ab' / ('ab' * 32 + '.png')
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b'image')
+    incoming = tmp_path / 'incoming.png'
+    incoming.write_bytes(b'image')
+    monkeypatch.setattr('qq_onebot_whitelist.images.download_image', lambda *args, **kwargs: incoming)
+    monkeypatch.setattr('qq_onebot_whitelist.images.sha256_file', lambda path: 'ab' * 32)
+    monkeypatch.setattr('qq_onebot_whitelist.images.should_keep_image', lambda *args, **kwargs: (True, 'positive_feedback'))
+
+    result = process_image_url(
+        'https://example.test/image',
+        tmp_dir=tmp_path / 'tmp',
+        archive_root=tmp_path / 'ai',
+        candidate_root=tmp_path / 'candidates',
+    )
+
+    assert result['retention_reason'] == 'positive_feedback'
+    assert Path(result['kept_path']).is_relative_to(tmp_path / 'ai')
+    assert not candidate.exists()

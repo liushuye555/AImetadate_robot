@@ -50,3 +50,16 @@ def test_resource_pages_keep_interesting_sites_with_short_description(tmp_path):
     assert '用途：值得一看' in resources
     assert '这个小网站可以在线试试效果' in resources
     assert 'placeholder="搜索群名、文件名、简介或网址"' in resources
+
+
+def test_resource_pages_keep_unknown_link_without_source_group(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:987654', user_id='u', url='https://unknown.example/item')
+
+    result = write_resource_pages(tmp_path / 'view', store)
+
+    resources = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    assert result['resource_links'] == 1
+    assert 'https://unknown.example/item' in resources
+    assert '群聊未说明用途' in resources
+    assert '987654' not in resources

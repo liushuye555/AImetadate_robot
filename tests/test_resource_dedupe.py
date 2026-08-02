@@ -24,3 +24,5 @@ def test_resource_files_dedupe_across_scopes_by_name_size_kind(tmp_path):
 
     assert result['resource_files'] == 1
     assert html.lower().count('workflow.json') == 1
+    assert 'group:1' in html
+    assert 'group:2' in html

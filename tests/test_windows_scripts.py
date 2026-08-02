@@ -22,6 +22,8 @@ def test_hidden_scripts_default_to_local_napcat_with_optional_overrides():
         assert "Join-Path $BotDir 'runtime\\NapCat.Shell.Windows.Node'" in script
         assert "$env:NAPCAT_DIR" in script
         assert "launcher.config.ps1" in script
+        assert "$DefaultNapcatDir" in script
+        assert "if (-not (Test-Path $NapcatDir))" in script
 
 
 def test_tray_has_schedule_settings_and_safe_exit_order():
@@ -67,3 +69,48 @@ def test_tray_shortcut_uses_absolute_windows_powershell():
     script = read_script("install-tray-shortcut.ps1")
     assert "System32\\WindowsPowerShell\\v1.0\\powershell.exe" in script
     assert "$Shortcut.TargetPath = $PowerShell" in script
+
+
+def test_status_probe_reports_services_and_qq_login():
+    script = read_script("get-qq-onebot-status.ps1")
+    for field in ('napcat', 'onebot', 'bot', 'qqLoggedIn', 'qqNumber', 'qqNickname'):
+        assert field in script
+    assert 'ClientWebSocket' in script
+    assert 'get_login_info' in script
+    assert 'ConvertTo-Json' in script
+
+
+def test_status_probe_forces_utf8_stdout_for_chinese_nicknames():
+    script = read_script("get-qq-onebot-status.ps1")
+    assert "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)" in script
+
+
+def test_tray_shows_status_webui_and_supervises_services():
+    script = read_script("qq-onebot-tray.ps1")
+    assert 'Open NapCat WebUI' in script
+    assert 'Restart bot and NapCat' in script
+    assert 'get-qq-onebot-status.ps1' in script
+    assert 'System.Windows.Forms.Timer' in script
+    assert '$ManualStopPath' in script
+    assert '$StartSignalPath' in script
+    assert 'Get-AutoRestartEnabled' in script
+    assert '(Get-AutoRestartEnabled) -and' in script
+    assert 'AddSeconds(30)' in script
+    assert 'NapCat:' in script
+    assert 'QQ:' in script
+    assert 'OneBot:' in script
+    assert 'Bot:' in script
+
+
+def test_second_tray_launch_signals_existing_instance():
+    script = read_script("qq-onebot-tray.ps1")
+    mutex_exit = script.index('if (-not $createdNew)')
+    assert '$StartSignalPath' in script[:mutex_exit]
+    assert 'Set-Content' in script[mutex_exit:mutex_exit + 300]
+
+
+def test_manual_stop_cancels_pending_launcher():
+    script = read_script("qq-onebot-tray.ps1")
+    assert 'function Stop-PendingLauncher' in script
+    stop_handler = script[script.index('$stopItem.add_Click'):]
+    assert 'Stop-PendingLauncher' in stop_handler[:500]

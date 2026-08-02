@@ -165,6 +165,8 @@ def build_report_preview(store, config=None) -> str:
     content = build_daily_resource_report(
         store,
         since=store.last_daily_report_sent_at(),
+        include_files=config.daily_report_include_files,
+        include_links=config.daily_report_include_links,
         enrich_links=config.daily_report_enrich_links and config.feature_link_metadata,
         analyze_links=config.feature_link_analysis,
         max_links=config.daily_report_max_links,
@@ -203,6 +205,8 @@ async def _send_report_once() -> int:
     content = build_daily_resource_report(
         store,
         since=store.last_daily_report_sent_at(),
+        include_files=config.daily_report_include_files,
+        include_links=config.daily_report_include_links,
         enrich_links=config.daily_report_enrich_links and config.feature_link_metadata,
         analyze_links=config.feature_link_analysis,
         max_links=config.daily_report_max_links,

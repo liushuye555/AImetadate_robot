@@ -28,7 +28,10 @@ def test_summarize_records_with_llm_posts_openai_compatible_payload(monkeypatch)
         def __exit__(self, *args):
             return False
         def read(self):
-            return json.dumps({'choices': [{'message': {'content': '自动总结结果'}}]}).encode('utf-8')
+            return json.dumps({
+                'choices': [{'message': {'content': '自动总结结果'}}],
+                'usage': {'prompt_tokens': 123, 'completion_tokens': 17, 'total_tokens': 140},
+            }).encode('utf-8')
 
     def fake_urlopen(req, timeout):
         captured['url'] = req.full_url
@@ -39,15 +42,20 @@ def test_summarize_records_with_llm_posts_openai_compatible_payload(monkeypatch)
 
     monkeypatch.setattr('urllib.request.urlopen', fake_urlopen)
     cfg = LLMConfig(base_url='https://api.example.com/v1', api_key='sk-test', model='ds-v4-flash')
-    records = [{'text': '重要：明天交作业', 'links': []}]
+    records = [{'text': '图在上面，prompt: 1girl, white hair，CFG 4', 'links': []}]
 
-    result = summarize_records_with_llm(records, cfg)
+    usage = {}
+    result = summarize_records_with_llm(records, cfg, usage=usage)
 
     assert result == '自动总结结果'
     assert captured['url'] == 'https://api.example.com/v1/chat/completions'
     assert captured['payload']['model'] == 'ds-v4-flash'
-    assert '不能只输出“无有效讨论”' in captured['payload']['messages'][0]['content']
-    assert '明天交作业' in captured['payload']['messages'][1]['content']
+    system = captured['payload']['messages'][0]['content']
+    assert '只提取可用于复现图片' in system
+    assert '不要总结聊天主题' in system
+    assert 'NO_REUSABLE_IMAGE_CONTEXT' in system
+    assert '1girl' in captured['payload']['messages'][1]['content']
+    assert usage == {'prompt_tokens': 123, 'completion_tokens': 17, 'total_tokens': 140}
 
 
 def test_summary_redacts_secrets_and_removes_llm_preamble():
@@ -77,3 +85,17 @@ def test_format_records_redacts_passwords_and_secrets_in_links():
 
     assert 'super-secret-value' not in text
     assert 'sk-abcdefghijklmnopqrstuvwxyz' not in text
+
+
+def test_target_image_record_is_kept_and_marked():
+    records = [
+        {'id': 1, 'user_id': 'u', 'text': '[图片]', 'links': [], 'target_image': True},
+        {'id': 2, 'user_id': 'u', 'text': 'prompt: 1girl', 'links': []},
+    ]
+
+    filtered = filter_relevant_records(records)
+    text = _format_records(filtered)
+
+    assert filtered[0]['id'] == 1
+    assert '#1 U1' in text
+    assert '[目标图片]' in text

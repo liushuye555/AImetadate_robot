@@ -124,6 +124,14 @@ CREATE TABLE IF NOT EXISTS ai_context_batches (
   raw_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ai_context_scope_id ON ai_context_batches(scope, id);
+
+CREATE TABLE IF NOT EXISTS link_metadata (
+  url_key TEXT PRIMARY KEY,
+  title TEXT,
+  description TEXT,
+  fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  error TEXT
+);
 '''
 
 
@@ -151,7 +159,7 @@ class Store:
             conn.execute('ALTER TABLE messages ADD COLUMN message_key TEXT')
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_key ON messages(scope, message_key) WHERE message_key IS NOT NULL')
 
-    def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any]) -> list[str]:
+    def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
         message_key = canonical_message_key(raw)
         with closing(sqlite3.connect(self.path)) as conn:
@@ -163,11 +171,12 @@ class Store:
                 'INSERT INTO messages (scope, user_id, text, links_json, raw_json, message_key) VALUES (?, ?, ?, ?, ?, ?)',
                 (scope, str(user_id), text, json.dumps(links, ensure_ascii=False), json.dumps(raw, ensure_ascii=False), message_key),
             )
-            for url in links:
-                conn.execute(
-                    'INSERT INTO links (scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?)',
-                    (scope, str(user_id), url, text, '', 'link'),
-                )
+            if collect_links:
+                for url in links:
+                    conn.execute(
+                        'INSERT INTO links (scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?)',
+                        (scope, str(user_id), url, text, '', 'link'),
+                    )
             conn.commit()
         return links
 
@@ -200,6 +209,10 @@ class Store:
 
     def record_image(self, *, scope: str, user_id: str, result: dict[str, Any], raw: dict[str, Any]) -> None:
         with closing(sqlite3.connect(self.path)) as conn:
+            digest = result.get('sha256')
+            kept_path = result.get('kept_path')
+            if digest and kept_path and result.get('retention_reason') != 'candidate':
+                conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ? AND kept_path IS NOT NULL', (kept_path, digest))
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
@@ -209,7 +222,7 @@ class Store:
                     scope,
                     str(user_id),
                     result.get('url'),
-                    result.get('sha256'),
+                    digest,
                     result.get('size'),
                     result.get('format'),
                     result.get('width'),
@@ -218,7 +231,7 @@ class Store:
                     1 if result.get('has_ai_metadata') else 0,
                     result.get('ai_source'),
                     result.get('text_excerpt'),
-                    result.get('kept_path'),
+                    kept_path,
                     result.get('retention_reason'),
                     json.dumps(raw, ensure_ascii=False),
                 ),
@@ -343,6 +356,27 @@ class Store:
                 ).fetchall()
         return [dict(seen_at=r[0], scope=r[1], user_id=r[2], url=r[3], message_text=r[4] or '', quoted_text=r[5] or '', kind=r[6] or 'link') for r in rows]
 
+    def get_link_metadata(self, url_key: str) -> dict[str, Any] | None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                'SELECT url_key, title, description, fetched_at, error FROM link_metadata WHERE url_key = ?',
+                (str(url_key),),
+            ).fetchone()
+        if not row:
+            return None
+        return {'url_key': row[0], 'title': row[1] or '', 'description': row[2] or '', 'fetched_at': row[3] or '', 'error': row[4] or ''}
+
+    def save_link_metadata(self, url_key: str, title: str, description: str, error: str = '') -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                '''INSERT INTO link_metadata (url_key, title, description, fetched_at, error)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+                   ON CONFLICT(url_key) DO UPDATE SET title = excluded.title,
+                     description = excluded.description, fetched_at = excluded.fetched_at, error = excluded.error''',
+                (str(url_key), str(title or ''), str(description or ''), str(error or '')),
+            )
+            conn.commit()
+
     def recent_files(self, limit: int = 20, since: str | None = None) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as conn:
             if since:
@@ -442,6 +476,16 @@ class Store:
     def clear_image_path(self, kept_path: str | Path) -> None:
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute('UPDATE images SET kept_path = NULL WHERE kept_path = ?', (str(kept_path),))
+            conn.commit()
+
+    def replace_image_path(self, old_path: str | Path, new_path: str | Path) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute('UPDATE images SET kept_path = ? WHERE kept_path = ?', (str(new_path), str(old_path)))
+            conn.commit()
+
+    def set_image_path_for_sha(self, sha256: str, path: str | Path) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ?', (str(path), str(sha256)))
             conn.commit()
 
     def clear_missing_image_paths(self, base_dir: str | Path) -> int:

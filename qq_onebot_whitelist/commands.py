@@ -8,6 +8,7 @@ from .policy import extract_text, is_keepalive_event
 from .summary import summarize_records
 from .llm_summary import LLMConfig, summarize_records_with_fallback
 from .settings import read_analysis_windows, write_analysis_windows
+from .i18n import text as tr
 
 HELP_TEXT = '''管理员菜单：
 1. 帮助：查看本菜单
@@ -29,6 +30,15 @@ HELP_TEXT = '''管理员菜单：
 规则：只对白名单用户或白名单群内 @ 机器人的消息回复；其他消息只记录，不回复。图片不会强制保存，只有 AI 元数据、群友好评或 AI 上下文命中才长期保留。'''.strip()
 
 
+def help_text(language: str = 'zh-CN') -> str:
+    return '\n\n'.join((
+        tr('help_title', language) + '\n' + tr('help_lines', language),
+        tr('help_note', language),
+        tr('help_entry', language),
+        tr('help_rule', language),
+    ))
+
+
 def scope_for_event(event: dict[str, Any]) -> str:
     if event.get('message_type') == 'group':
         return 'group:' + str(event.get('group_id') or 'unknown')
@@ -46,102 +56,108 @@ def parse_limit(text: str, default: int = 100, max_limit: int = 500) -> int:
 
 
 def is_refresh_command(normalized: str) -> bool:
-    return normalized in {'刷新', '强制刷新', '整理', '刷新分类', '重新整理', '重建分类'}
+    return normalized in {'刷新', '强制刷新', '整理', '刷新分类', '重新整理', '重建分类', 'refresh', 'rebuild', 'refreshviews'}
 
 
-def format_view_counts(counts: dict) -> str:
+def format_view_counts(counts: dict, language: str = 'zh-CN') -> str:
     if not counts:
-        return '分类视图已刷新，但当前没有可展示图片。'
-    lines = ['分类视图已刷新：']
+        return tr('refresh_empty', language)
+    lines = [tr('refresh_title', language)]
     for key, value in sorted(counts.items()):
         lines.append(f'{key}: {value}')
     return '\n'.join(lines)
 
 
-def format_resources(store, *, limit: int = 20) -> str:
+def format_resources(store, *, limit: int = 20, language: str = 'zh-CN') -> str:
     files = store.recent_files(limit=limit)
     links = store.recent_link_records(limit=limit)
     if not files and not links:
-        return '最近没有记录到模型文件、压缩包、工作流文件或资源链接。'
-    lines = ['最近资源线索：']
+        return tr('no_records', language)
+    lines = [tr('resources_title', language)]
     if files:
-        lines.append('\n一、模型/文件')
+        lines.append('\n1. ' + tr('resources_files', language))
         for idx, item in enumerate(files, 1):
             size = item.get('file_size')
-            size_text = f'{size / 1024 / 1024:.1f}MB' if size else '未知大小'
-            lines.append(f'{idx}. [{item.get("kind")}] {item.get("file_name")}，{size_text}，来源 {item.get("scope")} / {item.get("user_id")}')
+            size_text = f'{size / 1024 / 1024:.1f}MB' if size else tr('unknown_size', language)
+            separator = ', ' if language == 'en-US' else '，'
+            lines.append(f'{idx}. [{item.get("kind")}] {item.get("file_name")}{separator}{size_text}{separator}{tr("source", language)} {item.get("scope")} / {item.get("user_id")}')
     if links:
-        lines.append('\n二、链接')
+        lines.append('\n2. ' + tr('resources_links', language))
         for idx, item in enumerate(links, 1):
             context = item.get('message_text') or item.get('quoted_text') or ''
             if len(context) > 80:
                 context = context[:80] + '…'
             lines.append(f'{idx}. [{item.get("kind")}] {item.get("url")}')
             if context:
-                lines.append(f'   上下文：{context}')
+                lines.append(f'   {tr("context", language)}: {context}')
     return '\n'.join(lines)
 
 
-def handle_analysis_windows_command(text: str, *, is_private: bool, config_path: str | Path) -> str | None:
+def handle_analysis_windows_command(text: str, *, is_private: bool, config_path: str | Path, language: str = 'zh-CN') -> str | None:
     command = text.strip().lstrip('/').strip()
-    if not command.startswith('分析时段'):
+    if not (command.startswith('分析时段') or command.lower().startswith('analysis windows')):
         return None
     if not is_private:
-        return '分析时段只能由白名单用户私聊修改。'
-    argument = command[len('分析时段'):].strip()
-    if argument in {'', '查看'}:
+        return tr('private_only', language)
+    prefix = '分析时段' if command.startswith('分析时段') else 'analysis windows'
+    argument = command[len(prefix):].strip()
+    if argument in {'', '查看', 'view', 'View'}:
         windows = read_analysis_windows(config_path)
-        return '当前允许分析时段：' + ('、'.join(windows) if windows else '全天')
-    if argument == '全天':
+        value = ('、'.join(windows) if language == 'zh-CN' else ', '.join(windows)) if windows else tr('windows_all', language)
+        return tr('windows_current', language, value=value)
+    if argument in {'全天', 'all', 'All day'}:
         write_analysis_windows(config_path, [])
-        return '已设置分析时段：全天'
-    if argument.startswith('设置'):
-        values = [item.strip() for item in argument[len('设置'):].strip().split(',') if item.strip()]
+        return tr('windows_set', language, value=tr('windows_all', language))
+    set_prefix = '设置' if argument.startswith('设置') else 'set' if argument.lower().startswith('set') else None
+    if set_prefix:
+        values = [item.strip() for item in argument[len(set_prefix):].strip().split(',') if item.strip()]
         try:
             windows = write_analysis_windows(config_path, values)
         except ValueError as exc:
             return str(exc)
-        return '已设置分析时段：' + ('、'.join(windows) if windows else '全天')
-    return '用法：分析时段 查看；分析时段 设置 00:30-08:30,12:00-13:00；分析时段 全天'
+        value = ('、'.join(windows) if language == 'zh-CN' else ', '.join(windows)) if windows else tr('windows_all', language)
+        return tr('windows_set', language, value=value)
+    return tr('windows_usage', language)
 
 
-def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 100, max_summary_limit: int = 500, view_builder=None, config_path: str | Path = 'config.yaml') -> str:
+def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 100, max_summary_limit: int = 500, view_builder=None, config_path: str | Path = 'config.yaml', language: str = 'zh-CN') -> str:
     text = extract_text(event)
     normalized = text.lower().replace(' ', '')
     scope = scope_for_event(event)
     is_private = event.get('message_type') == 'private'
     if is_keepalive_event(event):
-        return '在，冒个泡。'
-    schedule_reply = handle_analysis_windows_command(text, is_private=is_private, config_path=config_path)
+        return tr('alive', language)
+    schedule_reply = handle_analysis_windows_command(text, is_private=is_private, config_path=config_path, language=language)
     if schedule_reply is not None:
         return schedule_reply
     if view_builder is not None and is_refresh_command(normalized):
-        return format_view_counts(view_builder())
-    if normalized in {'资源', '文件', '链接线索', '资源总结', '文件线索'}:
-        return format_resources(store)
+        return format_view_counts(view_builder(), language)
+    if normalized in {'资源', '文件', '链接线索', '资源总结', '文件线索', 'resources', 'files', 'resourcessummary', 'resourceleads'}:
+        return format_resources(store, language=language)
     if normalized in {'/帮助', '帮助', 'help', '/help'}:
-        return HELP_TEXT
-    if normalized.startswith('/链接') or normalized == '链接':
+        return help_text(language)
+    if normalized.startswith('/链接') or normalized == '链接' or normalized.startswith('/link') or normalized == 'links':
         if is_private:
             links = [item.get('url') for item in store.recent_link_records(limit=20)]
         else:
             links = store.recent_links(scope, limit=20)
         if not links:
-            return '本会话最近没有保存到链接。'
-        return '最近保存的链接：\n' + '\n'.join(f'{idx}. {url}' for idx, url in enumerate(links, 1))
-    if normalized.startswith('/图片信息') or normalized == '图片信息':
+            return tr('no_links', language)
+        return tr('links_title', language) + '\n' + '\n'.join(f'{idx}. {url}' for idx, url in enumerate(links, 1))
+    if normalized.startswith('/图片信息') or normalized == '图片信息' or normalized.startswith('/imageinfo') or normalized == 'imageinfo':
         images = store.recent_images_all(limit=10) if is_private and hasattr(store, 'recent_images_all') else store.recent_images(scope, limit=10)
         if not images:
-            return '本会话最近没有处理过图片。'
-        lines = [f'最近处理的 {len(images)} 张图片：']
+            return tr('no_images', language)
+        lines = [tr('images_title', language, count=len(images))]
         for idx, item in enumerate(images, 1):
             size = item.get('size') or 0
-            size_text = f'{size / 1024:.1f}KB' if size else '未知大小'
-            ai = item.get('ai_source') or '无AI元数据'
-            kept = '已保留' if item.get('kept_path') else '未保留'
-            lines.append(f'{idx}. {item.get("format")} {item.get("width")}x{item.get("height")}，{size_text}，{ai}，{kept}（{item.get("retention_reason")}）')
+            size_text = f'{size / 1024:.1f}KB' if size else tr('image_unknown_size', language)
+            ai = item.get('ai_source') or tr('no_ai', language)
+            kept = tr('kept', language) if item.get('kept_path') else tr('not_kept', language)
+            separator = ', ' if language == 'en-US' else '，'
+            lines.append(f'{idx}. {item.get("format")} {item.get("width")}x{item.get("height")}{separator}{size_text}{separator}{ai}{separator}{kept} ({item.get("retention_reason")})')
         return '\n'.join(lines)
-    if normalized.startswith('/最近总结') or normalized.startswith('最近总结'):
+    if normalized.startswith('/最近总结') or normalized.startswith('最近总结') or normalized.startswith('/recentsummary') or normalized.startswith('recentsummary'):
         limit = parse_limit(text, default=default_summary_limit, max_limit=max_summary_limit)
         records = store.recent_records_all(limit=limit) if is_private and hasattr(store, 'recent_records_all') else store.recent_records(scope, limit=limit)
         llm_config = LLMConfig.from_env()
@@ -150,7 +166,7 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
             try:
                 return summarize_records_with_fallback(records, llm_config, fallback_config)
             except Exception as exc:
-                fallback = summarize_records(records)
-                return f'大模型总结失败，已回退规则总结。\n原因：{type(exc).__name__}\n\n{fallback}'
-        return summarize_records(records)
-    return '已收到。发送 @机器人 帮助 查看可用指令。'
+                fallback = summarize_records(records, language=language)
+                return tr('summary_failed', language, reason=type(exc).__name__, fallback=fallback)
+        return summarize_records(records, language=language)
+    return tr('ack', language)

@@ -1,10 +1,10 @@
-from qq_onebot_whitelist.daily_report import build_daily_resource_report, should_run_daily_report
+from qq_onebot_whitelist.daily_report import build_daily_resource_report, canonical_url, dedupe_url_key, should_run_daily_report
 from qq_onebot_whitelist.store import Store
 
 
-def test_build_daily_resource_report_empty_returns_none(tmp_path):
+def test_build_daily_resource_report_empty_still_reports(tmp_path):
     store = Store(tmp_path / 'bot.db')
-    assert build_daily_resource_report(store) is None
+    assert build_daily_resource_report(store) == '今日无新增资源。'
 
 
 def test_build_daily_resource_report_includes_files_and_links(tmp_path):
@@ -15,6 +15,28 @@ def test_build_daily_resource_report_includes_files_and_links(tmp_path):
     assert report is not None
     assert 'a.zip' in report
     assert 'github.com/a/b' in report
+    assert 'group:1' in report
+
+
+def test_link_report_omits_source_and_keeps_unknown_link(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:987654', user_id='u', url='https://unknown.example/item')
+
+    report = build_daily_resource_report(store)
+
+    assert 'https://unknown.example/item' in report
+    assert '群聊未说明用途' in report
+    assert '987654' not in report
+
+
+def test_canonical_url_removes_trackers_but_keeps_resource_identity():
+    assert canonical_url('https://music.163.com/song?id=1&uct2=session') == 'https://music.163.com/song?id=1'
+    assert canonical_url('https://zhaiqi.vip/tools/#meme-generator') == 'https://zhaiqi.vip/tools/#meme-generator'
+    assert canonical_url('https://www.bilibili.com/video/BV1x/?share_source=copy_web&vd_source=token') == 'https://www.bilibili.com/video/BV1x'
+
+
+def test_dedupe_url_key_keeps_distinct_query_resources():
+    assert dedupe_url_key('https://music.163.com/song?id=1') != dedupe_url_key('https://music.163.com/song?id=2')
 
 
 def test_should_run_daily_report_in_20_to_21_window_and_once():

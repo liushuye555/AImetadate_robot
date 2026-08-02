@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from pathlib import Path
 import html
 from urllib.parse import urlparse
@@ -24,7 +23,7 @@ def _html_page(title: str, intro: str, sections: list[str]) -> str:
     )
 
 
-def select_resource_links(store, *, limit: int = 10000) -> dict[str, list[dict]]:
+def select_resource_links(store, *, limit: int = 10000) -> list[dict]:
     selected: dict[str, dict] = {}
     for item in store.recent_link_records(limit=limit):
         url = str(item.get('url') or '')
@@ -32,33 +31,27 @@ def select_resource_links(store, *, limit: int = 10000) -> dict[str, list[dict]]
         if not url or is_low_value_link(url, context):
             continue
         score = link_score(item)
-        if score <= 0:
-            continue
         key = dedupe_url_key(url)
         old = selected.get(key)
         if old is None or score > int(old.get('_score') or 0):
             selected[key] = {**item, 'url': canonical_url(url), 'purpose': link_purpose(item) or '值得一看', '_score': score}
-    by_scope: dict[str, list[dict]] = defaultdict(list)
-    for item in sorted(selected.values(), key=lambda x: (str(x.get('scope') or ''), -int(x.get('_score') or 0), str(x.get('url') or ''))):
-        by_scope[str(item.get('scope') or 'unknown')].append(item)
-    return dict(by_scope)
+    return sorted(selected.values(), key=lambda x: (-int(x.get('_score') or 0), str(x.get('url') or '')))
 
 
-def select_resource_files(store, *, limit: int = 10000) -> dict[str, list[dict]]:
-    seen: dict[tuple[str, str, int | None, str], dict] = {}
+def select_resource_files(store, *, limit: int = 10000) -> list[dict]:
+    seen: dict[tuple[str, int | None, str], dict] = {}
     for item in store.recent_files(limit=limit):
         name = str(item.get('file_name') or '').strip()
         if not name:
             continue
         kind = str(item.get('kind') or 'file')
         key = (name.lower(), item.get('file_size'), kind)
-        seen.setdefault(key, item)
-    by_scope: dict[str, list[dict]] = defaultdict(list)
-    for item in seen.values():
-        by_scope[str(item.get('scope') or 'unknown')].append(item)
-    for items in by_scope.values():
-        items.sort(key=lambda x: (str(x.get('kind') or ''), str(x.get('file_name') or '').lower()))
-    return dict(by_scope)
+        if key not in seen:
+            seen[key] = {**item, 'scopes': []}
+        scope = str(item.get('scope') or 'unknown')
+        if scope not in seen[key]['scopes']:
+            seen[key]['scopes'].append(scope)
+    return sorted(seen.values(), key=lambda x: (str(x.get('kind') or ''), str(x.get('file_name') or '').lower()))
 
 
 def write_resource_pages(view: str | Path, store) -> dict[str, int]:
@@ -66,57 +59,55 @@ def write_resource_pages(view: str | Path, store) -> dict[str, int]:
     view.mkdir(parents=True, exist_ok=True)
 
     group_names = store.group_name_map()
-    links_by_scope = select_resource_links(store)
+    links = select_resource_links(store)
     link_sections: list[str] = []
-    link_count = 0
-    for scope, items in sorted(links_by_scope.items()):
-        link_count += len(items)
-        label = display_scope(scope, group_names)
-        link_sections.append(f'<section class="card"><h2>{html.escape(label)} <span class="muted">{len(items)} 条</span></h2><ul class="resource-list">')
-        for item in items:
-            url = str(item.get('url') or '')
-            purpose_text = str(item.get('purpose') or '值得一看')
-            description = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url) or fallback_link_description(url, purpose_text)
-            host = urlparse(url).netloc.lower()
-            link_sections.append(
-                '<li><article class="resource-item">'
-                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
-                f'<p class="desc">{html.escape(description)}</p>'
-                f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
-                '</article></li>'
-            )
+    link_count = len(links)
+    if links:
+        link_sections.append(f'<section class="card"><h2>链接 <span class="muted">{len(links)} 条</span></h2><ul class="resource-list">')
+    for item in links:
+        url = str(item.get('url') or '')
+        purpose_text = str(item.get('purpose') or '链接')
+        description = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url) or fallback_link_description(url, purpose_text)
+        host = urlparse(url).netloc.lower()
+        link_sections.append(
+            '<li><article class="resource-item">'
+            f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
+            f'<p class="desc">{html.escape(description)}</p>'
+            f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
+            '</article></li>'
+        )
+    if links:
         link_sections.append('</ul></section>')
     if not link_sections:
         link_sections.append('<section class="card"><p class="muted">暂无高价值链接。</p></section>')
     (view / 'resources.html').write_text(
-        _html_page('高价值资源链接', '已过滤快手/泛分享；按 URL 去重；按群分类。', link_sections),
+        _html_page('资源链接', '仅过滤明确的娱乐、广告和泛分享链接；按 URL 去重。', link_sections),
         encoding='utf-8',
     )
 
-    files_by_scope = select_resource_files(store)
+    files = select_resource_files(store)
     file_sections: list[str] = []
-    file_count = 0
-    for scope, items in sorted(files_by_scope.items()):
-        file_count += len(items)
-        label = display_scope(scope, group_names)
-        file_sections.append(f'<section class="card"><h2>{html.escape(label)} <span class="muted">{len(items)} 个</span></h2><ul class="resource-list">')
-        for item in items:
-            kind = str(item.get('kind') or 'file')
-            name = str(item.get('file_name') or '未命名文件')
-            description = resource_context(str(item.get('message_text') or '')) or file_description(name, kind)
-            user = html.escape(str(item.get('user_id') or ''))
-            file_sections.append(
-                '<li><article class="resource-item">'
-                f'<div class="title"><span class="badge">{html.escape(kind)}</span>{html.escape(redact_secrets(name))}</div>'
-                f'<p class="desc">{html.escape(description)}</p>'
-                f'<div class="meta">{html.escape(format_size(item.get("file_size")))} · user:{user}</div>'
-                '</article></li>'
-            )
+    file_count = len(files)
+    if files:
+        file_sections.append(f'<section class="card"><h2>群文件 <span class="muted">{len(files)} 个</span></h2><ul class="resource-list">')
+    for item in files:
+        kind = str(item.get('kind') or 'file')
+        name = str(item.get('file_name') or '未命名文件')
+        description = resource_context(str(item.get('message_text') or '')) or file_description(name, kind)
+        groups = '、'.join(display_scope(scope, group_names) for scope in item.get('scopes') or [])
+        file_sections.append(
+            '<li><article class="resource-item">'
+            f'<div class="title"><span class="badge">{html.escape(kind)}</span>{html.escape(redact_secrets(name))}</div>'
+            f'<p class="desc">{html.escape(description)}</p>'
+            f'<div class="meta">{html.escape(format_size(item.get("file_size")))} · {html.escape(groups)}</div>'
+            '</article></li>'
+        )
+    if files:
         file_sections.append('</ul></section>')
     if not file_sections:
         file_sections.append('<section class="card"><p class="muted">暂无高价值文件/工作流。</p></section>')
     (view / 'files.html').write_text(
-        _html_page('高价值文件/工作流', '按群分类，按 文件名+大小+类型 去重；不展示长下载 URL。', file_sections),
+        _html_page('群文件/工作流', '按 文件名+大小+类型 去重；文件不下载，只记录所在群。', file_sections),
         encoding='utf-8',
     )
 

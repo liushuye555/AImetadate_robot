@@ -65,6 +65,17 @@ def archive_image(tmp: Path, archive_root: Path, digest: str) -> Path:
     return dest
 
 
+def existing_content_path(digest: str, archive_root: Path, candidate_root: Path | None) -> Path | None:
+    roots = [archive_root]
+    if candidate_root is not None:
+        roots.append(candidate_root)
+    for root in roots:
+        matches = list((root / digest[:2]).glob(digest + '.*'))
+        if matches:
+            return matches[0]
+    return None
+
+
 def is_probable_sticker_result(result: dict) -> bool:
     if result.get('has_ai_metadata'):
         return False
@@ -100,7 +111,20 @@ def process_image_url(
     meta = parse_image_metadata(tmp)
     keep, reason = should_keep_image(meta, nearby_text=nearby_text)
     kept_path = None
-    if keep:
+    existing = existing_content_path(digest, archive_root, candidate_root)
+    if existing is not None:
+        tmp.unlink(missing_ok=True)
+        if keep and candidate_root is not None and str(existing).startswith(str(candidate_root)):
+            kept_path = archive_root / digest[:2] / existing.name
+            kept_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(existing), str(kept_path))
+        elif str(existing).startswith(str(archive_root)):
+            kept_path = existing
+            reason = reason if keep else 'candidate'
+        else:
+            kept_path = existing
+            reason = 'candidate'
+    elif keep:
         kept_path = archive_image(tmp, archive_root, digest)
     elif candidate_root is not None:
         kept_path = archive_image(tmp, candidate_root, digest)

@@ -22,12 +22,16 @@ def _url_path(path: str) -> str:
     return '/'.join(quote(part) for part in path.replace('\\', '/').split('/'))
 
 
-def _quality(raw_json: str | None) -> str:
+def _batch_state(raw_json: str | None) -> tuple[str, bool]:
     try:
-        value = json.loads(raw_json or '{}').get('quality', {}).get('value_level')
+        raw = json.loads(raw_json or '{}')
+        quality = raw.get('quality') or {}
+        value = quality.get('value_level')
+        hidden = bool(raw.get('hidden'))
     except (AttributeError, TypeError, ValueError):
         value = None
-    return value if value in {'high', 'review', 'low'} else 'review'
+        hidden = False
+    return (value if value in {'high', 'review', 'low'} else 'review', hidden)
 
 
 def _date(value: object) -> str:
@@ -62,8 +66,10 @@ def _load_batches(conn: sqlite3.Connection) -> list[dict[str, object]]:
         ).fetchall()
     except sqlite3.OperationalError:
         return []
-    return [
-        {
+    result = []
+    for row in rows:
+        quality, hidden = _batch_state(row['raw_json'])
+        result.append({
             'id': int(row['id']),
             'created_at': str(row['created_at'] or ''),
             'scope': str(row['scope'] or ''),
@@ -71,10 +77,10 @@ def _load_batches(conn: sqlite3.Connection) -> list[dict[str, object]]:
             'end_message_id': int(row['end_message_id']),
             'model': str(row['model'] or ''),
             'summary': str(row['summary'] or ''),
-            'quality': _quality(row['raw_json']),
-        }
-        for row in rows
-    ]
+            'quality': quality,
+            'hidden': hidden,
+        })
+    return result
 
 
 def _image_cards(items: list[dict[str, object]], prefix: str) -> str:
@@ -95,9 +101,8 @@ def _image_cards(items: list[dict[str, object]], prefix: str) -> str:
 
 
 def _write_batch_page(path: Path, batch: dict[str, object], items: list[dict[str, object]], scope_name: str) -> None:
-    review = '<span class="badge">待复核</span>' if batch['quality'] == 'review' else ''
     body = (
-        f'<h1>{html.escape(scope_name)} · 批次 #{batch["id"]}</h1>{review}'
+        f'<h1>{html.escape(scope_name)} · 批次 #{batch["id"]}</h1>'
         f'<p class="muted">{html.escape(_date(batch["created_at"]))} · 消息 '
         f'{batch["start_message_id"]}–{batch["end_message_id"]} · {html.escape(str(batch["model"]))}</p>'
         f'<div class="markdown">{render_markdown(redact_secrets(str(batch["summary"] or "暂无批摘要")))}</div>'
@@ -120,7 +125,7 @@ def _write_history_page(path: Path, items: list[dict[str, object]], scope_name: 
 def _directory(groups: dict[tuple[str, str], list[tuple[str, str, str]]]) -> tuple[str, str]:
     sections = []
     first_target = ''
-    for quality, heading in (('high', '高价值'), ('review', '待复核'), ('history', '历史图片')):
+    for quality, heading in (('high', '可复用参数'), ('history', '历史图片')):
         scope_blocks = []
         for (item_quality, scope_name), entries in sorted(groups.items()):
             if item_quality != quality:
@@ -152,6 +157,10 @@ def build_context_view(
     group_names: dict[str, str],
 ) -> None:
     batches = _load_batches(conn)
+    visible_batches = [
+        batch for batch in batches
+        if batch['quality'] == 'high' and not batch['hidden'] and str(batch['summary']).strip()
+    ]
     batch_images: dict[int, list[dict[str, object]]] = defaultdict(list)
     history_images: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for item in items:
@@ -160,7 +169,7 @@ def build_context_view(
         if message_db_id is not None:
             matched = next(
                 (
-                    batch for batch in batches
+                    batch for batch in visible_batches
                     if batch['scope'] == item['scope']
                     and int(batch['start_message_id']) <= int(message_db_id) <= int(batch['end_message_id'])
                 ),
@@ -173,9 +182,7 @@ def build_context_view(
 
     context_dir.mkdir(parents=True, exist_ok=True)
     groups: dict[tuple[str, str], list[tuple[str, str, str]]] = defaultdict(list)
-    for batch in batches:
-        if batch['quality'] == 'low':
-            continue
+    for batch in visible_batches:
         scope = str(batch['scope'])
         scope_name = display_scope(scope, group_names)
         href = f'batches/{batch["id"]}.html'

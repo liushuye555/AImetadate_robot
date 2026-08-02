@@ -7,6 +7,19 @@ def test_extract_links_dedupes_and_strips_punctuation():
     assert extract_links(text) == ['https://example.com/a?b=1', 'http://x.test/y']
 
 
+def test_extract_links_does_not_consume_following_chinese_text():
+    text = '资源 https://tusi.cn/models/1025956255161707549更'
+    assert extract_links(text) == ['https://tusi.cn/models/1025956255161707549']
+
+
+def test_extract_links_keeps_fragment_and_encoded_query():
+    text = '看 https://zhaiqi.vip/tools/#meme-generator 和 https://music.163.com/song?id=1&name=a%20b'
+    assert extract_links(text) == [
+        'https://zhaiqi.vip/tools/#meme-generator',
+        'https://music.163.com/song?id=1&name=a%20b',
+    ]
+
+
 def test_store_records_messages_links_and_summarizes(tmp_path):
     store = Store(tmp_path / 'bot.db')
     store.record_message(scope='group:1', user_id='1001', text='第一条 https://a.test', raw={'id': 1})

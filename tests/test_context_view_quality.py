@@ -8,7 +8,7 @@ def test_context_dates_convert_sqlite_utc_to_local_timezone():
     assert _date('2026-07-09 16:30:00') == '2026-07-10'
 
 
-def test_context_batches_split_by_quality_and_hide_low(tmp_path):
+def test_context_batches_show_only_reusable_context_without_review_section(tmp_path):
     data = tmp_path / 'data'
     images = data / 'images'
     images.mkdir(parents=True)
@@ -27,9 +27,9 @@ def test_context_batches_split_by_quality_and_hide_low(tmp_path):
     ''')
     qualities = {
         21: '{"quality":{"value_level":"high"}}',
-        22: '{"quality":{"value_level":"review"}}',
+        22: '{"quality":{"value_level":"review"},"hidden":true}',
         23: '{"quality":{"value_level":"low"}}',
-        24: '{}',
+        24: '{"hidden":true}',
     }
     for batch_id, raw_json in qualities.items():
         start = (batch_id - 20) * 10
@@ -50,25 +50,32 @@ def test_context_batches_split_by_quality_and_hide_low(tmp_path):
     conn.commit()
     conn.close()
 
+    stale = data / 'view' / '03_AI上下文' / 'batches' / '999.html'
+    stale.parent.mkdir(parents=True)
+    stale.write_text('STALE', encoding='utf-8')
+
     build_view(tmp_path)
 
     context_dir = data / 'view' / '03_AI上下文'
     index_text = (context_dir / 'index.html').read_text(encoding='utf-8')
-    assert '高价值' in index_text
-    assert '待复核' in index_text
+    assert '可复用参数' in index_text
     assert 'batches/21.html' in index_text
-    assert 'batches/22.html' in index_text
-    assert 'batches/24.html' in index_text
+    assert '待复核' not in index_text
+    assert 'batches/22.html' not in index_text
+    assert 'batches/24.html' not in index_text
     assert 'batches/23.html' not in index_text
+    assert not (context_dir / 'batches' / '22.html').exists()
     assert not (context_dir / 'batches' / '23.html').exists()
+    assert not stale.exists()
 
     high_text = (context_dir / 'batches' / '21.html').read_text(encoding='utf-8')
-    review_text = (context_dir / 'batches' / '22.html').read_text(encoding='utf-8')
-    default_review_text = (context_dir / 'batches' / '24.html').read_text(encoding='utf-8')
-    assert 'IMAGE_21' in high_text and 'IMAGE_22' not in high_text
+    assert 'IMAGE_21' in high_text
     assert '待复核' not in high_text
-    assert '待复核' in review_text
-    assert '待复核' in default_review_text
     assert (images / '23.png').exists()
+    history_pages = list((context_dir / 'history').rglob('*.html'))
+    history_text = ''.join(path.read_text(encoding='utf-8') for path in history_pages)
+    assert 'IMAGE_22' in history_text
+    assert 'IMAGE_23' in history_text
+    assert 'IMAGE_24' in history_text
     with sqlite3.connect(data / 'bot.db') as check:
         assert check.execute('SELECT COUNT(*) FROM ai_context_batches').fetchone()[0] == 4

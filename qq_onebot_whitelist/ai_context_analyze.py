@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from .config import AppConfig, load_config
 from .context_quality import parse_context_quality
-from .llm_summary import LLMConfig, summarize_records_with_fallback
+from .llm_summary import LLMConfig, _read_env_values, summarize_records_with_fallback
 from .store import Store, raw_message_ids, reply_to_message_id
+
+
+def _summarize_with_usage(records, primary, fallback, usage: dict[str, int]) -> str:
+    try:
+        return summarize_records_with_fallback(records, primary, fallback, usage=usage)
+    except TypeError as exc:
+        if "unexpected keyword argument 'usage'" not in str(exc):
+            raise
+        return summarize_records_with_fallback(records, primary, fallback)
 
 
 def fetch_records(db_path: Path, *, scope: str | None, after_id: int = 0, limit: int = 500) -> list[dict]:
@@ -90,7 +100,27 @@ def configured_scopes(config: AppConfig, db_path: Path) -> list[str | None]:
     return [str(scopes)]
 
 
-def llm_configs_for_provider(provider: str) -> tuple[LLMConfig | None, LLMConfig | None]:
+def target_image_message_ids(db_path: Path, *, scope: str, start_id: int, end_id: int) -> set[int]:
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        '''SELECT raw_json FROM images
+           WHERE scope = ? AND has_ai_metadata = 0 AND kept_path IS NOT NULL
+             AND retention_reason IN ('nearby_ai_context', 'positive_feedback')''',
+        (scope,),
+    ).fetchall()
+    conn.close()
+    result = set()
+    for (raw_json,) in rows:
+        try:
+            message_id = int(json.loads(raw_json or '{}').get('message_db_id'))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if start_id <= message_id <= end_id:
+            result.add(message_id)
+    return result
+
+
+def llm_configs_for_provider(provider: str, config: AppConfig | None = None) -> tuple[LLMConfig | None, LLMConfig | None]:
     provider = (provider or '').lower()
     if provider in {'ds', 'ds_v4_flash', 'deepseek', 'deepseek_v4_flash'}:
         return LLMConfig.ds_fallback_from_env_file(), None
@@ -98,6 +128,13 @@ def llm_configs_for_provider(provider: str) -> tuple[LLMConfig | None, LLMConfig
         return LLMConfig.from_env(), LLMConfig.ds_fallback_from_env_file()
     if provider in {'auto', 'default'}:
         return LLMConfig.from_env(), LLMConfig.ds_fallback_from_env_file()
+    custom = (config.ai_context_providers if config else {}).get(provider)
+    if custom:
+        key_name = custom.get('api_key_env', '')
+        api_key = os.environ.get(key_name) or _read_env_values(Path.cwd() / '.env').get(key_name)
+        if api_key and custom.get('base_url'):
+            return LLMConfig(base_url=custom['base_url'], api_key=api_key, model=custom.get('model', provider), timeout_seconds=int(custom.get('timeout_seconds', 60))), None
+        return None, None
     raise SystemExit(f'Unknown ai_context.provider: {provider}')
 
 
@@ -126,11 +163,17 @@ def analyze_scope(
     allow_ds_fallback: bool | None = None,
 ) -> int:
     config = load_config(config_path)
-    if not config.ai_context_enabled:
+    if not config.ai_context_enabled or not config.feature_ai_context:
         print('ai_context disabled in config')
         return 0
     store = Store(config.data_dir / 'bot.db')
-    primary, fallback = llm_configs_for_provider(config.ai_context_provider)
+    try:
+        primary, fallback = llm_configs_for_provider(config.ai_context_provider, config)
+    except TypeError as exc:
+        # Keep compatibility with integrations that replace the legacy one-argument hook.
+        if 'positional argument' not in str(exc) and 'positional arguments' not in str(exc):
+            raise
+        primary, fallback = llm_configs_for_provider(config.ai_context_provider)
     if allow_ds_fallback is False:
         fallback = None
     elif allow_ds_fallback is True and fallback is None:
@@ -157,19 +200,31 @@ def analyze_scope(
         print(f'chunk {chunks}: scope {batch_scope}, ids {records[0]["id"]}-{records[-1]["id"]}, messages {len(records)}, model {active_model}')
         if dry_run:
             continue
-        summary = summarize_records_with_fallback(records, primary, fallback)
-        quality = parse_context_quality(summary)
+        target_ids = target_image_message_ids(
+            db_path,
+            scope=batch_scope,
+            start_id=int(records[0]['id']),
+            end_id=int(records[-1]['id']),
+        )
+        for record in records:
+            record['target_image'] = int(record['id']) in target_ids
+        usage: dict[str, int] = {}
+        summary = _summarize_with_usage(records, primary, fallback, usage) if target_ids else 'NO_REUSABLE_IMAGE_CONTEXT'
+        hidden = summary.strip() == 'NO_REUSABLE_IMAGE_CONTEXT'
+        quality = parse_context_quality(summary) if not hidden else None
         store.record_ai_context_batch(
             scope=batch_scope,
             start_message_id=records[0]['id'],
             end_message_id=records[-1]['id'],
             model=active_model,
-            summary=quality.display_summary,
+            summary='' if hidden else quality.display_summary,
             raw_json=json.dumps({
                 'message_count': len(records),
                 'provider': config.ai_context_provider,
                 'users': user_alias_map(records),
-                'quality': {
+                'hidden': hidden,
+                'usage': usage or None,
+                'quality': None if hidden else {
                     'ai_relevant': quality.ai_relevant,
                     'value_level': quality.value_level,
                     'reason': quality.reason,

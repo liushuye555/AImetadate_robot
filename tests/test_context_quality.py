@@ -9,7 +9,7 @@ from qq_onebot_whitelist.context_quality import parse_context_quality
         ('## 概览\n包含 ComfyUI 工作流参数。\n## 内容判定\nAI相关：是\n价值等级：高', 'high', True),
         ('## 概览\n讨论 LoRA。\n- ai_relevant: true\n- value: medium', 'review', True),
         ('## 概览\n普通闲聊。\n```json\n{"ai_relevant": false, "value_level": "low"}\n```', 'low', False),
-        ('## 概览\n提到了模型，但没有判定字段。', 'review', None),
+        ('## 概览\n提到了模型，但没有判定字段。', 'high', None),
     ],
 )
 def test_parse_context_quality_accepts_output_variants(summary, level, relevant):

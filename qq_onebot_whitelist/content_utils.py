@@ -37,10 +37,7 @@ def resource_context(text: str, url: str = '', limit: int = 160) -> str:
 
 
 def fallback_link_description(url: str, purpose: str) -> str:
-    host = urlparse(url).netloc.lower() or '未知站点'
-    if purpose == '核心AI资源':
-        return f'{host} 上的 AI 模型、工作流或相关资料。'
-    return f'{host} 上值得进一步查看的工具或参考资料。'
+    return '群聊未说明用途。'
 
 
 def file_description(file_name: str, kind: str) -> str:

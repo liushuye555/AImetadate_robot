@@ -87,13 +87,19 @@ class LLMConfig:
         return cls(base_url=normalize_base_url(base_url), api_key=api_key, model=model)
 
 
-def summarize_records_with_fallback(records: list[dict[str, Any]], primary: LLMConfig | None, fallback: LLMConfig | None = None) -> str:
+def summarize_records_with_fallback(
+    records: list[dict[str, Any]],
+    primary: LLMConfig | None,
+    fallback: LLMConfig | None = None,
+    *,
+    usage: dict[str, int] | None = None,
+) -> str:
     errors: list[str] = []
     for cfg in [primary, fallback]:
         if not cfg:
             continue
         try:
-            return summarize_records_with_llm(records, cfg)
+            return summarize_records_with_llm(records, cfg, usage=usage)
         except Exception as exc:
             errors.append(f'{cfg.model}: {type(exc).__name__}')
     if errors:
@@ -114,6 +120,9 @@ def filter_relevant_records(records: list[dict[str, Any]]) -> list[dict[str, Any
     for record in records:
         text = str(record.get('text') or '').strip()
         links = record.get('links') or []
+        if record.get('target_image'):
+            filtered.append(record)
+            continue
         if links:
             filtered.append(record)
             continue
@@ -139,10 +148,15 @@ def normalize_summary_output(text: str) -> str:
     return '\n'.join(lines).strip()
 
 
-def summarize_records_with_llm(records: list[dict[str, Any]], config: LLMConfig) -> str:
+def summarize_records_with_llm(
+    records: list[dict[str, Any]],
+    config: LLMConfig,
+    *,
+    usage: dict[str, int] | None = None,
+) -> str:
     relevant = filter_relevant_records(records)
     if not relevant:
-        return '最近没有足够相关的聊天记录可总结。'
+        return 'NO_REUSABLE_IMAGE_CONTEXT'
     content = _format_records(relevant)
     if len(content) > 30000:
         content = content[-30000:]
@@ -152,23 +166,18 @@ def summarize_records_with_llm(records: list[dict[str, Any]], config: LLMConfig)
             {
                 'role': 'system',
                 'content': (
-                    '你是群聊上下文整理助手，目标是让读者快速理解这一批聊天发生了什么，而不是只筛选 AI 绘图内容。'
-                    '剔除纯表情、重复引用、机械应答等噪声，但保留有信息量的生活话题、创作讨论、群务、技术问题和共同结论。'
-                    '如果有 AI 绘图内容，重点整理提示词、模型/LoRA/checkpoint、ComfyUI 工作流/节点、参数、生成经验和图片评价；如果没有，也必须概括主要聊天话题，不能只输出“无有效讨论”。'
-                    '如果出现提示词，请用中文描述它大概率会生成什么画面；如果有链接、文件或图片记录，请提取用途和上下文。'
-                    '使用 Markdown，按实际内容输出：## 本批概览；## 主要话题；## AI/创作知识（没有则省略）；## 链接与文件（没有则省略）；## 结论与待办（没有则省略）。'
-                    '概览必须用2到4句话说明本批最重要的信息。不要输出处理过程、消息数量、过滤说明、客套话、免责声明或“好的，已接收并分析”。'
-                    '禁止复述过滤规则或说明“已对多少条消息进行过滤”。'
-                    '在正文末尾附加“## 内容判定”，用自然文本给出“AI相关：是/否”“价值等级：高/中/低”“判断理由：...”。'
-                    '这不是严格JSON要求；若不确定请标记中等价值，不要为了符合格式编造内容。'
-                    '消息前缀形如“#123 U1 03:21”，#是数据库消息ID，U是用户短别名，请在关键结论里保留这些可追溯标记。'
-                    '如果消息带“引用：”，请把引用内容作为该消息的上下文来理解，尤其用于判断“这个/那张/怎么出/求提示词”指向哪张图或哪段提示词。'
+                    '你只提取可用于复现图片的群聊证据，不要总结聊天主题、群友行为或普通讨论。'
+                    '只保留提示词、负面提示词、模型、LoRA、checkpoint、工作流、节点、采样器、步数、CFG、种子、放大和重绘参数。'
+                    '利用消息编号和引用关系判断参数指向哪张图片；无法可靠关联时不要编造。'
+                    '有证据时使用简短 Markdown，按实际内容列出“提示词”“模型与 LoRA”“工作流与参数”，没有的栏目省略，并保留关键消息编号。'
+                    '没有任何可照抄且可关联图片的信息时，只输出 NO_REUSABLE_IMAGE_CONTEXT。'
+                    '不要输出处理过程、消息数量、过滤说明、客套话、免责声明或内容判定。'
                     '不要编造聊天记录中不存在的信息，不要输出聊天中出现的 API Key、Token、密码等秘密；遇到秘密写成“[已脱敏]”。'
                 ),
             },
             {
                 'role': 'user',
-                'content': f'以下是已初步过滤后的最近 {len(relevant)} 条消息，请继续剔除无关消息并自动总结：\n\n{content}',
+                'content': f'从以下 {len(relevant)} 条消息中提取可复现图片的参数证据：\n\n{content}',
             },
         ],
         'temperature': 0.2,
@@ -188,6 +197,12 @@ def summarize_records_with_llm(records: list[dict[str, Any]], config: LLMConfig)
     except urllib.error.HTTPError as exc:
         body = read_http_error_body(exc)
         raise RuntimeError(f'LLM HTTP {exc.code}: {body}') from exc
+    if usage is not None:
+        response_usage = data.get('usage') or {}
+        for key in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
+            value = response_usage.get(key)
+            if value is not None:
+                usage[key] = int(value)
     return normalize_summary_output(data['choices'][0]['message']['content'])
 
 
@@ -225,7 +240,8 @@ def _format_records(records: list[dict[str, Any]]) -> str:
         time = _time_hhmm(record.get('seen_at'))
         text = redact_secrets(str(record.get('text') or '').strip())
         links = record.get('links') or []
-        line = f'#{msg_id} {alias} {time} {text}'
+        marker = ' [目标图片]' if record.get('target_image') else ''
+        line = f'#{msg_id} {alias} {time}{marker} {text}'
         quoted = str(record.get('quoted_text') or '').strip()
         if quoted:
             line += f'\n  ↳ 引用：{redact_secrets(quoted[:300])}'

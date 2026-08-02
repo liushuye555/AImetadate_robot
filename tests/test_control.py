@@ -107,6 +107,8 @@ def test_report_preview_builds_text(monkeypatch):
 
     class FakeConfig:
         daily_report_enrich_links = True
+        daily_report_include_files = True
+        daily_report_include_links = True
         feature_link_metadata = True
         feature_link_analysis = True
         daily_report_max_links = 20

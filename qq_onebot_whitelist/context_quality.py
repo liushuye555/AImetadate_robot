@@ -65,11 +65,13 @@ def parse_context_quality(summary: str) -> ContextQuality:
     display = re.split(r'(?im)^#{1,6}\s*内容判定\s*$', clean, maxsplit=1)[0].rstrip()
     evidence = has_substantive_ai_evidence(display)
     empty_claim = bool(re.search(r'无有效.*(?:讨论|内容)|无需输出总结|已过滤', display))
+    if level_raw is None and relevant is None and evidence and not empty_claim:
+        parsed_level = 'high'
     if parsed_level == 'high' and (not evidence or empty_claim or relevant is False):
         parsed_level = 'review'
     if parsed_level == 'low' and evidence:
         parsed_level = 'review'
-    if relevant is None or level_raw is None:
+    if (relevant is None or level_raw is None) and parsed_level != 'high':
         parsed_level = 'review'
 
     reason = reason_match.group(1).strip() if reason_match else str(json_fields.get('reason') or '').strip()

@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-URL_RE = re.compile(r'https?://[^\s\]）)>"\'，。；、]+', re.I)
+from .i18n import text as tr
+
+URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+", re.I)
 TRAILING = '.,;:!?)]}）】》。，；：！？'
 
 
@@ -18,9 +20,9 @@ def extract_links(text: str) -> list[str]:
     return links
 
 
-def summarize_records(records: list[dict[str, Any]]) -> str:
+def summarize_records(records: list[dict[str, Any]], language: str = 'zh-CN') -> str:
     if not records:
-        return '最近没有可总结的聊天记录。'
+        return tr('summary_empty', language)
     texts = [str(r.get('text') or '').strip() for r in records if str(r.get('text') or '').strip()]
     links: list[str] = []
     for record in records:
@@ -29,16 +31,17 @@ def summarize_records(records: list[dict[str, Any]]) -> str:
                 links.append(url)
     joined = '\n'.join(texts)
     sentences = [s.strip() for s in re.split(r'[。！？!?\n]+', joined) if s.strip()]
-    lines = [f'最近 {len(records)} 条消息摘要：']
+    lines = [tr('summary_title', language, count=len(records))]
     if sentences:
-        lines.append('要点：')
+        lines.append(tr('summary_points', language))
         for idx, item in enumerate(sentences[:8], 1):
             lines.append(f'{idx}. {item[:140]}')
     keywords = top_terms(joined)
     if keywords:
-        lines.append('关键词：' + '、'.join(keywords[:10]))
+        separator = ', ' if language == 'en-US' else '、'
+        lines.append(tr('summary_keywords', language) + (' ' if language == 'en-US' else '') + separator.join(keywords[:10]))
     if links:
-        lines.append(f'链接：{len(links)} 个')
+        lines.append(tr('summary_links', language, count=len(links)))
         for url in links[:10]:
             lines.append(f'- {url}')
     return '\n'.join(lines)

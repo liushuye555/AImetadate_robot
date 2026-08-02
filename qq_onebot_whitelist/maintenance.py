@@ -8,6 +8,25 @@ from .resource_view import write_resource_pages
 from .store import Store
 
 
+def deduplicate_image_storage(project_dir: str | Path, store: Store) -> int:
+    project_dir = Path(project_dir)
+    archive_root = project_dir / 'data' / 'images' / 'ai'
+    candidate_root = project_dir / 'data' / 'images' / 'candidates'
+    archive = {path.stem: path for path in archive_root.rglob('*') if path.is_file()}
+    candidates = {path.stem: path for path in candidate_root.rglob('*') if path.is_file()}
+    removed = 0
+    for digest, candidate in candidates.items():
+        target = archive.get(digest)
+        if target is None:
+            continue
+        candidate.unlink(missing_ok=True)
+        removed += 1
+    for digest, path in {**candidates, **archive}.items():
+        target = archive.get(digest) or path
+        store.set_image_path_for_sha(digest, target)
+    return removed
+
+
 def prune_empty_dirs(root: str | Path) -> int:
     root = Path(root)
     if not root.exists():
@@ -26,11 +45,12 @@ def prune_empty_dirs(root: str | Path) -> int:
 def sync_image_files(project_dir: str | Path) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
+    image_duplicates_removed = deduplicate_image_storage(project_dir, store)
     missing_cleared = store.clear_missing_image_paths(project_dir)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'missing_cleared': missing_cleared, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

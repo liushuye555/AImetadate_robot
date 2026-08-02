@@ -6,6 +6,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .scope_names import display_scope
 from .content_utils import fallback_link_description, file_description, redact_secrets, resource_context
+from .link_metadata import get_or_fetch_link_metadata
+from .i18n import text as tr
 
 
 LOW_VALUE_DOMAINS = {
@@ -29,6 +31,13 @@ RESOURCE_DOMAINS = {
     'www.123pan.com',
     '123pan.com',
 }
+
+TRACKING_QUERY_KEYS = {
+    'fbclid', 'from', 'gclid', 'igshid', 'mc_cid', 'mc_eid', 'mpshare', 'scene', 'sharer_shareinfo',
+    'sharer_shareinfo_first', 'share_medium', 'share_plat', 'share_session_id', 'share_source',
+    'share_tag', 'spm_id_from', 'srcid', 'trackid', 'uct2', 'vd_source',
+}
+MAX_ENRICHED_LINKS = 8
 
 
 def split_message(text: str, *, max_chars: int = 1800) -> list[str]:
@@ -57,19 +66,19 @@ def format_size(size: int | None) -> str:
 
 
 def dedupe_url_key(url: str) -> str:
-    parsed = urlparse(url.strip())
-    host = parsed.netloc.lower()
-    path = parsed.path.rstrip('/') or parsed.path
-    # For resource collection, query params are usually tracking/session noise.
-    return urlunparse((parsed.scheme.lower() or 'https', host, path, '', '', ''))
+    return canonical_url(url)
 
 
 def canonical_url(url: str) -> str:
     parsed = urlparse(url.strip())
     host = parsed.netloc.lower()
-    query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != 'utm' and not k.lower().startswith('utm_')]
-    path = parsed.path.rstrip('/') or parsed.path
-    return urlunparse((parsed.scheme.lower() or 'https', host, path, '', urlencode(query), ''))
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_QUERY_KEYS and key.lower() != 'utm' and not key.lower().startswith('utm_')
+    ]
+    path = parsed.path if parsed.fragment else (parsed.path.rstrip('/') or parsed.path)
+    return urlunparse((parsed.scheme.lower() or 'https', host, path, '', urlencode(query), parsed.fragment))
 
 
 def is_low_value_link(url: str, context: str = '') -> bool:
@@ -123,10 +132,15 @@ def describe_file(item: dict) -> str:
     return f'[{kind}] {name}（{size}）'
 
 
-def describe_link_context(item: dict) -> str:
+def describe_link_context(item: dict, store=None, *, enrich_links: bool = False, analyze_links: bool = True) -> str:
     url = str(item.get('url') or '')
-    purpose = str(item.get('purpose') or link_purpose(item) or '值得一看')
-    context = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url)
+    purpose = str(item.get('purpose') or (link_purpose(item) if analyze_links else '') or '值得一看')
+    if enrich_links and store:
+        metadata = get_or_fetch_link_metadata(store, url)
+        metadata_text = ' · '.join(str(metadata.get(name) or '').strip() for name in ('title', 'description') if metadata.get(name))
+        if metadata_text:
+            return trim_context(metadata_text, limit=120)
+    context = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url, limit=96)
     return context or fallback_link_description(url, purpose)
 
 
@@ -144,7 +158,20 @@ def group_items(items: list[dict]) -> dict[str, list[dict]]:
     return dict(grouped)
 
 
-def build_daily_resource_report(store, *, limit: int = 300, since: str | None = None, max_per_group: int = 8) -> str | None:
+def build_daily_resource_report(
+    store,
+    *,
+    limit: int = 300,
+    since: str | None = None,
+    max_per_group: int = 8,
+    max_links: int = 20,
+    include_files: bool = True,
+    include_links: bool = True,
+    enrich_links: bool = False,
+    analyze_links: bool = True,
+    max_enriched_links: int = MAX_ENRICHED_LINKS,
+    language: str = 'zh-CN',
+) -> str | None:
     files = store.recent_files(limit=limit, since=since)
     links = store.recent_link_records(limit=limit, since=since)
     group_names = store.group_name_map() if hasattr(store, 'group_name_map') else {}
@@ -160,57 +187,38 @@ def build_daily_resource_report(store, *, limit: int = 300, since: str | None = 
         url = str(item.get('url') or '')
         if not url or is_low_value_link(url, context):
             continue
-        score = link_score(item)
-        if score <= 0:
-            continue
+        score = link_score(item) if analyze_links else 0
         key = dedupe_url_key(url)
         old = deduped_links.get(key)
         if old is None or score > int(old.get('_score') or 0):
             new_item = dict(item)
             new_item['_score'] = score
-            new_item['purpose'] = link_purpose(new_item)
+            new_item['purpose'] = link_purpose(new_item) if analyze_links else ''
             new_item['canonical_url'] = canonical_url(url)
             deduped_links[key] = new_item
 
     selected_files = list(deduped_files.values())
-    selected_links = sorted(deduped_links.values(), key=lambda x: int(x.get('_score') or 0), reverse=True)
-    if not selected_files and not selected_links:
-        return None
+    selected_links = sorted(deduped_links.values(), key=lambda x: int(x.get('_score') or 0), reverse=True)[:max(0, int(max_links))]
+    if (not selected_files or not include_files) and (not selected_links or not include_links):
+        return tr('daily_empty', language)
 
-    scope_count = len({str(x.get('scope')) for x in selected_files + selected_links})
-    highlights = [str(item.get('file_name') or '') for item in selected_files[:2]]
-    highlights += [describe_link_context(item) for item in selected_links[:2]]
-    highlights = [redact_secrets(x) for x in highlights if x]
-    lines = [
-        'AI 资源增量精选',
-        f'简介：新增 {len(selected_files)} 个文件/工作流、{len(selected_links)} 条高价值链接，来自 {scope_count} 个群。'
-        + (f' 重点包括：{"；".join(highlights)}' if highlights else ''),
-    ]
-    if since:
-        lines.append(f'范围：上次日报后（since {since}）')
-    for scope in sorted(set([str(x.get('scope')) for x in selected_files + selected_links])):
-        scope_files = group_items(selected_files).get(scope, [])[:max_per_group]
-        scope_links = group_items(selected_links).get(scope, [])[:max_per_group]
-        if not scope_files and not scope_links:
-            continue
-        lines.append(f'\n【{display_scope(scope, group_names)}】')
-        if scope_files:
-            lines.append('文件/工作流：')
-            for item in scope_files:
-                context = resource_context(str(item.get('message_text') or ''))
-                description = context or file_description(str(item.get('file_name') or ''), str(item.get('kind') or 'file'))
-                lines.append(f'- {describe_file(item)}：{description}')
-        if scope_links:
-            lines.append('重要链接：')
-            for item in scope_links:
-                purpose = item.get('purpose') or link_purpose(item) or '值得一看'
-                lines.append(f'- {item.get("canonical_url") or item.get("url")}（用途：{purpose}；简介：{describe_link_context(item)}）')
+    lines = [tr('daily_title', language)]
+    if selected_files and include_files:
+        lines.append(tr('daily_files', language))
+        for item in selected_files:
+            group = display_scope(str(item.get('scope') or 'unknown'), group_names)
+            lines.append(f'- {item.get("file_name") or tr("daily_unnamed", language)} · {group}')
+    if selected_links and include_links:
+        lines.append(tr('daily_links', language))
+        for index, item in enumerate(selected_links):
+            should_enrich = enrich_links and index < max(0, int(max_enriched_links))
+            lines.append(f'- {item.get("canonical_url") or item.get("url")} · {describe_link_context(item, store, enrich_links=should_enrich, analyze_links=analyze_links)}')
     return redact_secrets('\n'.join(lines))
 
 
-def should_run_daily_report(*, hour: int, already_sent: bool) -> bool:
-    # Delivery window: 20:00 <= now < 21:00. Caller checks periodically.
-    return 20 <= hour < 21 and not already_sent
+def should_run_daily_report(*, hour: int, already_sent: bool, target_hour: int = 20) -> bool:
+    # Caller checks periodically; target_hour keeps the historical 20:00 default.
+    return int(hour) == int(target_hour) and not already_sent
 
 
 def today_key(now: datetime | None = None) -> str:

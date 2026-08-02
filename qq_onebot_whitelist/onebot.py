@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import websockets
@@ -21,6 +22,71 @@ from .policy import extract_text, should_reply
 from .resources import extract_file_segments, extract_resource_links
 from .schedule import is_in_time_windows
 from .store import Store
+
+
+_echo_state: dict[tuple[str, str], list[float]] = {}
+
+
+def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
+    """多人重复同一条消息时返回要复读的文本；未触发返回 None。"""
+    if not config.echo_enabled or event.get('post_type') != 'message' or event.get('message_type') != 'group':
+        return None
+    group = str(event.get('group_id') or '')
+    if not group:
+        return None
+    if config.echo_groups and group not in config.echo_groups:
+        return None
+    text = extract_text(event).strip()
+    if not text or len(text) > 100:
+        return None
+    now = time.time()
+    key = (group, text)
+    stamps = _echo_state.setdefault(key, [])
+    stamps.append(now)
+    cutoff = now - max(1, config.echo_window_seconds)
+    _echo_state[key] = [item for item in stamps if item >= cutoff]
+    if len(_echo_state[key]) >= max(2, config.echo_min_repeat):
+        _echo_state.pop(key, None)
+        return text
+    return None
+
+
+def collection_allows(scope: str, kind: str, config: AppConfig) -> bool:
+    """群级采集开关：未配置的群默认采集全部类型。"""
+    profile = config.collection_groups.get(scope)
+    if profile is None:
+        return True
+    return bool(profile.get(kind, True))
+
+
+def system_cpu_percent() -> float:
+    """通过 GetSystemTimes 采样 CPU 占用（0~100），失败时返回 0。"""
+    try:
+        import ctypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+
+        def sample():
+            idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
+            ctypes.windll.kernel32.GetSystemTimes(
+                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
+            )
+            return idle, kernel, user
+
+        def to64(ft: FILETIME) -> int:
+            return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+
+        idle1, kernel1, user1 = sample()
+        time.sleep(0.4)
+        idle2, kernel2, user2 = sample()
+        idle = to64(idle2) - to64(idle1)
+        total = (to64(kernel2) - to64(kernel1)) + (to64(user2) - to64(user1))
+        if total <= 0:
+            return 0.0
+        return max(0.0, min(100.0, 100.0 * (1.0 - idle / total)))
+    except Exception:
+        return 0.0
 
 
 async def call_action(ws, action: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -50,7 +116,7 @@ async def startup_history_groups(ws, config: AppConfig) -> list[str]:
 
 
 async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
-    if not config.startup_history_enabled:
+    if not config.startup_history_enabled or not config.feature_startup_history:
         return
     groups = await startup_history_groups(ws, config)
     if not groups:
@@ -63,6 +129,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
         seen: set[str] = set()
         newest_seen: str | None = None
         oldest_seen: str | None = None
+        reached_known = False
         page_limit = config.startup_history_max_pages if config.startup_history_all else config.startup_history_pages
         for page in range(max(1, page_limit)):
             params = {
@@ -79,6 +146,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
             for msg in messages:
                 msg_seq = str(msg.get('message_seq') or msg.get('message_id') or '')
                 if known_newest and not config.startup_history_all and msg_seq == known_newest:
+                    reached_known = True
                     break
                 if msg_seq and msg_seq in seen:
                     continue
@@ -91,7 +159,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
                     total += 1
             if next_seq:
                 oldest_seen = str(next_seq)
-            if not next_seq or next_seq == seq:
+            if reached_known or not next_seq or next_seq == seq:
                 break
             seq = next_seq
         if newest_seen or oldest_seen:
@@ -114,6 +182,23 @@ async def send_reply(ws, event: dict[str, Any], text: str) -> None:
 
 async def send_private(ws, user_id: str, text: str) -> None:
     await ws.send(json.dumps({'action': 'send_private_msg', 'params': {'user_id': user_id, 'message': text}}, ensure_ascii=False))
+
+
+async def send_keepalive(ws, config: AppConfig) -> None:
+    if not config.keepalive_enabled or config.keepalive_interval_minutes <= 0 or not config.keepalive_message.strip():
+        return
+    for group_id in sorted(config.keepalive_groups):
+        await ws.send(json.dumps({'action': 'send_group_msg', 'params': {'group_id': int(group_id), 'message': config.keepalive_message}}, ensure_ascii=False))
+
+
+async def keepalive_loop(ws, config: AppConfig) -> None:
+    while True:
+        try:
+            await send_keepalive(ws, config)
+        except Exception as exc:
+            print(f'keepalive_loop failed: {type(exc).__name__}: {exc}')
+        await asyncio.sleep(max(1, config.keepalive_interval_minutes) * 60)
+
 
 async def status_writer_loop(ws, config: AppConfig) -> None:
     from . import control
@@ -154,27 +239,51 @@ def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) 
         for scope in scopes
     )
     allowed = is_in_time_windows(now, current.ai_context_allowed_windows)
-    return pending >= current.ai_context_min_new_messages and allowed, pending, current
+    enabled = current.ai_context_enabled and current.feature_ai_context
+    return enabled and pending >= current.ai_context_min_new_messages and allowed, pending, current
+
+
+def ai_retry_delay_seconds(failures: int) -> int:
+    return min(3600, 900 * (2 ** max(0, int(failures) - 1)))
 
 
 async def ai_context_loop(config_path: str | Path, store: Store) -> None:
     running = False
     current = None
+    failure_count = 0
+    retry_after: datetime | None = None
     while True:
         try:
+            now = datetime.now()
+            if retry_after and now < retry_after:
+                await asyncio.sleep(max(1, int((retry_after - now).total_seconds())))
+                continue
             should_run, pending, current = should_run_ai_context(config_path, store, datetime.now())
             if should_run and not running:
+                if current.load_aware_enabled:
+                    cpu = await asyncio.to_thread(system_cpu_percent)
+                    if cpu >= current.load_aware_cpu_threshold:
+                        delay = max(1, current.load_aware_check_seconds)
+                        print(f'load_aware: CPU {cpu:.0f}% >= {current.load_aware_cpu_threshold}%，推迟 AI 分析 {delay}s')
+                        retry_after = datetime.now() + timedelta(seconds=delay)
+                        await asyncio.sleep(5)
+                        continue
                 running = True
                 try:
                     print(f'ai_context auto run starting, pending messages={pending}')
                     await asyncio.to_thread(analyze_configured, str(config_path))
                     print('ai_context auto run finished')
+                    failure_count = 0
+                    retry_after = None
                 finally:
                     running = False
             elif pending >= current.ai_context_min_new_messages:
                 print(f'ai_context waiting for allowed window, pending messages={pending}, windows={current.ai_context_allowed_windows}')
         except Exception as exc:
-            print(f'ai_context_loop failed: {type(exc).__name__}: {exc}')
+            failure_count += 1
+            delay = ai_retry_delay_seconds(failure_count)
+            retry_after = datetime.now() + timedelta(seconds=delay)
+            print(f'ai_context_loop failed: {type(exc).__name__}: {exc}; retry_in={delay}s')
         await asyncio.sleep(max(1, current.ai_context_auto_interval_minutes if current else 1) * 60)
 
 
@@ -183,14 +292,23 @@ async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
         now = datetime.now()
         key = today_key(now)
         try:
-            if should_run_daily_report(hour=now.hour, already_sent=store.has_daily_report(key)):
+            if config.daily_report_enabled and config.feature_daily_report and should_run_daily_report(hour=now.hour, target_hour=config.daily_report_hour, already_sent=store.has_daily_report(key)):
                 since = store.last_daily_report_sent_at()
-                content = build_daily_resource_report(store, since=since)
+                content = await asyncio.to_thread(
+                    build_daily_resource_report, store, since=since,
+                    include_files=config.daily_report_include_files,
+                    include_links=config.daily_report_include_links,
+                    enrich_links=config.daily_report_enrich_links and config.feature_link_metadata,
+                    analyze_links=config.feature_link_analysis,
+                    max_links=config.daily_report_max_links,
+                    max_enriched_links=config.daily_report_max_enriched_links,
+                    language=config.language,
+                )
                 if content:
                     chunks = split_message(content, max_chars=1800)
                     for user_id in sorted(config.bot.whitelist_users):
                         for idx, chunk in enumerate(chunks, 1):
-                            prefix = f'资源日报 {idx}/{len(chunks)}\n' if len(chunks) > 1 else ''
+                            prefix = (f'{"资源日报" if config.language == "zh-CN" else "Daily resource report"} {idx}/{len(chunks)}\n' if len(chunks) > 1 else '')
                             await send_private(ws, user_id, prefix + chunk)
                     print(f'daily_report sent to {sorted(config.bot.whitelist_users)} chunks={len(chunks)} chars={len(content)}')
                     store.mark_daily_report_sent(key, content)
@@ -221,26 +339,33 @@ def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None
     scope = scope_for_event(event)
     user_id = str(event.get('user_id') or '')
     text = extract_text(event)
+    if event.get('message_type') == 'forward' or 'forward' in json.dumps(event, ensure_ascii=False):
+        if not collection_allows(scope, 'forwards', config):
+            return
     links = store.record_message(
         scope=scope,
         user_id=user_id,
         text=text,
         raw=event,
+        collect_links=collection_allows(scope, 'links', config),
     )
     message_db_id = store.message_row_id(scope, event)
-    for file_item in extract_file_segments(event):
-        if file_item.get('kind') in {'model', 'archive', 'workflow'}:
-            store.record_file(
-                scope=scope,
-                user_id=user_id,
-                file_name=file_item['file_name'],
-                file_size=file_item.get('file_size'),
-                url=file_item.get('url'),
-                kind=file_item.get('kind') or 'other',
-                raw={'file': file_item, 'message_text': text},
-            )
+    if collection_allows(scope, 'files', config):
+        for file_item in extract_file_segments(event):
+            if file_item.get('kind') in {'model', 'archive', 'workflow'}:
+                store.record_file(
+                    scope=scope,
+                    user_id=user_id,
+                    file_name=file_item['file_name'],
+                    file_size=file_item.get('file_size'),
+                    url=file_item.get('url'),
+                    kind=file_item.get('kind') or 'other',
+                    raw={'file': file_item, 'message_text': text},
+                )
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
     promote_recent_candidate_if_needed(store, scope, text, config)
+    if not config.feature_image_processing or not collection_allows(scope, 'images', config):
+        return
     for image in extract_image_segments(event):
         try:
             result = process_image_url(
@@ -278,6 +403,10 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         return False
     if is_blocked_event(event, config):
         return False
+    echo_text = echo_reply_text(event, config)
+    if echo_text is not None:
+        await send_reply(ws, event, echo_text)
+        return True
     record_event(store, event, config)
     if not should_reply(event, config.bot):
         return False
@@ -288,6 +417,7 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         max_summary_limit=config.max_summary_limit,
         view_builder=lambda: sync_image_files(Path.cwd()),
         config_path=config_path,
+        language=config.language,
     )
     await send_reply(ws, event, reply)
     return True
@@ -315,6 +445,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
         report_task = asyncio.create_task(daily_report_loop(ws, config, store))
         ai_task = asyncio.create_task(ai_context_loop(config_path, store))
+        keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
         status_task = asyncio.create_task(status_writer_loop(ws, config))
         try:
             async for raw in ws:
@@ -330,6 +461,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             startup_task.cancel()
             report_task.cancel()
             ai_task.cancel()
+            keepalive_task.cancel()
             status_task.cancel()
             from . import control
             control.write_status(

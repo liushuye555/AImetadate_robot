@@ -18,4 +18,5 @@ ai_context:
     assert cfg.ai_context_provider == 'ds_v4_flash'
     assert cfg.ai_context_scopes == 'all_groups'
     assert cfg.ai_context_chunk_size == 200
+    assert cfg.feature_ai_context is True
     assert cfg.blocked_groups == {'100000001'}
