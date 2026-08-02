@@ -62,11 +62,15 @@ int main(int argc, char *argv[]) {
     // 机器人每 30 秒写一次状态；过期阈值取 90 秒，避免两次写入之间误显示“未知”
     statusMonitor->setStaleSeconds(90);
     auto *serviceControl = new ServiceControl(&window);
+    auto *collectionControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
     auto *autoRestart = new AutoRestart(serviceControl, &window);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
     QObject::connect(serviceControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
         if (!ok) overview->setHint("操作失败：" + out.trimmed());
+    });
+    QObject::connect(collectionControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
+        if (!ok) overview->setHint("切换采集失败：" + out.trimmed());
     });
 
     const auto runControl = [serviceControl](const QStringList &args) {
@@ -109,9 +113,9 @@ int main(int argc, char *argv[]) {
         } else if (action == "history") {
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
         } else if (action == "collection-toggle") {
-            // 以按钮当前勾选状态为准（勾选=暂停），不依赖可能滞后 30 秒的状态文件
-            runControl({"-m", "qq_onebot_whitelist.control", "collection",
-                        overview->collectionChecked() ? "off" : "on"});
+            // 用独立控制通道，避免被“启动”等长任务占用而丢弃命令
+            collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",
+                                    overview->collectionChecked() ? "off" : "on"});
         }
     });
 

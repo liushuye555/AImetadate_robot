@@ -77,7 +77,10 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     connect(config, &QPushButton::clicked, this, [this] { emit actionRequested("config"); });
     connect(history, &QPushButton::clicked, this, [this] { emit actionRequested("history"); });
     connect(napcat, &QPushButton::clicked, this, [this] { emit actionRequested("napcat-webui"); });
-    connect(m_collection, &QPushButton::clicked, this, [this] { emit actionRequested("collection-toggle"); });
+    connect(m_collection, &QPushButton::clicked, this, [this] {
+        setCollectionPaused(m_collection->isChecked());  // 点击后立即更新按钮显示
+        emit actionRequested("collection-toggle");
+    });
 }
 
 void OverviewPage::setStatus(const StatusSnapshot &s) {
