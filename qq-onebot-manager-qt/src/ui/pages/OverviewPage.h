@@ -14,6 +14,7 @@ public:
     void setStats(const QString &text);
     void setHint(const QString &text);
     void setAutoRestartText(const QString &text);
+    void setCollectionPaused(bool paused);
 signals:
     void actionRequested(const QString &action); // start/stop/restart/refresh/logs/reports/config/history
 private:
@@ -24,4 +25,6 @@ private:
     QLabel *m_hint = nullptr;
     QLabel *m_autoRestart = nullptr;
     QLabel *m_stats = nullptr;
+    QPushButton *m_collection = nullptr;
+    bool m_collectionPaused = false;
 };

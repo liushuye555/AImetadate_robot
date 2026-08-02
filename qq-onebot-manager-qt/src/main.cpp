@@ -102,6 +102,11 @@ int main(int argc, char *argv[]) {
             runControl({"-m", "qq_onebot_whitelist.control", "stop"});
         } else if (action == "history") {
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
+        } else if (action == "collection-toggle") {
+            const bool paused = statusMonitor->snapshot().collectionPaused;
+            overview->setCollectionPaused(!paused);
+            runControl({"-m", "qq_onebot_whitelist.control", "collection", paused ? "on" : "off"});
+            statusMonitor->refresh();
         }
     });
 

@@ -63,6 +63,8 @@ QString Strings::zh(const QString &key) {
     if (key == "staleHint") return "状态未知：机器人未运行或状态文件过期。请先在 NapCat WebUI 登录 QQ，再点击“启动”。";
     if (key == "scanGroups") return "扫描已加入的群";
     if (key == "webui") return "NapCat WebUI";
+    if (key == "collectionOn") return "采集：采集中";
+    if (key == "collectionOff") return "采集：已暂停";
     return key;
 }
 
@@ -125,6 +127,8 @@ QString Strings::en(const QString &key) {
     if (key == "staleHint") return "Status unknown: bot is not running or status is stale. Log in via NapCat WebUI, then click Start.";
     if (key == "scanGroups") return "Scan joined groups";
     if (key == "webui") return "NapCat WebUI";
+    if (key == "collectionOn") return "Collect: on";
+    if (key == "collectionOff") return "Collect: paused";
     return key;
 }
 

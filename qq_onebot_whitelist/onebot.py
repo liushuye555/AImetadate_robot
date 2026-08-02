@@ -10,7 +10,7 @@ from typing import Any
 import websockets
 
 from .archive_budget import enforce_archive_budget
-from .collection import collect_event, collection_allows, is_forward_event
+from .collection import collect_event, collection_allows, is_collection_paused, is_forward_event
 from .commands import build_reply, scope_for_event
 from .config import AppConfig, load_config
 from .ai_context_analyze import analyze_configured, configured_scopes
@@ -225,6 +225,7 @@ async def status_writer_loop(ws, config: AppConfig) -> None:
                     "napcat": control.port_open(control.NAPCAT_PORT),
                     "onebot": True,
                     "bot": True,
+                    "collectionPaused": is_collection_paused(),
                     **login,
                 }
             )

@@ -14,6 +14,7 @@ StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int
     s.onebot = obj.value("onebot").toBool(false);
     s.bot = obj.value("bot").toBool(false);
     s.qqLoggedIn = obj.value("qqLoggedIn").toBool(false);
+    s.collectionPaused = obj.value("collectionPaused").toBool(false);
     s.qqNumber = obj.value("qqNumber").toString();
     s.qqNickname = obj.value("qqNickname").toString();
     s.valid = true;

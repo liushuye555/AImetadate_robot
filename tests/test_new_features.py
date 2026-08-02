@@ -101,3 +101,37 @@ def test_load_config_tolerates_empty_max_chunks(tmp_path):
     path.write_text("ai_context:\n  max_chunks: ''\n", encoding="utf-8")
     config = load_config(path)
     assert config.ai_context_max_chunks is None
+
+
+def test_collection_pause_marker(monkeypatch, tmp_path):
+    from qq_onebot_whitelist import collection
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+    assert collection.is_collection_paused() is False
+    marker.write_text("1", encoding="ascii")
+    assert collection.is_collection_paused() is True
+
+
+def test_collect_event_skips_when_paused(monkeypatch, tmp_path):
+    from qq_onebot_whitelist import collection
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+    marker.write_text("1", encoding="ascii")
+
+    class FakeStore:
+        def record_message(self, **kwargs):
+            raise AssertionError("暂停时不应采集")
+
+    event = text_event("1", "hi")
+    collection.collect_event(FakeStore(), event, AppConfig())  # 不抛异常即通过
+
+
+def test_cmd_collection_toggles(monkeypatch, tmp_path):
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(control, "PAUSE_MARKER", marker)
+    args = type("Args", (), {"state": "off"})()
+    assert control.cmd_collection(args) == 0
+    assert control.collection_paused() is True
+    args.state = "on"
+    assert control.cmd_collection(args) == 0
+    assert control.collection_paused() is False

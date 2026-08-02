@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = REPO_ROOT / "run"
 STATUS_PATH = RUN_DIR / "status.json"
+PAUSE_MARKER = RUN_DIR / "collection-paused"
 NAPCAT_PORT = 6099
 ONEBOT_PORT = 3001
 
@@ -238,6 +239,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def collection_paused() -> bool:
+    return PAUSE_MARKER.exists()
+
+
+def cmd_collection(args: argparse.Namespace) -> int:
+    if args.state == "off":
+        PAUSE_MARKER.write_text("1", encoding="ascii")
+    else:
+        PAUSE_MARKER.unlink(missing_ok=True)
+    print(json.dumps({"paused": collection_paused()}, ensure_ascii=False))
+    return 0
+
+
 async def _fetch_groups_once() -> list[dict[str, str]]:
     import websockets
     from .config import load_config
@@ -274,6 +288,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="print run/status.json")
+    collection_parser = sub.add_parser("collection", help="pause/resume collection")
+    collection_parser.add_argument("state", choices=("on", "off"))
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -295,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "status": cmd_status,
+        "collection": cmd_collection,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,

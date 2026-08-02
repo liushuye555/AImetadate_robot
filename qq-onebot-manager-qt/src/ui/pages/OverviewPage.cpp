@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 #include <QPushButton>
 #include <QLabel>
+#include <QStyle>
 
 OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
@@ -54,10 +55,12 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     auto *config = new QPushButton(Strings::zh("openConfig"), this);
     auto *history = new QPushButton(Strings::zh("importHistory"), this);
     auto *napcat = new QPushButton(Strings::zh("openNapcat"), this);
+    m_collection = new QPushButton(Strings::zh("collectionOn"), this);
+    m_collection->setCheckable(true);
     for (QPushButton *b : {start, stop, restart, refresh})
         row1->addWidget(b);
     row1->addStretch();
-    for (QPushButton *b : {logs, reports, config, history, napcat})
+    for (QPushButton *b : {logs, reports, config, history, napcat, m_collection})
         row2->addWidget(b);
     row2->addStretch();
     buttons->addLayout(row1);
@@ -74,6 +77,7 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     connect(config, &QPushButton::clicked, this, [this] { emit actionRequested("config"); });
     connect(history, &QPushButton::clicked, this, [this] { emit actionRequested("history"); });
     connect(napcat, &QPushButton::clicked, this, [this] { emit actionRequested("napcat-webui"); });
+    connect(m_collection, &QPushButton::clicked, this, [this] { emit actionRequested("collection-toggle"); });
 }
 
 void OverviewPage::setStatus(const StatusSnapshot &s) {
@@ -86,6 +90,7 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
         return;
     }
     m_hint->clear();
+    setCollectionPaused(s.collectionPaused);
     m_napcat->setValue(s.napcat ? Strings::zh("running") : Strings::zh("stopped"), s.napcat);
     m_onebot->setValue(s.onebot ? Strings::zh("running") : Strings::zh("stopped"), s.onebot);
     m_bot->setValue(s.bot ? Strings::zh("running") : Strings::zh("stopped"), s.bot);
@@ -98,3 +103,12 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
 void OverviewPage::setStats(const QString &text) { m_stats->setText(text); }
 void OverviewPage::setHint(const QString &text) { m_hint->setText(text); }
 void OverviewPage::setAutoRestartText(const QString &text) { m_autoRestart->setText(text); }
+void OverviewPage::setCollectionPaused(bool paused) {
+    m_collectionPaused = paused;
+    if (!m_collection) return;
+    m_collection->setChecked(paused);
+    m_collection->setText(paused ? Strings::zh("collectionOff") : Strings::zh("collectionOn"));
+    m_collection->setProperty("class", paused ? "danger" : "primary");
+    m_collection->style()->unpolish(m_collection);
+    m_collection->style()->polish(m_collection);
+}

@@ -10,6 +10,7 @@ struct StatusSnapshot {
     bool onebot = false;
     bool bot = false;
     bool qqLoggedIn = false;
+    bool collectionPaused = false;
     QString qqNumber;
     QString qqNickname;
     QDateTime updatedAt;

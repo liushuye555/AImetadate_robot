@@ -15,6 +15,9 @@ from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 
 
+PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
+
+
 COLLECTION_KINDS = ("images", "links", "files", "forwards")
 
 
@@ -29,6 +32,11 @@ def collection_allows(scope: str, kind: str, config: AppConfig) -> bool:
 def is_forward_event(event: dict[str, Any]) -> bool:
     """判断消息是否为转发消息（OneBot 转发段或转发类型）。"""
     return event.get("message_type") == "forward" or "forward" in json.dumps(event, ensure_ascii=False)
+
+
+def is_collection_paused() -> bool:
+    """运行时采集总开关（run/collection-paused 标记），无需重启机器人。"""
+    return PAUSE_MARKER.exists()
 
 
 def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig) -> None:
@@ -50,6 +58,8 @@ def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, con
 def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> None:
     """按群采集策略记录一条消息及其中的链接、文件与图片。"""
     if event.get('post_type') != 'message':
+        return
+    if is_collection_paused():
         return
     scope = scope_for_event(event)
     user_id = str(event.get('user_id') or '')
