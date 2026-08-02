@@ -30,13 +30,20 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         item.update(extra)
         return item
 
+    configured_providers = {
+        str(key): {str(k): str(v) for k, v in (value or {}).items()}
+        for key, value in (ai.get('providers') or {}).items()
+        if isinstance(value, dict)
+    }
+    merged_providers = {**_env_providers(), **configured_providers}
+
     return [
         field('onebot.ws_url', 'text', data.get('onebot', {}).get('ws_url', 'ws://127.0.0.1:3001'), 'OneBot WebSocket', 'OneBot WebSocket', section='runtime'),
         field('summary.default_limit', 'number', data.get('summary', {}).get('default_limit', 100), 'Default summary limit', '默认总结条数', section='bot'),
         field('summary.max_limit', 'number', data.get('summary', {}).get('max_limit', 500), 'Maximum summary limit', '最大总结条数', section='bot'),
         field('ai_context.enabled', 'bool', data.get('ai_context', {}).get('enabled', True), 'AI context enabled', '启用 AI 上下文', section='ai'),
         field('ai_context.provider', 'select', data.get('ai_context', {}).get('provider', 'ds_v4_flash'), 'AI provider', 'AI 提供商', section='ai', options=sorted(set(['ds_v4_flash', 'openai_compatible', *((data.get('ai_context', {}).get('providers') or {}).keys())]))),
-        field('ai_context.providers', 'provider-list', data.get('ai_context', {}).get('providers', {}), 'AI providers', 'AI 供应商', section='ai'),
+        field('ai_context.providers', 'provider-list', merged_providers, 'AI providers', 'AI 供应商', section='ai'),
         field('ai_context.scopes', 'select', ai.get('scopes', 'all_groups'), 'AI analysis scope', 'AI 分析范围', section='ai', options=['all_groups', 'whitelist_groups']),
         field('ai_context.chunk_size', 'number', ai.get('chunk_size', 200), 'Messages per AI batch', '每批 AI 消息数', section='ai', min=20, max=2000),
         field('ai_context.auto_interval_minutes', 'number', ai.get('auto_interval_minutes', 15), 'Auto analysis interval (minutes)', '自动分析间隔（分钟）', section='ai', min=1, max=1440),
@@ -114,13 +121,38 @@ def _load_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     values: dict[str, str] = {}
-    for line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
+    for raw in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('set '):
+            line = line[4:].strip().strip('"')
+        if '=' not in line:
             continue
         key, value = line.split('=', 1)
         values[key.strip()] = value.strip().strip('"')
     return values
+
+
+_ENV_PROVIDER_PREFIXES = ('DS_V4_FLASH', 'HUANYAN', 'OPENROUTER', 'SUMMARY_LLM', 'OPENAI')
+
+
+def _env_providers() -> dict[str, dict[str, str]]:
+    """从 .env 发现已配置的 AI 供应商（密钥留在 .env，面板只读元信息）。"""
+    values = _load_env(Path('.env'))
+    providers: dict[str, dict[str, str]] = {}
+    for prefix in _ENV_PROVIDER_PREFIXES:
+        base_url = values.get(f'{prefix}_BASE_URL') or ''
+        model = values.get(f'{prefix}_MODEL') or ''
+        api_key = values.get(f'{prefix}_API_KEY') or ''
+        if base_url or model or api_key:
+            providers[prefix.lower()] = {
+                'base_url': base_url,
+                'model': model,
+                'api_key_env': f'{prefix}_API_KEY',
+                'timeout_seconds': 60,
+            }
+    return providers
 
 
 def patch_config(path: Path, patch: dict[str, Any]) -> dict[str, Any]:

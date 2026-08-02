@@ -265,6 +265,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         } else if (kind == "list") {
             auto *edit = new QPlainTextEdit(this);
             edit->setMaximumHeight(110);
+            edit->setPlaceholderText(Strings::zh("listPlaceholder"));
             const QJsonArray values = obj.value("default").toArray();
             QStringList lines;
             for (const QJsonValue &v : values) lines << v.toString();
@@ -274,6 +275,8 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         } else {
             auto *edit = new QLineEdit(this);
             if (kind == "secret") edit->setEchoMode(QLineEdit::Password);
+            if (obj.value("default").isNull())
+                edit->setPlaceholderText(Strings::zh("optionalPlaceholder"));
             edit->setText(obj.value("default").toString());
             edit->setProperty("min", obj.value("min").toInt());
             edit->setProperty("max", obj.value("max").toInt());

@@ -57,6 +57,8 @@ QString Strings::zh(const QString &key) {
     if (key == "collectLinks") return "采集链接";
     if (key == "collectFiles") return "采集文件";
     if (key == "collectForwards") return "采集转发消息";
+    if (key == "listPlaceholder") return "每行一个";
+    if (key == "optionalPlaceholder") return "留空=不限";
     return key;
 }
 
@@ -113,6 +115,8 @@ QString Strings::en(const QString &key) {
     if (key == "collectLinks") return "Collect links";
     if (key == "collectFiles") return "Collect files";
     if (key == "collectForwards") return "Collect forwarded messages";
+    if (key == "listPlaceholder") return "One per line";
+    if (key == "optionalPlaceholder") return "Leave empty = unlimited";
     return key;
 }
 
