@@ -68,6 +68,67 @@ def test_cmd_view_list_prints_categories(tmp_path, monkeypatch, capsys):
     assert "01_AI元数据" in out and '"count": 1' in out
 
 
+def test_cleanup_expired_candidates(tmp_path):
+    import sqlite3
+    from datetime import datetime, timedelta
+    from qq_onebot_whitelist.maintenance import cleanup_expired_candidates
+    from qq_onebot_whitelist.store import Store
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    store = Store(db_dir / "bot.db")
+
+    old_path = tmp_path / "old.png"
+    old_path.write_bytes(b"x")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "old1", "format": "PNG", "size": 1, "width": 10, "height": 10,
+        "kept_path": str(old_path), "retention_reason": "candidate",
+    }, raw={})
+    conn = sqlite3.connect(db_dir / "bot.db")
+    conn.execute(
+        "UPDATE images SET seen_at=? WHERE sha256='old1'",
+        (datetime.now() - timedelta(hours=48)).isoformat(),
+    )
+    conn.commit()
+    conn.close()
+
+    new_path = tmp_path / "new.png"
+    new_path.write_bytes(b"y")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "new1", "format": "PNG", "size": 1, "width": 10, "height": 10,
+        "kept_path": str(new_path), "retention_reason": "candidate",
+    }, raw={})
+
+    removed = cleanup_expired_candidates(tmp_path, ttl_hours=24)
+    assert removed >= 1
+    assert not old_path.exists()
+    assert new_path.exists()
+    conn = sqlite3.connect(db_dir / "bot.db")
+    assert conn.execute("SELECT COUNT(*) FROM images WHERE sha256='old1'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM images WHERE sha256='new1'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_remove_sticker_records(tmp_path):
+    import sqlite3
+    from qq_onebot_whitelist.maintenance import remove_sticker_records
+    from qq_onebot_whitelist.store import Store
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    store = Store(db_dir / "bot.db")
+    path = tmp_path / "sticker.png"
+    path.write_bytes(b"x")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "s1", "format": "GIF", "size": 1, "width": 10, "height": 10,
+        "kept_path": str(path), "retention_reason": "sticker_filtered",
+    }, raw={})
+    removed = remove_sticker_records(tmp_path)
+    assert removed == 1
+    assert not path.exists()
+    conn = sqlite3.connect(db_dir / "bot.db")
+    assert conn.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
+    conn.close()
+
+
 def test_collection_allows_defaults_true():
     config = AppConfig()
     assert onebot.collection_allows("123", "images", config) is True

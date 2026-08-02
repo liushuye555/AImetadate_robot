@@ -476,7 +476,7 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
     try:
         async with websockets.connect(config.onebot_ws_url) as action_ws:
             await startup_history_catchup(action_ws, config, store)
-        counts = sync_image_files(Path.cwd())
+        counts = sync_image_files(Path.cwd(), ttl_hours=config.candidate_ttl_hours)
         print('image view refreshed after startup catch-up: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
     except Exception as exc:
         print(f'startup history catch-up failed: {type(exc).__name__}: {exc}')
@@ -486,7 +486,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
     try:
-        counts = sync_image_files(Path.cwd())
+        counts = sync_image_files(Path.cwd(), ttl_hours=config.candidate_ttl_hours)
         print('image view refreshed on startup: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
     except Exception as exc:
         print(f'image view refresh failed on startup: {type(exc).__name__}: {exc}')

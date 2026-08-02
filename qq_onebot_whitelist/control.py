@@ -300,12 +300,14 @@ def cmd_custom(args: argparse.Namespace) -> int:
 
 
 def cmd_view(args: argparse.Namespace) -> int:
-    """重新生成 data/view 报告视图，并输出分类列表。"""
+    """重新生成报告视图（含资源/文件页），并输出分类列表。"""
     try:
-        from .build_image_view import build_view
-        counts = build_view(REPO_ROOT)
+        from .maintenance import sync_image_files
+        counts = sync_image_files(REPO_ROOT)
         categories = []
         for name, count in sorted(counts.items()):
+            if name.startswith(('image_', 'missing_', 'candidates_', 'empty_', 'resource_')):
+                continue
             categories.append({"name": name, "count": count, "url": name + "/index.html"})
         print(json.dumps({"categories": categories}, ensure_ascii=False))
         return 0

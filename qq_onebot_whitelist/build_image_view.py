@@ -224,6 +224,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
             write_category_gallery(cat_dir)
         except Exception as exc:
             print(f'gallery generation failed for {cat_dir.name}: {type(exc).__name__}: {exc}')
+    # 资源/文件页（build_view 会清空视图目录，必须一并重建）
+    try:
+        from .resource_view import write_resource_pages
+        from .store import Store
+        resource_counts = write_resource_pages(view, Store(project_dir / 'data' / 'bot.db'))
+        counts.update(resource_counts)
+    except Exception as exc:
+        print(f'resource pages failed: {type(exc).__name__}: {exc}')
     readme = view / 'README.txt'
     readme.write_text(
         '这是图片分类视图，按数据库筛选结果生成。\n'

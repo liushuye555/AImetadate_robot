@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .build_image_view import build_view
@@ -42,15 +44,84 @@ def prune_empty_dirs(root: str | Path) -> int:
     return removed
 
 
-def sync_image_files(project_dir: str | Path) -> dict[str, int]:
+def cleanup_expired_candidates(project_dir: str | Path, *, ttl_hours: int = 24) -> int:
+    """删除超过 TTL 未晋升的候选图片（文件 + DB 记录），并清空候选目录孤儿文件。"""
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    candidate_root = project_dir / 'data' / 'images' / 'candidates'
+    if not db.exists():
+        return 0
+    cutoff = datetime.now().astimezone() - timedelta(hours=max(1, ttl_hours))
+    removed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, kept_path, seen_at FROM images WHERE retention_reason='candidate'"
+        ).fetchall()
+        for row_id, kept_path, seen_at in rows:
+            try:
+                seen = datetime.fromisoformat(str(seen_at or '').replace('Z', '+00:00'))
+                seen = seen.astimezone() if seen.tzinfo else seen.replace(tzinfo=cutoff.tzinfo)
+            except Exception:
+                seen = None
+            if seen is not None and seen >= cutoff:
+                continue
+            if kept_path:
+                try:
+                    path = Path(kept_path)
+                    if path.exists():
+                        path.unlink()
+                        removed += 1
+                except OSError:
+                    pass
+            conn.execute("DELETE FROM images WHERE id=?", (row_id,))
+        conn.commit()
+    if candidate_root.exists():
+        for p in candidate_root.rglob('*'):
+            if p.is_file():
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        prune_empty_dirs(candidate_root)
+    return removed
+
+
+def remove_sticker_records(project_dir: str | Path) -> int:
+    """删除已判定为表情包的图片记录与文件。"""
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    removed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, kept_path FROM images WHERE retention_reason='sticker_filtered'"
+        ).fetchall()
+        for row_id, kept_path in rows:
+            if kept_path:
+                try:
+                    path = Path(kept_path)
+                    if path.exists():
+                        path.unlink()
+                        removed += 1
+                except OSError:
+                    pass
+            conn.execute("DELETE FROM images WHERE id=?", (row_id,))
+        conn.commit()
+    return removed
+
+
+def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
     image_duplicates_removed = deduplicate_image_storage(project_dir, store)
     missing_cleared = store.clear_missing_image_paths(project_dir)
+    candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:
