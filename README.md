@@ -59,10 +59,42 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-
 uv run python -m qq_onebot_whitelist.onebot --config config.yaml
 ```
 
+## 控制面板（Qt 原生）
+
+`qq-onebot-manager-qt/` 是 Qt 6 Widgets 原生控制面板（C++），替代旧的 Rust 管理器，提供：
+
+- **概览**：NapCat / OneBot / 机器人 / QQ 登录状态卡片，启动/停止/重启，日志、报告、配置目录快捷入口，图片/链接数据概况。
+- **设置**：分区配置表单（数据来自 `config_bridge.py` schema）、语言、主题（浅色/深色）、开机自启、登录通知开关、自动重启开关。
+- **日志**：bot.log / napcat.log 实时增量查看，搜索、只看错误、暂停。
+- **报告**：报告页入口、日报预览、手动发送测试日报。
+- 托盘常驻、关闭进托盘、QQ 登录/掉线与服务异常的原生系统通知、面板侧自动重启。
+
+构建（命令行；也可直接用 Qt Creator 打开 `qq-onebot-manager-qt/CMakeLists.txt`）：
+
+```powershell
+& "C:\Qt\Tools\CMake_64\bin\cmake.exe" -S qq-onebot-manager-qt -B qq-onebot-manager-qt/build -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH="C:\Qt\6.11.1\mingw_64" -DCMAKE_CXX_COMPILER="C:\Qt\Tools\mingw1310_64\bin\g++.exe"
+& "C:\Qt\Tools\CMake_64\bin\cmake.exe" --build qq-onebot-manager-qt/build
+```
+
+构建后运行部署脚本把 Qt DLL 复制到 exe 旁边，之后可直接双击运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\qq-onebot-manager-qt\deploy.ps1"
+.\qq-onebot-manager-qt\build\qq-onebot-manager-qt.exe
+```
+
+控制面板通过 `python -m qq_onebot_whitelist.control`（`control.py`）完成启动/停止/统计/报告等操作；机器人在 `run/status.json` 写入实时状态，面板进程内读取，高频刷新不产生子进程。
+
 ## 测试
 
 ```bash
 uv run --extra dev pytest -q
+```
+
+Qt 单元测试：
+
+```powershell
+& "C:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir qq-onebot-manager-qt/build
 ```
 
 当前项目要求 Python 3.11+，依赖由 `uv` 管理。
