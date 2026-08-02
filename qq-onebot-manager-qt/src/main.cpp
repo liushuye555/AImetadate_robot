@@ -56,6 +56,8 @@ int main(int argc, char *argv[]) {
 
     auto *overview = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
     auto *statusMonitor = new StatusMonitor(Paths::statusFile(), 4000, &window);
+    // 机器人每 30 秒写一次状态；过期阈值取 90 秒，避免两次写入之间误显示“未知”
+    statusMonitor->setStaleSeconds(90);
     auto *serviceControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
     auto *autoRestart = new AutoRestart(serviceControl, &window);

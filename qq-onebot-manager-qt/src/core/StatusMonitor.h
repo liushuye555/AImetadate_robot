@@ -21,6 +21,7 @@ class StatusMonitor : public QObject {
     Q_OBJECT
 public:
     explicit StatusMonitor(const QString &statusPath, int pollMs = 4000, QObject *parent = nullptr);
+    void setStaleSeconds(int seconds) { m_staleSeconds = seconds; }
     StatusSnapshot snapshot() const { return m_snapshot; }
 public slots:
     void refresh();
@@ -30,4 +31,5 @@ private:
     QString m_statusPath;
     QTimer m_timer;
     StatusSnapshot m_snapshot;
+    int m_staleSeconds = 15;
 };

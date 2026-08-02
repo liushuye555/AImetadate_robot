@@ -325,6 +325,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             if (obj.value("default").isNull())
                 edit->setPlaceholderText(Strings::zh("optionalPlaceholder"));
             edit->setText(obj.value("default").toString());
+            edit->setProperty("kind", kind);
             edit->setProperty("min", obj.value("min").toInt());
             edit->setProperty("max", obj.value("max").toInt());
             connect(edit, &QLineEdit::textChanged, this, [this, edit] {
@@ -371,7 +372,13 @@ QJsonObject SettingsPage::buildPatch() const {
             }
             patch.insert(key, values);
         }
-        else if (auto *edit = qobject_cast<QLineEdit *>(w)) patch.insert(key, edit->text());
+        else if (auto *edit = qobject_cast<QLineEdit *>(w)) {
+            // 可空数字字段留空时写 null，避免空字符串导致后端 int('') 崩溃
+            if (edit->property("kind").toString() == "number" && edit->text().trimmed().isEmpty())
+                patch.insert(key, QJsonValue(QJsonValue::Null));
+            else
+                patch.insert(key, edit->text());
+        }
     }
     if (!m_collectionMap.isEmpty()) {
         QJsonObject groups;

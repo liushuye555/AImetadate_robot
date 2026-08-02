@@ -30,7 +30,7 @@ StatusMonitor::StatusMonitor(const QString &statusPath, int pollMs, QObject *par
 void StatusMonitor::refresh() {
     QFile file(m_statusPath);
     const QByteArray data = file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
-    const StatusSnapshot next = parseStatusJson(data, QDateTime::currentDateTime());
+    const StatusSnapshot next = parseStatusJson(data, QDateTime::currentDateTime(), m_staleSeconds);
     if (next.valid != m_snapshot.valid || next.qqLoggedIn != m_snapshot.qqLoggedIn ||
         next.napcat != m_snapshot.napcat || next.onebot != m_snapshot.onebot ||
         next.bot != m_snapshot.bot || next.qqNumber != m_snapshot.qqNumber ||

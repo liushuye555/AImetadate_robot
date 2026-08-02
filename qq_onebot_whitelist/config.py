@@ -111,7 +111,7 @@ def load_config(path: str | Path) -> AppConfig:
         ai_context_providers={str(key): {str(k): str(v) for k, v in (value or {}).items()} for key, value in (ai_context.get('providers') or {}).items() if isinstance(value, dict)},
         ai_context_scopes=ai_context.get('scopes') or 'all_groups',
         ai_context_chunk_size=int(ai_context.get('chunk_size') or 200),
-        ai_context_max_chunks=(int(ai_context['max_chunks']) if ai_context.get('max_chunks') is not None else None),
+        ai_context_max_chunks=(int(ai_context['max_chunks']) if str(ai_context.get('max_chunks') or '').strip() else None),
         ai_context_auto_interval_minutes=int(ai_context.get('auto_interval_minutes') or 15),
         ai_context_min_new_messages=int(ai_context.get('min_new_messages') or 300),
         ai_context_allowed_windows=normalize_time_windows([str(x) for x in (ai_context.get('allowed_windows') or [])]),

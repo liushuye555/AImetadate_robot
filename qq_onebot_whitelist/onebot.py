@@ -199,15 +199,28 @@ async def status_writer_loop(ws, config: AppConfig) -> None:
         try:
             login = {}
             try:
-                resp = await call_action(ws, "get_login_info", {})
-                data = resp.get("data") or {}
-                qq_number = str(data.get("user_id") or "")
-                qq_nickname = str(data.get("nickname") or "")
-                login = {
-                    "qqLoggedIn": bool(qq_number),
-                    "qqNumber": qq_number,
-                    "qqNickname": qq_nickname,
-                }
+                # 用独立连接查询登录态，避免与主消息循环抢同一 WebSocket 的响应
+                async with websockets.connect(config.onebot_ws_url) as info_ws:
+                    echo = f"login-{datetime.now().timestamp()}"
+                    await info_ws.send(
+                        json.dumps({"action": "get_login_info", "params": {}, "echo": echo}, ensure_ascii=False)
+                    )
+                    while True:
+                        raw = await info_ws.recv()
+                        try:
+                            data = json.loads(raw)
+                        except Exception:
+                            continue
+                        if data.get("echo") == echo:
+                            payload = data.get("data") or {}
+                            qq_number = str(payload.get("user_id") or "")
+                            qq_nickname = str(payload.get("nickname") or "")
+                            login = {
+                                "qqLoggedIn": bool(qq_number),
+                                "qqNumber": qq_number,
+                                "qqNickname": qq_nickname,
+                            }
+                            break
             except Exception as exc:
                 print(f"status_writer get_login_info failed: {type(exc).__name__}: {exc}")
                 login = {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}

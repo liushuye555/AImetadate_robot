@@ -1,6 +1,7 @@
 from qq_onebot_whitelist import onebot
 from qq_onebot_whitelist import control
 from qq_onebot_whitelist.config import AppConfig
+from qq_onebot_whitelist.config import load_config
 from qq_onebot_whitelist.daily_report import build_daily_resource_report
 
 
@@ -93,3 +94,10 @@ def test_cmd_groups_prints_list(capsys, monkeypatch):
     assert control.cmd_groups(None) == 0
     out = capsys.readouterr().out
     assert '"id": "123"' in out and "测试群" in out
+
+
+def test_load_config_tolerates_empty_max_chunks(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("ai_context:\n  max_chunks: ''\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.ai_context_max_chunks is None
