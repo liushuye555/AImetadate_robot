@@ -49,7 +49,8 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     auto *reports = new QPushButton(Strings::zh("openReports"), this);
     auto *config = new QPushButton(Strings::zh("openConfig"), this);
     auto *history = new QPushButton(Strings::zh("importHistory"), this);
-    for (QPushButton *b : {start, stop, restart, refresh, logs, reports, config, history})
+    auto *napcat = new QPushButton(Strings::zh("openNapcat"), this);
+    for (QPushButton *b : {start, stop, restart, refresh, logs, reports, config, history, napcat})
         buttons->addWidget(b);
     buttons->addStretch();
     layout->addLayout(buttons);
@@ -63,16 +64,19 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     connect(reports, &QPushButton::clicked, this, [this] { emit actionRequested("reports"); });
     connect(config, &QPushButton::clicked, this, [this] { emit actionRequested("config"); });
     connect(history, &QPushButton::clicked, this, [this] { emit actionRequested("history"); });
+    connect(napcat, &QPushButton::clicked, this, [this] { emit actionRequested("napcat-webui"); });
 }
 
 void OverviewPage::setStatus(const StatusSnapshot &s) {
     if (!s.valid) {
+        m_hint->setText(Strings::zh("staleHint"));
         m_napcat->setValue("未知", false);
         m_onebot->setValue("未知", false);
         m_bot->setValue("未知", false);
         m_qq->setValue("未知", false);
         return;
     }
+    m_hint->clear();
     m_napcat->setValue(s.napcat ? Strings::zh("running") : Strings::zh("stopped"), s.napcat);
     m_onebot->setValue(s.onebot ? Strings::zh("running") : Strings::zh("stopped"), s.onebot);
     m_bot->setValue(s.bot ? Strings::zh("running") : Strings::zh("stopped"), s.bot);

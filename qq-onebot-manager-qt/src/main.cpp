@@ -85,6 +85,8 @@ int main(int argc, char *argv[]) {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/data/view/index.html"));
         } else if (action == "config") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot()));
+        } else if (action == "napcat-webui") {
+            QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
         } else if (action == "refresh") {
             statusMonitor->refresh();
             fetchStats();
@@ -160,6 +162,8 @@ int main(int argc, char *argv[]) {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/data/view/index.html"));
+        } else if (action == "napcat-webui") {
+            QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
         }
     });
 

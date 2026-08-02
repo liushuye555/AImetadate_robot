@@ -59,6 +59,8 @@ QString Strings::zh(const QString &key) {
     if (key == "collectForwards") return "采集转发消息";
     if (key == "listPlaceholder") return "每行一个";
     if (key == "optionalPlaceholder") return "留空=不限";
+    if (key == "openNapcat") return "打开 NapCat WebUI";
+    if (key == "staleHint") return "状态未知：机器人未运行或状态文件过期。请先在 NapCat WebUI 登录 QQ，再点击“启动”。";
     return key;
 }
 
@@ -117,6 +119,8 @@ QString Strings::en(const QString &key) {
     if (key == "collectForwards") return "Collect forwarded messages";
     if (key == "listPlaceholder") return "One per line";
     if (key == "optionalPlaceholder") return "Leave empty = unlimited";
+    if (key == "openNapcat") return "Open NapCat WebUI";
+    if (key == "staleHint") return "Status unknown: bot is not running or status is stale. Log in via NapCat WebUI, then click Start.";
     return key;
 }
 
