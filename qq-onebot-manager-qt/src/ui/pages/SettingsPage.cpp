@@ -47,7 +47,14 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
     bottom->addStretch();
     outer->addLayout(bottom);
     m_save->setEnabled(false);
-    connect(m_save, &QPushButton::clicked, this, [this] { emit saveRequested(buildPatch()); });
+    connect(m_save, &QPushButton::clicked, this, [this] {
+        const QString error = validationError();
+        if (!error.isEmpty()) {
+            m_message->setText(Strings::zh("error") + ": " + error);
+            return;
+        }
+        emit saveRequested(buildPatch());
+    });
 }
 
 bool SettingsPage::eventFilter(QObject *obj, QEvent *event) {
@@ -233,6 +240,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             if (kind == "secret") edit->setEchoMode(QLineEdit::Password);
             if (obj.value("default").isNull())
                 edit->setPlaceholderText(Strings::zh("optionalPlaceholder"));
+            edit->setProperty("nullable", obj.value("default").isNull());
             edit->setText(obj.value("default").toString());
             edit->setProperty("kind", kind);
             edit->setProperty("min", obj.value("min").toInt());
@@ -263,6 +271,24 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
 void SettingsPage::markDirty() {
     m_dirty = true;
     m_save->setEnabled(true);
+}
+
+QString SettingsPage::validationError() const {
+    for (auto it = m_fields.constBegin(); it != m_fields.constEnd(); ++it) {
+        const QWidget *w = it.value();
+        const auto *edit = qobject_cast<const QLineEdit *>(w);
+        if (!edit) continue;
+        if (edit->property("kind").toString() != "number") continue;
+        if (edit->property("nullable").toBool() && edit->text().trimmed().isEmpty()) continue;
+        bool ok = false;
+        const int value = edit->text().trimmed().toInt(&ok);
+        const int min = edit->property("min").toInt();
+        const int max = edit->property("max").toInt();
+        const bool rangeOk = (min == 0 && max == 0) || (value >= min && value <= max);
+        if (!ok || !rangeOk)
+            return it.key();
+    }
+    return QString();
 }
 
 QJsonObject SettingsPage::buildPatch() const {

@@ -38,6 +38,7 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
 private:
     QJsonObject buildPatch() const;
+    QString validationError() const;
     QVBoxLayout *sectionLayout(const QString &section);
     QWidget *buildGeneralTab();
     QWidget *buildProviderEditor();

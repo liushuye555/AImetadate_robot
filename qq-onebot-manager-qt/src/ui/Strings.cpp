@@ -89,6 +89,12 @@ QString Strings::zh(const QString &key) {
     if (key == "modeKeywords") return "关键词";
     if (key == "modeRegex") return "正则";
     if (key == "modeAi") return "AI 语义";
+    if (key == "ruleCategory") return "分类";
+    if (key == "uncategorized") return "未分类";
+    if (key == "batchEnable") return "全开";
+    if (key == "batchDisable") return "全停";
+    if (key == "moveUp") return "上移";
+    if (key == "moveDown") return "下移";
     if (key == "expandForwards") return "展开转发的合并消息（抓取内容归档）";
     if (key == "aiMatch") return "AI 语义匹配";
     if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
@@ -181,6 +187,12 @@ QString Strings::en(const QString &key) {
     if (key == "modeKeywords") return "Keywords";
     if (key == "modeRegex") return "Regex";
     if (key == "modeAi") return "AI semantic";
+    if (key == "ruleCategory") return "Category";
+    if (key == "uncategorized") return "Uncategorized";
+    if (key == "batchEnable") return "Enable all";
+    if (key == "batchDisable") return "Disable all";
+    if (key == "moveUp") return "Move up";
+    if (key == "moveDown") return "Move down";
     if (key == "expandForwards") return "Expand forwarded messages (collect their contents)";
     if (key == "aiMatch") return "AI semantic matching";
     if (key == "aiPrompt") return "AI matching description (what to collect)";

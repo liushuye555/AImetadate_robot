@@ -17,6 +17,8 @@
 #include <QPlainTextEdit>
 #include <QRadioButton>
 #include <QStackedWidget>
+#include <QFont>
+#include <algorithm>
 
 CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
@@ -100,9 +102,17 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     auto *rAdd = new QPushButton(Strings::zh("addRule"), rules);
     auto *rEdit = new QPushButton(Strings::zh("editRule"), rules);
     auto *rRemove = new QPushButton(Strings::zh("removeRule"), rules);
+    auto *rEnable = new QPushButton(Strings::zh("batchEnable"), rules);
+    auto *rDisable = new QPushButton(Strings::zh("batchDisable"), rules);
+    auto *rUp = new QPushButton(Strings::zh("moveUp"), rules);
+    auto *rDown = new QPushButton(Strings::zh("moveDown"), rules);
     rButtons->addWidget(rAdd);
     rButtons->addWidget(rEdit);
     rButtons->addWidget(rRemove);
+    rButtons->addWidget(rEnable);
+    rButtons->addWidget(rDisable);
+    rButtons->addWidget(rUp);
+    rButtons->addWidget(rDown);
     rButtons->addStretch();
     rv->addLayout(rButtons);
     layout->addWidget(rules);
@@ -113,14 +123,51 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     layout->addStretch();
     connect(rAdd, &QPushButton::clicked, this, [this] { openCustomRuleDialog(-1); });
     connect(rEdit, &QPushButton::clicked, this, [this] {
-        if (m_customRuleList->currentRow() >= 0)
-            openCustomRuleDialog(m_customRuleList->currentRow());
+        if (m_customRuleList->currentItem())
+            openCustomRuleDialog(m_customRuleList->currentItem()->data(Qt::UserRole).toInt());
     });
     connect(rRemove, &QPushButton::clicked, this, [this] {
-        const int row = m_customRuleList->currentRow();
-        if (row < 0 || row >= m_customRules.size()) return;
-        m_customRules.removeAt(row);
+        QListWidgetItem *item = m_customRuleList->currentItem();
+        if (!item) return;
+        const int index = item->data(Qt::UserRole).toInt();
+        if (index < 0 || index >= m_customRules.size()) return;
+        m_customRules.removeAt(index);
         rebuildCustomRuleList();
+        markDirty();
+    });
+    connect(rEnable, &QPushButton::clicked, this, [this] { batchSetEnabled(true); });
+    connect(rDisable, &QPushButton::clicked, this, [this] { batchSetEnabled(false); });
+    connect(rUp, &QPushButton::clicked, this, [this] {
+        QListWidgetItem *item = m_customRuleList->currentItem();
+        if (!item) return;
+        const int index = item->data(Qt::UserRole).toInt();
+        if (index > 0 && index < m_customRules.size()) {
+            const QJsonValue value = m_customRules.at(index);
+            m_customRules[index] = m_customRules.at(index - 1);
+            m_customRules[index - 1] = value;
+            rebuildCustomRuleList();
+            markDirty();
+        }
+    });
+    connect(rDown, &QPushButton::clicked, this, [this] {
+        QListWidgetItem *item = m_customRuleList->currentItem();
+        if (!item) return;
+        const int index = item->data(Qt::UserRole).toInt();
+        if (index >= 0 && index < m_customRules.size() - 1) {
+            const QJsonValue value = m_customRules.at(index);
+            m_customRules[index] = m_customRules.at(index + 1);
+            m_customRules[index + 1] = value;
+            rebuildCustomRuleList();
+            markDirty();
+        }
+    });
+    connect(m_customRuleList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+        if (m_suppressRuleChange) return;
+        const int index = item->data(Qt::UserRole).toInt();
+        if (index < 0 || index >= m_customRules.size()) return;
+        QJsonObject rule = m_customRules.at(index).toObject();
+        rule.insert("enabled", item->checkState() == Qt::Checked);
+        m_customRules[index] = rule;
         markDirty();
     });
 
@@ -260,22 +307,77 @@ void CollectionPage::rebuildCollectionList() {
 
 void CollectionPage::rebuildCustomRuleList() {
     if (!m_customRuleList) return;
+    m_suppressRuleChange = true;
     m_customRuleList->clear();
-    for (const QJsonValue &value : m_customRules) {
-        const QJsonObject rule = value.toObject();
-        const QString name = rule.value("name").toString();
-        const QString keywords = rule.value("keywords").toArray().isEmpty()
-            ? rule.value("regex").toString()
-            : rule.value("keywords").toArray().first().toString();
-        const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
-            + (name.isEmpty() ? Strings::zh("unnamed") : name)
-            + (rule.value("ai_match").toBool(false) ? " [AI]" : rule.value("regex").toString().trimmed().isEmpty() ? "" : " [正则]")
-            + (keywords.isEmpty() ? "" : "  ·  " + keywords);
-        auto *item = new QListWidgetItem(summary, m_customRuleList);
-        m_customRuleList->addItem(item);
+    QMap<QString, QList<QPair<int, QJsonObject>>> byCategory;
+    for (int i = 0; i < m_customRules.size(); ++i) {
+        const QJsonObject rule = m_customRules.at(i).toObject();
+        const QString category = rule.value("category").toString().trimmed().isEmpty()
+            ? Strings::zh("uncategorized") : rule.value("category").toString();
+        byCategory[category].append(qMakePair(i, rule));
     }
-    if (m_customRuleList->count() == 0)
+    for (auto it = byCategory.constBegin(); it != byCategory.constEnd(); ++it) {
+        auto *header = new QListWidgetItem(it.key(), m_customRuleList);
+        header->setFlags(Qt::NoItemFlags);
+        QFont headerFont = header->font();
+        headerFont.setBold(true);
+        header->setFont(headerFont);
+        m_customRuleList->addItem(header);
+        for (const auto &pair : it.value()) {
+            const int index = pair.first;
+            const QJsonObject &rule = pair.second;
+            const QString name = rule.value("name").toString();
+            const QString keywords = rule.value("keywords").toArray().isEmpty()
+                ? rule.value("regex").toString()
+                : rule.value("keywords").toArray().first().toString();
+            const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
+                + (name.isEmpty() ? Strings::zh("unnamed") : name)
+                + (rule.value("ai_match").toBool(false) ? " [AI]" : rule.value("regex").toString().trimmed().isEmpty() ? "" : " [正则]")
+                + (keywords.isEmpty() ? "" : "  ·  " + keywords);
+            auto *item = new QListWidgetItem(summary, m_customRuleList);
+            item->setData(Qt::UserRole, index);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(rule.value("enabled").toBool(true) ? Qt::Checked : Qt::Unchecked);
+            m_customRuleList->addItem(item);
+        }
+    }
+    if (m_customRules.isEmpty())
         m_customRuleList->addItem(Strings::zh("customRulesEmpty"));
+    m_suppressRuleChange = false;
+}
+
+void CollectionPage::batchSetEnabled(bool enabled) {
+    bool changed = false;
+    for (int i = 0; i < m_customRules.size(); ++i) {
+        QJsonObject rule = m_customRules.at(i).toObject();
+        if (rule.value("enabled").toBool(true) == enabled) continue;
+        rule.insert("enabled", enabled);
+        m_customRules[i] = rule;
+        changed = true;
+    }
+    if (changed) {
+        rebuildCustomRuleList();
+        markDirty();
+    }
+}
+
+void CollectionPage::batchRemove() {
+    QList<int> toRemove;
+    for (int i = 0; i < m_customRuleList->count(); ++i) {
+        QListWidgetItem *item = m_customRuleList->item(i);
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable)) continue;
+        if (item->checkState() == Qt::Checked)
+            toRemove.append(item->data(Qt::UserRole).toInt());
+    }
+    if (!toRemove.isEmpty()) {
+        std::sort(toRemove.begin(), toRemove.end(), std::greater<int>());
+        for (int index : toRemove) {
+            if (index >= 0 && index < m_customRules.size())
+                m_customRules.removeAt(index);
+        }
+        rebuildCustomRuleList();
+        markDirty();
+    }
 }
 
 void CollectionPage::openCollectionDialog(const QString &editGroup) {
@@ -327,6 +429,7 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
     dialog.resize(520, 470);
     auto *form = new QFormLayout(&dialog);
     auto *nameEdit = new QLineEdit(&dialog);
+    auto *categoryEdit = new QLineEdit(&dialog);
     auto *enabled = new QCheckBox(Strings::zh("ruleEnabled"), &dialog);
     enabled->setChecked(true);
     auto *modeKeywords = new QRadioButton(Strings::zh("modeKeywords"), &dialog);
@@ -362,6 +465,7 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
     links->setChecked(true);
     files->setChecked(true);
     form->addRow(Strings::zh("ruleName"), nameEdit);
+    form->addRow(Strings::zh("ruleCategory"), categoryEdit);
     form->addRow(enabled);
     form->addRow(Strings::zh("matchMode"), modeRow);
     form->addRow(stack);
@@ -372,6 +476,7 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
     if (editIndex >= 0 && editIndex < m_customRules.size()) {
         const QJsonObject rule = m_customRules.at(editIndex).toObject();
         nameEdit->setText(rule.value("name").toString());
+        categoryEdit->setText(rule.value("category").toString());
         enabled->setChecked(rule.value("enabled").toBool(true));
         const bool useAi = rule.value("ai_match").toBool(false);
         const bool useRegex = !useAi && !rule.value("regex").toString().trimmed().isEmpty();
@@ -410,6 +515,7 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
     }
     QJsonObject rule;
     rule.insert("name", nameEdit->text().trimmed());
+    rule.insert("category", categoryEdit->text().trimmed());
     rule.insert("enabled", enabled->isChecked());
     rule.insert("groups", groups);
     rule.insert("keywords", keywords);

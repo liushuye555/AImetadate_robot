@@ -28,6 +28,8 @@ private:
     void openCustomRuleDialog(int editIndex);
     void rebuildCollectionList();
     void rebuildCustomRuleList();
+    void batchSetEnabled(bool enabled);
+    void batchRemove();
     void markDirty();
     QPushButton *m_save = nullptr;
     QLabel *m_message = nullptr;
@@ -38,6 +40,7 @@ private:
     QMap<QString, QJsonObject> m_collectionMap;
     QListWidget *m_customRuleList = nullptr;
     QJsonArray m_customRules;
+    bool m_suppressRuleChange = false;
     QMap<QString, QCheckBox *> m_templateBoxes;
     bool m_dirty = false;
 };
