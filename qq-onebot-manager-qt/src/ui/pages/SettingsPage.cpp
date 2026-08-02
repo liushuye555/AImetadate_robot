@@ -240,6 +240,8 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             if (kind == "secret") edit->setEchoMode(QLineEdit::Password);
             if (obj.value("default").isNull())
                 edit->setPlaceholderText(Strings::zh("optionalPlaceholder"));
+            else if (obj.value("default").toString().trimmed().isEmpty())
+                edit->setPlaceholderText(Strings::zh("notSet"));
             edit->setProperty("nullable", obj.value("default").isNull());
             edit->setText(obj.value("default").toString());
             edit->setProperty("kind", kind);
