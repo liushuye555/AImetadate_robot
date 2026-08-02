@@ -187,3 +187,54 @@ def test_cmd_custom_prints_records(tmp_path, monkeypatch, capsys):
     assert control.cmd_custom(args) == 0
     out = capsys.readouterr().out
     assert "AI会话" in out and "test lora" in out
+
+
+def test_forward_ids_extraction():
+    from qq_onebot_whitelist import collection
+    event = {"message": [{"type": "forward", "data": {"id": "abc"}}, {"type": "text", "data": {"text": "x"}}]}
+    assert collection.forward_ids(event) == ["abc"]
+
+
+def test_ai_match_message_parses_answer(monkeypatch):
+    from qq_onebot_whitelist import collection
+    import json as json_mod
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json_mod.dumps({"choices": [{"message": {"content": "是"}}]}).encode("utf-8")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: FakeResp())
+    llm = type("C", (), {"model": "m", "base_url": "https://x", "api_key": "k", "timeout_seconds": 10})()
+    assert collection.ai_match_message("abc", "收集 abc", llm) is True
+
+
+def test_ai_match_and_collect_records(tmp_path, monkeypatch):
+    from qq_onebot_whitelist import collection
+    from qq_onebot_whitelist.store import Store
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+    llm = type("C", (), {"model": "m", "base_url": "https://x", "api_key": "k", "timeout_seconds": 10})
+    monkeypatch.setattr(collection, "_llm_config", lambda: llm())
+    monkeypatch.setattr(collection, "ai_match_message",
+                        lambda text, prompt, cfg: "midjourney" in prompt.lower())
+    store = Store(tmp_path / "bot.db")
+    config = AppConfig(collection_rules=[
+        {"name": "AI收集", "enabled": True, "groups": [], "ai_match": True, "ai_prompt": "Midjourney 技巧"}
+    ])
+    event = text_event("1", "分享个技巧")
+    collection.ai_match_and_collect(store, event, "分享个技巧", config)
+    rows = store.recent_custom_collections(rule="AI收集")
+    assert len(rows) == 1
+
+
+def test_config_parses_expand_forwards(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("collection:\n  expand_forwards: true\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.collection_expand_forwards is True

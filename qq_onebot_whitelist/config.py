@@ -50,6 +50,7 @@ class AppConfig:
     echo_groups: set[str] = field(default_factory=set)
     collection_groups: dict[str, dict[str, bool]] = field(default_factory=dict)
     collection_rules: list[dict] = field(default_factory=list)
+    collection_expand_forwards: bool = False
     load_aware_enabled: bool = True
     load_aware_cpu_threshold: int = 80
     load_aware_check_seconds: int = 60
@@ -134,6 +135,7 @@ def load_config(path: str | Path) -> AppConfig:
             if isinstance(value, dict)
         },
         collection_rules=[dict(rule) for rule in (collection.get('rules') or []) if isinstance(rule, dict)],
+        collection_expand_forwards=bool(collection.get('expand_forwards', False)),
         load_aware_enabled=bool(load_aware.get('enabled', True)),
         load_aware_cpu_threshold=int(load_aware.get('cpu_threshold') or 80),
         load_aware_check_seconds=int(load_aware.get('check_seconds') or 60),

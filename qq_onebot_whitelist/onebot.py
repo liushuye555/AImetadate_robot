@@ -10,7 +10,14 @@ from typing import Any
 import websockets
 
 from .archive_budget import enforce_archive_budget
-from .collection import collect_event, collection_allows, is_collection_paused, is_forward_event
+from .collection import (
+    ai_match_and_collect,
+    collect_event,
+    collection_allows,
+    forward_ids,
+    is_collection_paused,
+    is_forward_event,
+)
 from .commands import build_reply, scope_for_event
 from .config import AppConfig, load_config
 from .ai_context_analyze import analyze_configured, configured_scopes
@@ -300,6 +307,43 @@ def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None
     collect_event(store, event, config)
 
 
+async def collect_forward_contents(store: Store, event: dict[str, Any], config: AppConfig) -> None:
+    """展开转发的合并消息：抓取实际内容并逐条采集（后台任务，不阻塞消息循环）。"""
+    scope = scope_for_event(event)
+    if not collection_allows(scope, 'forwards', config):
+        return
+    ids = forward_ids(event)
+    if not ids:
+        return
+    try:
+        async with websockets.connect(config.onebot_ws_url) as action_ws:
+            for fid in ids:
+                echo = f"fwd-{fid}-{datetime.now().timestamp()}"
+                await action_ws.send(
+                    json.dumps({"action": "get_forward_msg", "params": {"id": fid}, "echo": echo}, ensure_ascii=False)
+                )
+                while True:
+                    raw = await asyncio.wait_for(action_ws.recv(), timeout=10)
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        continue
+                    if data.get("echo") == echo:
+                        messages = ((data.get("data") or {}).get("messages") or [])
+                        for sub in messages:
+                            sub_event = {
+                                "post_type": "message",
+                                "message_type": "group",
+                                "group_id": event.get("group_id"),
+                                "user_id": sub.get("user_id") or "",
+                                "message": sub.get("message") or [],
+                            }
+                            collect_event(store, sub_event, config)
+                        break
+    except Exception as exc:
+        print(f"expand forward failed: {type(exc).__name__}: {exc}")
+
+
 def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
     return event.get('message_type') == 'group' and str(event.get('group_id') or '') in config.blocked_groups
 
@@ -314,6 +358,10 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         await send_reply(ws, event, echo_text)
         return True
     record_event(store, event, config)
+    if config.collection_expand_forwards and is_forward_event(event):
+        asyncio.create_task(collect_forward_contents(store, event, config))
+    if any(rule.get('ai_match') for rule in config.collection_rules):
+        asyncio.create_task(asyncio.to_thread(ai_match_and_collect, store, event, extract_text(event), config))
     if not should_reply(event, config.bot):
         return False
     reply = build_reply(

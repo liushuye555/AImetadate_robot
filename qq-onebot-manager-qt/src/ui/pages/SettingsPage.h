@@ -69,6 +69,7 @@ private:
     QMap<QString, QJsonObject> m_providerMap;
     QListWidget *m_collectionList = nullptr;
     QMap<QString, QJsonObject> m_collectionMap;
+    QCheckBox *m_expandForwards = nullptr;
     QListWidget *m_customRuleList = nullptr;
     QJsonArray m_customRules;
     bool m_dirty = false;

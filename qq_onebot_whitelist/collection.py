@@ -18,6 +18,7 @@ from .summary import extract_links
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
+_AI_MATCH_CACHE: dict[tuple[str, str], bool] = {}
 
 
 COLLECTION_KINDS = ("images", "links", "files", "forwards")
@@ -34,6 +35,97 @@ def collection_allows(scope: str, kind: str, config: AppConfig) -> bool:
 def is_forward_event(event: dict[str, Any]) -> bool:
     """判断消息是否为转发消息（OneBot 转发段或转发类型）。"""
     return event.get("message_type") == "forward" or "forward" in json.dumps(event, ensure_ascii=False)
+
+
+def forward_ids(event: dict[str, Any]) -> list[str]:
+    """提取转发消息的 forward id（可多个）。"""
+    ids: list[str] = []
+    for segment in (event.get('message') or []):
+        if isinstance(segment, dict) and segment.get('type') == 'forward':
+            data = segment.get('data') or {}
+            value = str(data.get('id') or '')
+            if value:
+                ids.append(value)
+    return ids
+
+
+def _llm_config():
+    from .llm_summary import LLMConfig
+    config = LLMConfig.ds_fallback_from_env_file(Path(__file__).resolve().parents[1] / '.env')
+    if config is not None and config.timeout_seconds > 30:
+        config.timeout_seconds = 30
+    return config
+
+
+def ai_match_message(text: str, prompt: str, llm_config) -> bool:
+    """调用 LLM 判断消息是否符合收集条件，只输出是/否。"""
+    import urllib.request
+    payload = {
+        "model": llm_config.model,
+        "messages": [
+            {"role": "system", "content": "你是一个内容分类器。只输出“是”或“否”。"},
+            {"role": "user", "content": f"收集条件：{prompt}\n请判断以下消息是否满足条件，只回答是或否：\n{text[:1500]}"},
+        ],
+        "temperature": 0,
+    }
+    req = urllib.request.Request(
+        llm_config.base_url.rstrip('/') + '/chat/completions',
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {llm_config.api_key}"},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=llm_config.timeout_seconds) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    answer = str(data['choices'][0]['message']['content'] or '').strip()
+    return '是' in answer[:4] or answer.lower().startswith('yes')
+
+
+def ai_match_and_collect(store: Store, event: dict[str, Any], text: str, config: AppConfig) -> None:
+    """对开启 AI 匹配的规则做语义判断，命中则归档（在后台线程调用，避免阻塞消息循环）。"""
+    if is_collection_paused() or not text.strip():
+        return
+    scope = scope_for_event(event)
+    candidate_rules = [
+        rule for rule in config.collection_rules
+        if rule.get('ai_match') and rule.get('enabled', True)
+        and (not (rule.get('groups') or []) or scope in {str(g) for g in rule['groups']})
+    ]
+    if not candidate_rules:
+        return
+    llm_config = _llm_config()
+    if llm_config is None:
+        return
+    images = [str(img.get('url') or '') for img in extract_image_segments(event) if img.get('url')]
+    links = extract_links(text)
+    files = [str(f.get('file_name') or '') for f in extract_file_segments(event) if f.get('file_name')]
+    user_id = str(event.get('user_id') or '')
+    for rule in candidate_rules:
+        prompt = str(rule.get('ai_prompt') or '').strip()
+        if not prompt:
+            continue
+        key = (str(rule.get('name') or ''), text)
+        if key in _AI_MATCH_CACHE:
+            matched = _AI_MATCH_CACHE[key]
+        else:
+            try:
+                matched = ai_match_message(text, prompt, llm_config)
+            except Exception as exc:
+                print(f'ai_match failed: {type(exc).__name__}: {exc}')
+                continue
+            if len(_AI_MATCH_CACHE) > 500:
+                _AI_MATCH_CACHE.clear()
+            _AI_MATCH_CACHE[key] = matched
+        if matched:
+            store.record_custom_collection(
+                rule=str(rule.get('name') or '未命名'),
+                scope=scope,
+                user_id=user_id,
+                text=text,
+                images=images if rule.get('collect_images', True) else [],
+                links=links if rule.get('collect_links', True) else [],
+                files=files if rule.get('collect_files', True) else [],
+                message_key=canonical_message_key(event),
+            )
 
 
 def is_collection_paused() -> bool:

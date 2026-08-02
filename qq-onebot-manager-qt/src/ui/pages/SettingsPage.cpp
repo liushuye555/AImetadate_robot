@@ -177,6 +177,8 @@ QWidget *SettingsPage::buildCollectionEditor() {
     m_subnav->addItem(Strings::zh("collection"));
     auto *group = new QGroupBox(Strings::zh("collection"), container);
     auto *v = new QVBoxLayout(group);
+    m_expandForwards = new QCheckBox(Strings::zh("expandForwards"), group);
+    v->addWidget(m_expandForwards);
     m_collectionList = new QListWidget(group);
     v->addWidget(m_collectionList);
     auto *buttons = new QHBoxLayout;
@@ -336,6 +338,10 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             rebuildCollectionList();
             continue;
         }
+        if (key == "collection.expand_forwards" && m_expandForwards) {
+            m_expandForwards->setChecked(obj.value("default").toBool());
+            continue;
+        }
         if (kind == "custom-rules") {
             m_customRules = obj.value("default").toArray();
             rebuildCustomRuleList();
@@ -435,6 +441,8 @@ QJsonObject SettingsPage::buildPatch() const {
             groups.insert(it.key(), it.value());
         patch.insert("collection.groups", groups);
     }
+    if (m_expandForwards)
+        patch.insert("collection.expand_forwards", m_expandForwards->isChecked());
     patch.insert("collection.rules", m_customRules);
     return patch;
 }
@@ -497,6 +505,7 @@ void SettingsPage::rebuildCustomRuleList() {
             : rule.value("keywords").toArray().first().toString();
         const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
             + (name.isEmpty() ? Strings::zh("unnamed") : name)
+            + (rule.value("ai_match").toBool(false) ? " [AI]" : "")
             + (keywords.isEmpty() ? "" : "  ·  " + keywords);
         auto *item = new QListWidgetItem(summary, m_customRuleList);
         m_customRuleList->addItem(item);
@@ -523,6 +532,10 @@ void SettingsPage::openCustomRuleDialog(int editIndex) {
     auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
     auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
     auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
+    auto *aiMatch = new QCheckBox(Strings::zh("aiMatch"), &dialog);
+    auto *aiPrompt = new QPlainTextEdit(&dialog);
+    aiPrompt->setMaximumHeight(80);
+    aiPrompt->setPlaceholderText(Strings::zh("aiPromptPlaceholder"));
     images->setChecked(true);
     links->setChecked(true);
     files->setChecked(true);
@@ -534,6 +547,8 @@ void SettingsPage::openCustomRuleDialog(int editIndex) {
     form->addRow(images);
     form->addRow(links);
     form->addRow(files);
+    form->addRow(aiMatch);
+    form->addRow(Strings::zh("aiPrompt"), aiPrompt);
     if (editIndex >= 0 && editIndex < m_customRules.size()) {
         const QJsonObject rule = m_customRules.at(editIndex).toObject();
         nameEdit->setText(rule.value("name").toString());
@@ -548,6 +563,8 @@ void SettingsPage::openCustomRuleDialog(int editIndex) {
         images->setChecked(rule.value("collect_images").toBool(true));
         links->setChecked(rule.value("collect_links").toBool(true));
         files->setChecked(rule.value("collect_files").toBool(true));
+        aiMatch->setChecked(rule.value("ai_match").toBool(false));
+        aiPrompt->setPlainText(rule.value("ai_prompt").toString());
     }
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     form->addRow(buttons);
@@ -575,6 +592,8 @@ void SettingsPage::openCustomRuleDialog(int editIndex) {
     rule.insert("collect_images", images->isChecked());
     rule.insert("collect_links", links->isChecked());
     rule.insert("collect_files", files->isChecked());
+    rule.insert("ai_match", aiMatch->isChecked());
+    rule.insert("ai_prompt", aiPrompt->toPlainText().trimmed());
     if (editIndex >= 0 && editIndex < m_customRules.size())
         m_customRules[editIndex] = rule;
     else

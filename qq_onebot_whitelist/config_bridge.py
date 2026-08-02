@@ -63,6 +63,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('echo.groups', 'list', echo.get('groups', []), 'Echo groups (blank = all)', '复读群列表（留空=全部群）', section='echo'),
         field('collection.groups', 'collection-list', collection.get('groups', {}), 'Per-group collection', '群级采集配置', section='collection'),
         field('collection.rules', 'custom-rules', collection.get('rules', []), 'Custom collection rules', '自定义采集规则', section='collection'),
+        field('collection.expand_forwards', 'bool', collection.get('expand_forwards', False), 'Expand forwarded messages', '展开转发的合并消息', section='collection'),
         field('load_aware.enabled', 'bool', load_aware.get('enabled', True), 'Load-aware scheduling', '负载感知调度', section='load'),
         field('load_aware.cpu_threshold', 'number', load_aware.get('cpu_threshold', 80), 'CPU threshold (%)', 'CPU 阈值（%）', section='load', min=10, max=100),
         field('load_aware.check_seconds', 'number', load_aware.get('check_seconds', 60), 'Recheck interval (s)', '重试间隔（秒）', section='load', min=10, max=3600),

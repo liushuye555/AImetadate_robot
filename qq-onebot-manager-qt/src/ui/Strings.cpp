@@ -78,6 +78,10 @@ QString Strings::zh(const QString &key) {
     if (key == "ruleRegex") return "正则表达式（可选）";
     if (key == "keywordsPlaceholder") return "每行一个";
     if (key == "unnamed") return "未命名";
+    if (key == "expandForwards") return "展开转发的合并消息（抓取内容归档）";
+    if (key == "aiMatch") return "AI 语义匹配";
+    if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
+    if (key == "aiPromptPlaceholder") return "描述要收集的内容，如：收集关于 Midjourney 技巧的分享";
     return key;
 }
 
@@ -155,6 +159,10 @@ QString Strings::en(const QString &key) {
     if (key == "ruleRegex") return "Regex (optional)";
     if (key == "keywordsPlaceholder") return "One per line";
     if (key == "unnamed") return "Unnamed";
+    if (key == "expandForwards") return "Expand forwarded messages (collect their contents)";
+    if (key == "aiMatch") return "AI semantic matching";
+    if (key == "aiPrompt") return "AI matching description (what to collect)";
+    if (key == "aiPromptPlaceholder") return "Describe what to collect, e.g.: share tips about Midjourney";
     return key;
 }
 
