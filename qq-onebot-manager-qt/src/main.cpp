@@ -7,12 +7,14 @@
 #include <QMessageBox>
 #include <QUrl>
 #include "app/SingleInstance.h"
+#include "core/ConfigBridge.h"
 #include "core/Paths.h"
 #include "core/ServiceControl.h"
 #include "core/StatusMonitor.h"
 #include "ui/MainWindow.h"
 #include "ui/Strings.h"
 #include "ui/pages/OverviewPage.h"
+#include "ui/pages/SettingsPage.h"
 #include "ui/theme/ThemeManager.h"
 
 static QWidget *makePlaceholder(const char *key, QWidget *parent) {
@@ -22,7 +24,7 @@ static QWidget *makePlaceholder(const char *key, QWidget *parent) {
 }
 
 static QWidget *makeOverview(QWidget *parent) { return new OverviewPage(parent); }
-static QWidget *makeSettings(QWidget *parent) { return makePlaceholder("settings", parent); }
+static QWidget *makeSettings(QWidget *parent) { return new SettingsPage(parent); }
 static QWidget *makeLogs(QWidget *parent) { return makePlaceholder("logs", parent); }
 static QWidget *makeReports(QWidget *parent) { return makePlaceholder("reports", parent); }
 
@@ -88,6 +90,19 @@ int main(int argc, char *argv[]) {
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
         }
     });
+
+    auto *settings = qobject_cast<SettingsPage *>(window.pageWidget("settings"));
+    auto *configBridge = new ConfigBridge(&window);
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, &SettingsPage::setSchema);
+    QObject::connect(settings, &SettingsPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(configBridge, &ConfigBridge::saved, settings, [settings](bool ok, const QString &msg) {
+        settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
+    });
+    QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
+        ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
+    });
+    QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
+    configBridge->fetch();
 
     // 启动时查询一次数据概况
     fetchStats();
