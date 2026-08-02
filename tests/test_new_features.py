@@ -149,10 +149,9 @@ def test_phash_and_obfuscation_matching(tmp_path):
     assert match is not None and match[1] == "sha1"
 
 
-def test_reclassify_possible_obfuscation(tmp_path):
+def test_reclassify_retires_possible_obfuscation(tmp_path):
     import sqlite3
     from PIL import Image
-    from qq_onebot_whitelist.obfuscation import image_phash
     from qq_onebot_whitelist.maintenance import reclassify_possible_obfuscation
     from qq_onebot_whitelist.store import Store
     db_dir = tmp_path / "data"
@@ -169,18 +168,14 @@ def test_reclassify_possible_obfuscation(tmp_path):
     img.save(obf, quality=50)
 
     store.record_image(scope="group:1", user_id="u", result={
-        "sha256": "arch1", "format": "PNG", "size": 1, "width": 64, "height": 64,
-        "kept_path": str(arch), "retention_reason": "ai_metadata",
-    }, raw={})
-    store.save_image_hash("arch1", image_phash(arch))
-    store.record_image(scope="group:1", user_id="u", result={
         "sha256": "obf1", "format": "JPEG", "size": 1, "width": 64, "height": 64,
-        "kept_path": str(obf), "retention_reason": "candidate",
+        "kept_path": str(obf), "retention_reason": "possible_obfuscation",
     }, raw={})
     changed = reclassify_possible_obfuscation(tmp_path, threshold=10)
-    assert changed == 1
+    assert changed >= 1
     conn = sqlite3.connect(db_dir / "bot.db")
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='obf1'").fetchone()[0] == "possible_obfuscation"
+    # 旧启发式临时分类退役：非混淆图退回普通无元数据
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='obf1'").fetchone()[0] == "no_ai_metadata"
     conn.close()
 
 
@@ -199,7 +194,7 @@ def test_jpeg_blockiness_detects_reencoding(tmp_path):
     assert jpeg_blockiness(jpg_path) > jpeg_blockiness(png_path)
 
 
-def test_reclassify_possible_reencode(tmp_path):
+def test_reclassify_retires_possible_reencode(tmp_path):
     import sqlite3
     from PIL import Image
     from qq_onebot_whitelist.maintenance import reclassify_possible_obfuscation
@@ -215,12 +210,12 @@ def test_reclassify_possible_reencode(tmp_path):
     img.save(low, quality=20)
     store.record_image(scope="group:1", user_id="u", result={
         "sha256": "l1", "format": "JPEG", "size": 1, "width": 64, "height": 64,
-        "kept_path": str(low), "retention_reason": "candidate",
+        "kept_path": str(low), "retention_reason": "possible_reencode",
     }, raw={})
     changed = reclassify_possible_obfuscation(tmp_path, reencode_threshold=1.0)
-    assert changed == 1
+    assert changed >= 1
     conn = sqlite3.connect(db_dir / "bot.db")
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='l1'").fetchone()[0] == "possible_reencode"
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='l1'").fetchone()[0] == "no_ai_metadata"
     conn.close()
 
 

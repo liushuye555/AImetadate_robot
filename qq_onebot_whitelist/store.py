@@ -187,6 +187,9 @@ class Store:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_obfuscated INTEGER')
         if 'xfq_confidence' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_confidence TEXT')
+        image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)').fetchall()}
+        if 'restored_path' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN restored_path TEXT')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
@@ -245,8 +248,8 @@ class Store:
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
-                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -262,8 +265,17 @@ class Store:
                     result.get('text_excerpt'),
                     kept_path,
                     result.get('retention_reason'),
+                    result.get('restored_path'),
                     json.dumps(raw, ensure_ascii=False),
                 ),
+            )
+            conn.commit()
+
+    def update_image_restored(self, image_id: int, restored_path: str | None) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'UPDATE images SET restored_path = ? WHERE id = ?',
+                (restored_path, int(image_id)),
             )
             conn.commit()
 

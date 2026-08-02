@@ -15,8 +15,7 @@ from .images import extract_image_segments, is_probable_sticker_result, is_stick
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
-from .obfuscation import find_obfuscated_match
-from .gilbert_obfuscation import analyze_image
+from .gilbert_obfuscation import analyze_image, restore_image
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -276,20 +275,17 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                             'xiaofanqie_obfuscated' if confidence == 'confirmed'
                             else 'xiaofanqie_compressed'
                         )
-            # 无元数据但与 AI 归档图感知哈希高度相似 → 疑似混淆副本
-            if result.get('retention_reason') not in ('xiaofanqie_obfuscated', 'xiaofanqie_compressed', 'ai_metadata') \
-                    and not result.get('has_ai_metadata') and result.get('phash') is not None:
-                match = find_obfuscated_match(
-                    result['phash'],
-                    store.archive_hashes(),
-                    threshold=config.obfuscation_threshold,
-                )
-                if match is not None:
-                    result['retention_reason'] = 'possible_obfuscation'
-            # 无原图可比对时：JPEG 块状伪影过高 → 疑似重编码（弱信号，待确认）
-            if result.get('retention_reason') in ('candidate', 'no_ai_metadata') \
-                    and float(result.get('blockiness') or 0) >= config.reencode_threshold:
-                result['retention_reason'] = 'possible_reencode'
+                        # 确认档自动解混淆：还原原图并存到 images/restored/
+                        if confidence == 'confirmed' and result.get('kept_path'):
+                            try:
+                                restored, _ = restore_image(
+                                    result['kept_path'],
+                                    config.data_dir / 'images' / 'restored' / f"{result.get('sha256')}.png",
+                                    layers=xfq_result.get('layers'),
+                                )
+                                result['restored_path'] = str(restored)
+                            except Exception as exc:
+                                print(f'restore failed: {type(exc).__name__}: {exc}')
             if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
                 store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
             # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式

@@ -113,16 +113,14 @@ def remove_sticker_records(project_dir: str | Path) -> int:
 
 
 def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5) -> int:
-    """重分类图片。
+    """重分类图片：小番茄混淆（Gilbert 曲线逆置换验证）。
 
-    优先级：
-    1. 小番茄混淆（Gilbert 曲线逆置换验证）→ xiaofanqie_obfuscated（算法级确认）
-       或 xiaofanqie_compressed（重压/缩放后，弱信号）；
-    2. pHash 匹配 AI 归档 → possible_obfuscation（旧启发式，可能误判）；
-    3. JPEG 块状伪影过高 → possible_reencode（弱信号）。
+    - 算法级确认 → xiaofanqie_obfuscated（并自动还原）；
+    - 重压/缩放弱信号 → xiaofanqie_compressed；
+    - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
     from .gilbert_obfuscation import analyze_image
-    from .obfuscation import find_obfuscated_match, image_phash, jpeg_blockiness
+    from .gilbert_obfuscation import restore_image
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -131,25 +129,9 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     store = Store(db)
     changed = 0
     with sqlite3.connect(db) as conn:
-        # 1) 补建 AI 归档哈希索引
-        known = {str(row[0]) for row in conn.execute('SELECT sha256 FROM image_hashes')}
-        for sha, kept_path in conn.execute(
-            "SELECT sha256, kept_path FROM images WHERE retention_reason='ai_metadata' AND kept_path IS NOT NULL"
-        ).fetchall():
-            if sha in known:
-                continue
-            path = Path(kept_path)
-            if not path.exists():
-                continue
-            try:
-                store.save_image_hash(sha, image_phash(path))
-                known.add(sha)
-            except Exception:
-                continue
-        # 2) 无元数据/候选/疑似图先做小番茄混淆算法级验证（带缓存）
-        archive_hashes = store.archive_hashes()
-        for row_id, kept_path, format, sha256 in conn.execute(
-            "SELECT id, kept_path, format, sha256 FROM images "
+        # 无元数据/候选/疑似图做小番茄混淆算法级验证（带缓存）
+        for row_id, kept_path, format, sha256, reason in conn.execute(
+            "SELECT id, kept_path, format, sha256, retention_reason FROM images "
             "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
             "AND kept_path IS NOT NULL"
         ).fetchall():
@@ -186,22 +168,64 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 else:
                     reason = 'xiaofanqie_compressed'
                 conn.execute("UPDATE images SET retention_reason=? WHERE id=?", (reason, row_id))
+                # 确认档自动解混淆：还原原图并存到 images/restored/
+                if reason == 'xiaofanqie_obfuscated' and xfq_result.get('layers'):
+                    try:
+                        restored_root = project_dir / 'data' / 'images' / 'restored'
+                        restored, _ = restore_image(
+                            path,
+                            restored_root / f'{sha256}.png',
+                            layers=xfq_result.get('layers'),
+                        )
+                        conn.execute("UPDATE images SET restored_path=? WHERE id=?", (str(restored), row_id))
+                    except Exception:
+                        pass
                 changed += 1
                 continue
+            # 旧启发式临时分类退役：非混淆图退回普通无元数据
+            if reason in ('possible_obfuscation', 'possible_reencode'):
+                conn.execute("UPDATE images SET retention_reason='no_ai_metadata' WHERE id=?", (row_id,))
+                changed += 1
+        conn.commit()
+    return changed
+
+
+def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
+    """为已确认的小番茄混淆图补齐自动还原图（images/restored/ + DB restored_path）。"""
+    from .gilbert_obfuscation import restore_image
+    from .store import Store
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    store = Store(db)
+    restored_root = project_dir / 'data' / 'images' / 'restored'
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, sha256, kept_path FROM images "
+            "WHERE retention_reason='xiaofanqie_obfuscated' AND restored_path IS NULL "
+            "AND kept_path IS NOT NULL"
+        ).fetchall()
+        for row_id, sha256, kept_path in rows:
+            path = Path(kept_path)
+            if not path.exists():
+                continue
+            cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
+            layers = cached[1] if cached else None
             try:
-                phash_value = image_phash(path)
+                restored, _ = restore_image(
+                    path,
+                    restored_root / f'{sha256}.png',
+                    layers=layers,
+                )
+                conn.execute(
+                    'UPDATE images SET restored_path=? WHERE id=?',
+                    (str(restored), row_id),
+                )
+                changed += 1
             except Exception:
                 continue
-            if archive_hashes and find_obfuscated_match(phash_value, archive_hashes, threshold=threshold):
-                conn.execute("UPDATE images SET retention_reason='possible_obfuscation' WHERE id=?", (row_id,))
-                changed += 1
-            elif str(format or '').upper().startswith('JPEG'):
-                try:
-                    if jpeg_blockiness(path) >= reencode_threshold:
-                        conn.execute("UPDATE images SET retention_reason='possible_reencode' WHERE id=?", (row_id,))
-                        changed += 1
-                except Exception:
-                    continue
         conn.commit()
     return changed
 
@@ -213,10 +237,11 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     missing_cleared = store.clear_missing_image_paths(project_dir)
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
     obfuscation_reclassified = reclassify_possible_obfuscation(project_dir)
+    obfuscation_restored = restore_confirmed_obfuscation(project_dir)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

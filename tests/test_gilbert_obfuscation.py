@@ -10,6 +10,7 @@ from qq_onebot_whitelist.gilbert_obfuscation import (
     analyze_image,
     curve_order,
     is_obfuscated,
+    restore_image,
 )
 
 
@@ -160,3 +161,31 @@ def test_oversized_image_skipped(tmp_path):
     Image.frombytes('L', (w, h), raw).save(path)
 
     assert analyze_image(path) is None
+
+
+def test_restore_image_recovers_original_exactly(tmp_path):
+    w, h = 128, 96
+    raw = _make_gradient(w, h)
+    obf_path = tmp_path / 'obf.png'
+    Image.frombytes('L', (w, h), _permute(raw, w, h, 'enc')).save(obf_path)
+
+    out = tmp_path / 'restored.png'
+    restored_path, layers = restore_image(obf_path, out, layers=1)
+    assert layers == 1
+    with Image.open(restored_path) as im:
+        assert im.size == (w, h)
+        assert im.convert('L').tobytes() == raw
+
+
+def test_restore_image_detects_layer_count(tmp_path):
+    w, h = 96, 96
+    raw = _make_checker(w, h)
+    twice = _permute(_permute(raw, w, h, 'enc'), w, h, 'enc')
+    obf_path = tmp_path / 'obf2.png'
+    Image.frombytes('L', (w, h), twice).save(obf_path)
+
+    out = tmp_path / 'restored2.png'
+    _, layers = restore_image(obf_path, out, layers=None)
+    assert layers == 2
+    with Image.open(out) as im:
+        assert im.convert('L').tobytes() == raw

@@ -9,7 +9,6 @@ VALUE_SCORE = {
     'nearby_ai_context': 2,
     'xiaofanqie_obfuscated': 2,
     'xiaofanqie_compressed': 2,
-    'possible_obfuscation': 2,
     'candidate': 3,
     'no_ai_metadata': 4,
 }

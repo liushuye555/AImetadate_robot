@@ -19,8 +19,6 @@ CATEGORY_NAMES = {
     'candidate': '04_候选待观察',
     'xiaofanqie_obfuscated': '05_小番茄混淆',
     'xiaofanqie_compressed': '05_小番茄混淆_压缩',
-    'possible_obfuscation': '05_疑似混淆',
-    'possible_reencode': '06_疑似重编码',
     'no_ai_metadata': '99_普通无元数据',
 }
 
@@ -175,8 +173,10 @@ def build_view(project_dir: Path) -> dict[str, int]:
     view.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
+    image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
+    restored_col = 'restored_path, ' if 'restored_path' in image_cols else ''
     rows = conn.execute(
-        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, text_excerpt, raw_json
+        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
@@ -204,6 +204,17 @@ def build_view(project_dir: Path) -> dict[str, int]:
         dst = view / cat / size_class / filename
         mode = make_link_or_copy(src, dst)
         counts[cat] = counts.get(cat, 0) + 1
+        # 已自动解混淆的图片：把还原图一并放进分类，方便直接查看原内容
+        restored_path = row['restored_path'] if 'restored_path' in row.keys() else None
+        if restored_path:
+            restored_src = source_path(project_dir, restored_path)
+            if restored_src.exists():
+                restored_name = safe_name(
+                    f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_解混淆"
+                ) + restored_src.suffix
+                restored_dst = view / cat / size_class / restored_name
+                make_link_or_copy(restored_src, restored_dst)
+                counts[cat] = counts.get(cat, 0) + 1
         if reason == 'nearby_ai_context':
             try:
                 raw = json.loads(row['raw_json'] or '{}')
@@ -247,8 +258,6 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
-        '05_疑似混淆：旧版 pHash 启发式标记（可能误判，待复核）。\n'
-        '06_疑似重编码：JPEG 块状伪影过高（弱信号）。\n'
         '99_普通无元数据：正常图片但无 AI 元数据。\n',
         encoding='utf-8',
     )

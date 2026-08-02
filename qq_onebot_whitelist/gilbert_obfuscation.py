@@ -249,3 +249,50 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
 def is_obfuscated(path: str | Path) -> bool:
     result = analyze_image(path)
     return bool(result and result.get('obfuscated'))
+
+
+def restore_image(
+    src_path: str | Path,
+    out_path: str | Path,
+    layers: int | None = None,
+    max_layers: int = MAX_LAYERS,
+) -> tuple[Path, int]:
+    """对混淆图做逆置换还原，保存为无损 PNG。
+
+    layers 已知时按层数直接还原；未知时尝试 1..max_layers 层，
+    取还原后灰度 TV 最低的一档（对应真实层数）。
+    返回 (输出路径, 实际使用层数)。
+    """
+    from PIL import Image as _Image
+
+    with _Image.open(src_path) as img:
+        width, height = img.size
+        if width * height > MAX_RESTORE_PIXELS:
+            raise ValueError(f'图片过大（{width}x{height}），无法还原')
+        rgb = img.convert('RGB')
+    channels = [list(rgb.getchannel(name).tobytes()) for name in ('R', 'G', 'B')]
+    order = _curve_order_cached(width, height)
+    n = width * height
+    shift = round((math.sqrt(5) - 1) / 2 * n)
+
+    layer_candidates = [max(1, int(layers))] if layers else list(range(1, max_layers + 1))
+    best: tuple[float, int, list[bytes]] | None = None
+    for k in layer_candidates:
+        restored_channels: list[bytes] = []
+        for channel in channels:
+            cur = bytearray(channel)
+            for _ in range(k):
+                cur = _apply_decoder(cur, order, width, shift)
+            restored_channels.append(bytes(cur))
+        # 用 R 通道的栅格 TV 近似还原质量（层数正确时最平滑）
+        tv = _raster_tv(memoryview(restored_channels[0]), width, height)
+        if best is None or tv < best[0]:
+            best = (tv, k, restored_channels)
+    if best is None:
+        raise ValueError('无法确定还原层数')
+    _, used_layers, restored_channels = best
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    merged = _Image.merge('RGB', [_Image.frombytes('L', (width, height), c) for c in restored_channels])
+    merged.save(out_path, format='PNG')
+    return out_path, used_layers
