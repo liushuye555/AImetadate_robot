@@ -51,6 +51,13 @@ def test_collection_allows_respects_profile():
     assert onebot.collection_allows("456", "images", config) is True  # 未配置群全量
 
 
+def test_collection_module_helpers():
+    from qq_onebot_whitelist import collection
+    assert collection.COLLECTION_KINDS == ("images", "links", "files", "forwards")
+    assert collection.is_forward_event({"message_type": "forward"}) is True
+    assert collection.is_forward_event({"message": [{"type": "text", "data": {"text": "hi"}}]}) is False
+
+
 def test_system_cpu_percent_returns_float():
     value = onebot.system_cpu_percent()
     assert isinstance(value, float)

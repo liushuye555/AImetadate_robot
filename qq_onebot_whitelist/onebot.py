@@ -10,6 +10,7 @@ from typing import Any
 import websockets
 
 from .archive_budget import enforce_archive_budget
+from .collection import collection_allows, is_forward_event
 from .commands import build_reply, scope_for_event
 from .config import AppConfig, load_config
 from .ai_relevance import is_positive_feedback_text
@@ -49,14 +50,6 @@ def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
         _echo_state.pop(key, None)
         return text
     return None
-
-
-def collection_allows(scope: str, kind: str, config: AppConfig) -> bool:
-    """群级采集开关：未配置的群默认采集全部类型。"""
-    profile = config.collection_groups.get(scope)
-    if profile is None:
-        return True
-    return bool(profile.get(kind, True))
 
 
 def system_cpu_percent() -> float:
@@ -339,7 +332,7 @@ def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None
     scope = scope_for_event(event)
     user_id = str(event.get('user_id') or '')
     text = extract_text(event)
-    if event.get('message_type') == 'forward' or 'forward' in json.dumps(event, ensure_ascii=False):
+    if is_forward_event(event):
         if not collection_allows(scope, 'forwards', config):
             return
     links = store.record_message(

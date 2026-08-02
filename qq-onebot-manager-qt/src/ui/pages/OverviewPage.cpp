@@ -37,8 +37,12 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     m_stats->setObjectName("muted");
     layout->addWidget(m_stats);
 
-    auto *buttons = new QHBoxLayout;
+    auto *buttons = new QVBoxLayout;
     buttons->setSpacing(10);
+    auto *row1 = new QHBoxLayout;
+    row1->setSpacing(10);
+    auto *row2 = new QHBoxLayout;
+    row2->setSpacing(10);
     auto *start = new QPushButton(Strings::zh("start"), this);
     start->setObjectName("primary");
     auto *stop = new QPushButton(Strings::zh("stop"), this);
@@ -50,9 +54,14 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     auto *config = new QPushButton(Strings::zh("openConfig"), this);
     auto *history = new QPushButton(Strings::zh("importHistory"), this);
     auto *napcat = new QPushButton(Strings::zh("openNapcat"), this);
-    for (QPushButton *b : {start, stop, restart, refresh, logs, reports, config, history, napcat})
-        buttons->addWidget(b);
-    buttons->addStretch();
+    for (QPushButton *b : {start, stop, restart, refresh})
+        row1->addWidget(b);
+    row1->addStretch();
+    for (QPushButton *b : {logs, reports, config, history, napcat})
+        row2->addWidget(b);
+    row2->addStretch();
+    buttons->addLayout(row1);
+    buttons->addLayout(row2);
     layout->addLayout(buttons);
     layout->addStretch();
 
