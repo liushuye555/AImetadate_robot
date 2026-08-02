@@ -1,0 +1,15 @@
+QMainWindow, QWidget#content { background: #101216; }
+QListWidget#nav { background: #0b0d12; border: none; outline: 0; }
+QListWidget#nav::item { color: #98a2b3; padding: 10px 16px; }
+QListWidget#nav::item:selected { background: #1f2937; color: #ffffff; border-radius: 6px; }
+QFrame#card { background: #171a21; border: 1px solid #2b313d; border-radius: 10px; }
+QLabel#cardTitle { font-size: 15px; font-weight: 600; color: #eef1f6; }
+QLabel#muted { color: #929cab; }
+QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #343a46; background: #1b1f27; color: #eef1f6; }
+QPushButton:hover { background: #242a35; }
+QPushButton:disabled { color: #6b7280; }
+QPushButton#primary { background: #2563eb; color: white; border: none; }
+QPushButton#primary:hover { background: #1d4ed8; }
+QPushButton#danger { background: #b53b49; color: white; border: none; }
+QLineEdit, QTextEdit, QComboBox, QSpinBox { border: 1px solid #343a46; border-radius: 6px; padding: 4px 8px; background: #171a21; color: #eef1f6; }
+QLineEdit.invalid { border: 1px solid #d64550; background: #2a1518; }

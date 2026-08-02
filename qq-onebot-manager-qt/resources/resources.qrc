@@ -1,5 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/app.svg</file>
+        <file>themes/light.qss</file>
+        <file>themes/dark.qss</file>
     </qresource>
 </RCC>

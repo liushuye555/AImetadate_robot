@@ -3,6 +3,7 @@
 #include <QMessageBox>
 #include <QWidget>
 #include "app/SingleInstance.h"
+#include "ui/theme/ThemeManager.h"
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -14,6 +15,8 @@ int main(int argc, char *argv[]) {
         QMessageBox::information(nullptr, "QQ OneBot 管理器", "管理器已在运行。");
         return 0;
     }
+
+    ThemeManager::apply(&app, ThemeManager::Theme::Light);
 
     QWidget window;
     window.setWindowTitle("QQ OneBot 管理器");
