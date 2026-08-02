@@ -23,9 +23,15 @@ def deduplicate_image_storage(project_dir: str | Path, store: Store) -> int:
             continue
         candidate.unlink(missing_ok=True)
         removed += 1
+    # 批量更新 kept_path：逐条开连接写库在归档量大时会慢 5~10 分钟
+    updates = []
     for digest, path in {**candidates, **archive}.items():
         target = archive.get(digest) or path
-        store.set_image_path_for_sha(digest, target)
+        updates.append((str(target), digest))
+    if updates:
+        with sqlite3.connect(store.path) as conn:
+            conn.executemany('UPDATE images SET kept_path = ? WHERE sha256 = ?', updates)
+            conn.commit()
     return removed
 
 
@@ -158,7 +164,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                             ratio=float(xfq_result['ratio']),
                             layers=xfq_result.get('layers'),
                             obfuscated=bool(xfq_result.get('obfuscated')),
-                            confidence=xfq_result.get('confidence'),
+                            confidence=xfq_result.get('confidence') or 'none',
                         )
                     except Exception:
                         pass

@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -23,6 +24,16 @@ from .config import AppConfig, load_config
 from .ai_context_analyze import analyze_configured, configured_scopes
 from .daily_report import build_daily_resource_report, should_run_daily_report, split_message, today_key
 from .maintenance import sync_image_files
+from .load_aware import load_aware_defer_seconds, load_aware_ok, system_cpu_percent
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_sync_requested = threading.Event()
+
+
+def request_image_sync() -> None:
+    """请求后台负载感知同步重建视图（面板/回复触发）。"""
+    _sync_requested.set()
 from .policy import extract_text, should_reply
 from .schedule import is_in_time_windows
 from .store import Store
@@ -63,36 +74,6 @@ def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
         _echo_state.pop(key, None)
         return text
     return None
-
-
-def system_cpu_percent() -> float:
-    """通过 GetSystemTimes 采样 CPU 占用（0~100），失败时返回 0。"""
-    try:
-        import ctypes
-
-        class FILETIME(ctypes.Structure):
-            _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
-
-        def sample():
-            idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
-            ctypes.windll.kernel32.GetSystemTimes(
-                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
-            )
-            return idle, kernel, user
-
-        def to64(ft: FILETIME) -> int:
-            return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
-
-        idle1, kernel1, user1 = sample()
-        time.sleep(0.4)
-        idle2, kernel2, user2 = sample()
-        idle = to64(idle2) - to64(idle1)
-        total = (to64(kernel2) - to64(kernel1)) + (to64(user2) - to64(user1))
-        if total <= 0:
-            return 0.0
-        return max(0.0, min(100.0, 100.0 * (1.0 - idle / total)))
-    except Exception:
-        return 0.0
 
 
 async def call_action(ws, action: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -334,14 +315,13 @@ async def ai_context_loop(config_path: str | Path, store: Store) -> None:
                 continue
             should_run, pending, current = should_run_ai_context(config_path, store, datetime.now())
             if should_run and not running:
-                if current.load_aware_enabled:
-                    cpu = await asyncio.to_thread(system_cpu_percent)
-                    if cpu >= current.load_aware_cpu_threshold:
-                        delay = max(1, current.load_aware_check_seconds)
-                        print(f'load_aware: CPU {cpu:.0f}% >= {current.load_aware_cpu_threshold}%，推迟 AI 分析 {delay}s')
-                        retry_after = datetime.now() + timedelta(seconds=delay)
-                        await asyncio.sleep(5)
-                        continue
+                cpu = await asyncio.to_thread(system_cpu_percent)
+                if not load_aware_ok(current, cpu):
+                    delay = load_aware_defer_seconds(current)
+                    print(f'load_aware: CPU {cpu:.0f}% >= {current.load_aware_cpu_threshold}%，推迟 AI 分析 {delay}s')
+                    retry_after = datetime.now() + timedelta(seconds=delay)
+                    await asyncio.sleep(5)
+                    continue
                 running = True
                 try:
                     print(f'ai_context auto run starting, pending messages={pending}')
@@ -359,6 +339,62 @@ async def ai_context_loop(config_path: str | Path, store: Store) -> None:
             retry_after = datetime.now() + timedelta(seconds=delay)
             print(f'ai_context_loop failed: {type(exc).__name__}: {exc}; retry_in={delay}s')
         await asyncio.sleep(max(1, current.ai_context_auto_interval_minutes if current else 1) * 60)
+
+
+async def image_worker_loop(config: AppConfig, store: Store) -> None:
+    """负载感知的延迟图片处理：高 CPU（如打游戏）时排队，空闲后逐张处理。"""
+    from .collection import (
+        deferred_image_count,
+        pop_deferred_image,
+        process_event_image,
+        requeue_deferred_image,
+    )
+    while True:
+        item = pop_deferred_image()
+        if item is None:
+            await asyncio.sleep(2)
+            continue
+        if not load_aware_ok(config):
+            requeue_deferred_image(item)
+            print(f'load_aware: CPU busy，推迟图片处理（排队 {deferred_image_count()} 张）')
+            await asyncio.sleep(load_aware_defer_seconds(config))
+            continue
+        scope, user_id, image, nearby_text, message_db_id, message_id = item
+        event = {'message_id': message_id} if message_id is not None else None
+        await asyncio.to_thread(
+            process_event_image,
+            store,
+            scope=scope,
+            user_id=user_id,
+            image=image,
+            nearby_text=nearby_text,
+            message_db_id=message_db_id,
+            config=config,
+            event=event,
+        )
+
+
+async def background_sync_loop(config: AppConfig) -> None:
+    """负载感知的后台图片同步：CPU 忙时推迟，空闲后执行重分类+还原+重建视图。"""
+    last_sync = 0.0
+    while True:
+        if not load_aware_ok(config):
+            print('load_aware: CPU busy，推迟图片同步')
+            await asyncio.sleep(load_aware_defer_seconds(config))
+            continue
+        if _sync_requested.is_set() or (time.monotonic() - last_sync) >= 3600:
+            try:
+                counts = await asyncio.to_thread(
+                    sync_image_files, _REPO_ROOT, ttl_hours=config.candidate_ttl_hours
+                )
+                print('image view synced: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
+            except Exception as exc:
+                print(f'image view sync failed: {type(exc).__name__}: {exc}')
+            last_sync = time.monotonic()
+            _sync_requested.clear()
+            await asyncio.sleep(30)
+        else:
+            await asyncio.sleep(10)
 
 
 async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
@@ -459,12 +495,18 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         asyncio.create_task(asyncio.to_thread(ai_match_and_collect, store, event, extract_text(event), config))
     if not should_reply(event, config.bot):
         return False
+    def load_aware_view_builder():
+        from .build_image_view import stale_view_counts
+        if not load_aware_ok(config):
+            request_image_sync()
+            return stale_view_counts(_REPO_ROOT / 'data' / 'view')
+        return sync_image_files(_REPO_ROOT, ttl_hours=config.candidate_ttl_hours)
     reply = build_reply(
         event,
         store,
         default_summary_limit=config.default_summary_limit,
         max_summary_limit=config.max_summary_limit,
-        view_builder=lambda: sync_image_files(Path.cwd()),
+        view_builder=load_aware_view_builder,
         config_path=config_path,
         language=config.language,
     )
@@ -476,8 +518,8 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
     try:
         async with websockets.connect(config.onebot_ws_url) as action_ws:
             await startup_history_catchup(action_ws, config, store)
-        counts = sync_image_files(Path.cwd(), ttl_hours=config.candidate_ttl_hours)
-        print('image view refreshed after startup catch-up: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
+        request_image_sync()
+        print('startup history catch-up done; image view sync scheduled (load-aware)')
     except Exception as exc:
         print(f'startup history catch-up failed: {type(exc).__name__}: {exc}')
 
@@ -485,11 +527,9 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
 async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
-    try:
-        counts = sync_image_files(Path.cwd(), ttl_hours=config.candidate_ttl_hours)
-        print('image view refreshed on startup: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
-    except Exception as exc:
-        print(f'image view refresh failed on startup: {type(exc).__name__}: {exc}')
+    # 启动不再阻塞在完整同步上：交给后台负载感知循环（CPU 忙时自动推迟）
+    sync_task = asyncio.create_task(background_sync_loop(config))
+    image_task = asyncio.create_task(image_worker_loop(config, store))
     async with websockets.connect(config.onebot_ws_url) as ws:
         login_info = {}
         try:
@@ -524,6 +564,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             ai_task.cancel()
             keepalive_task.cancel()
             status_task.cancel()
+            sync_task.cancel()
+            image_task.cancel()
             from . import control
             control.write_status(
                 {"napcat": control.port_open(control.NAPCAT_PORT),

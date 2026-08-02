@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from .config import AppConfig
@@ -16,10 +18,14 @@ from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, restore_image
+from .load_aware import load_aware_ok
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
 _AI_MATCH_CACHE: dict[tuple[str, str], bool] = {}
+_deferred_images: deque[tuple] = deque()
+_deferred_lock = Lock()
+MAX_DEFERRED_IMAGES = 300
 
 
 COLLECTION_KINDS = ("images", "links", "files", "forwards")
@@ -238,69 +244,122 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
     collect_custom(store, event, text, config)
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return
+    load_ok = load_aware_ok(config)
     for image in extract_image_segments(event):
-        try:
-            result = process_image_url(
-                image['url'],
-                tmp_dir=config.data_dir / 'tmp',
-                archive_root=config.data_dir / 'images' / 'ai',
-                candidate_root=config.data_dir / 'images' / 'candidates',
-                filename_hint=image.get('file'),
-                nearby_text=nearby_text,
-            )
-            # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
-            # 结果缓存到 image_hashes，避免重分类时重复分析。
-            if not result.get('has_ai_metadata') and result.get('kept_path'):
-                xfq_result = None
+        if not load_ok:
+            defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id')))
+            continue
+        process_event_image(
+            store,
+            scope=scope,
+            user_id=user_id,
+            image=image,
+            nearby_text=nearby_text,
+            message_db_id=message_db_id,
+            config=config,
+            event=event,
+        )
+
+
+def defer_event_image(item: tuple) -> bool:
+    """高负载时把单张图片的处理任务入队（有界），返回是否入队成功。"""
+    with _deferred_lock:
+        if len(_deferred_images) >= MAX_DEFERRED_IMAGES:
+            return False
+        _deferred_images.append(item)
+        return True
+
+
+def pop_deferred_image() -> tuple | None:
+    with _deferred_lock:
+        return _deferred_images.popleft() if _deferred_images else None
+
+
+def requeue_deferred_image(item: tuple) -> None:
+    """CPU 仍忙时把任务放回队首，保持顺序。"""
+    with _deferred_lock:
+        _deferred_images.appendleft(item)
+
+
+def deferred_image_count() -> int:
+    with _deferred_lock:
+        return len(_deferred_images)
+
+
+def process_event_image(
+    store: Store,
+    *,
+    scope: str,
+    user_id: str,
+    image: dict[str, Any],
+    nearby_text: str,
+    message_db_id: int | None,
+    config: AppConfig,
+    event: dict[str, Any] | None = None,
+) -> None:
+    """处理单张图片：下载 → 归档 → 小番茄混淆检测/还原 → 表情包过滤 → 入库。"""
+    try:
+        result = process_image_url(
+            image['url'],
+            tmp_dir=config.data_dir / 'tmp',
+            archive_root=config.data_dir / 'images' / 'ai',
+            candidate_root=config.data_dir / 'images' / 'candidates',
+            filename_hint=image.get('file'),
+            nearby_text=nearby_text,
+        )
+        # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
+        # 结果缓存到 image_hashes，避免重分类时重复分析。
+        if not result.get('has_ai_metadata') and result.get('kept_path'):
+            xfq_result = None
+            try:
+                xfq_result = analyze_image(result['kept_path'])
+            except Exception:
+                pass
+            if xfq_result is not None:
+                result['xfq_ratio'] = round(float(xfq_result['ratio']), 4)
+                result['xfq_layers'] = xfq_result.get('layers')
                 try:
-                    xfq_result = analyze_image(result['kept_path'])
-                except Exception:
-                    pass
-                if xfq_result is not None:
-                    result['xfq_ratio'] = round(float(xfq_result['ratio']), 4)
-                    result['xfq_layers'] = xfq_result.get('layers')
-                    try:
                         store.save_obfuscation_score(
                             str(result.get('sha256') or ''),
                             ratio=float(xfq_result['ratio']),
                             layers=xfq_result.get('layers'),
                             obfuscated=bool(xfq_result.get('obfuscated')),
-                            confidence=xfq_result.get('confidence'),
+                            confidence=xfq_result.get('confidence') or 'none',
                         )
-                    except Exception:
-                        pass
-                    if xfq_result.get('obfuscated'):
-                        confidence = xfq_result.get('confidence')
-                        result['retention_reason'] = (
-                            'xiaofanqie_obfuscated' if confidence == 'confirmed'
-                            else 'xiaofanqie_compressed'
-                        )
-                        # 确认档自动解混淆：还原原图并存到 images/restored/
-                        if confidence == 'confirmed' and result.get('kept_path'):
-                            try:
-                                restored, _ = restore_image(
-                                    result['kept_path'],
-                                    config.data_dir / 'images' / 'restored' / f"{result.get('sha256')}.png",
-                                    layers=xfq_result.get('layers'),
-                                )
-                                result['restored_path'] = str(restored)
-                            except Exception as exc:
-                                print(f'restore failed: {type(exc).__name__}: {exc}')
-            if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
-                store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
-            # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式
-            is_sticker = is_sticker_format(result) and (store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1) >= max(1, config.sticker_repeat_threshold)
-            if is_sticker and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
-                kept = result.get('kept_path')
-                if kept:
-                    Path(kept).unlink(missing_ok=True)
-                result['kept_path'] = None
-                result['retention_reason'] = 'sticker_filtered'
-            store.record_image(
-                scope=scope,
-                user_id=user_id,
-                result=result,
-                raw={'image': image, 'message_db_id': message_db_id, 'message_id': event.get('message_id')},
-            )
-        except Exception as exc:
-            print(f'image processing failed: {type(exc).__name__}: {exc}')
+                except Exception:
+                    pass
+                if xfq_result.get('obfuscated'):
+                    confidence = xfq_result.get('confidence')
+                    result['retention_reason'] = (
+                        'xiaofanqie_obfuscated' if confidence == 'confirmed'
+                        else 'xiaofanqie_compressed'
+                    )
+                    # 确认档自动解混淆：还原原图并存到 images/restored/
+                    if confidence == 'confirmed' and result.get('kept_path'):
+                        try:
+                            restored, _ = restore_image(
+                                result['kept_path'],
+                                config.data_dir / 'images' / 'restored' / f"{result.get('sha256')}.png",
+                                layers=xfq_result.get('layers'),
+                            )
+                            result['restored_path'] = str(restored)
+                        except Exception as exc:
+                            print(f'restore failed: {type(exc).__name__}: {exc}')
+        if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
+            store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
+        # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式
+        is_sticker = is_sticker_format(result) and (store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1) >= max(1, config.sticker_repeat_threshold)
+        if is_sticker and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
+            kept = result.get('kept_path')
+            if kept:
+                Path(kept).unlink(missing_ok=True)
+            result['kept_path'] = None
+            result['retention_reason'] = 'sticker_filtered'
+        store.record_image(
+            scope=scope,
+            user_id=user_id,
+            result=result,
+            raw={'image': image, 'message_db_id': message_db_id, 'message_id': (event or {}).get('message_id')},
+        )
+    except Exception as exc:
+        print(f'image processing failed: {type(exc).__name__}: {exc}')

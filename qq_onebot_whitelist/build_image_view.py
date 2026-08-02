@@ -23,6 +23,19 @@ CATEGORY_NAMES = {
 }
 
 
+def stale_view_counts(view: Path) -> dict[str, int]:
+    """不重建视图，直接从现有视图目录统计各分类图片数（低开销，供负载忙时兜底）。"""
+    image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
+    counts: dict[str, int] = {}
+    if view.exists():
+        for cat in sorted(view.iterdir()):
+            if cat.is_dir():
+                n = sum(1 for f in cat.rglob('*') if f.is_file() and f.suffix.lower() in image_exts)
+                if n:
+                    counts[cat.name] = n
+    return counts
+
+
 def safe_name(text: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '_', text)[:180]
 

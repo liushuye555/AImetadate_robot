@@ -300,8 +300,23 @@ def cmd_custom(args: argparse.Namespace) -> int:
 
 
 def cmd_view(args: argparse.Namespace) -> int:
-    """重新生成报告视图（含资源/文件页），并输出分类列表。"""
+    """重新生成报告视图（含资源/文件页），并输出分类列表。
+
+    负载感知：启用负载调度且 CPU 超过阈值时，不重建视图，
+    直接返回现有分类统计并标注 deferred=true。
+    """
     try:
+        from .config import load_config
+        from .load_aware import load_aware_ok
+        config = load_config(REPO_ROOT / 'config.yaml')
+        if not load_aware_ok(config):
+            from .build_image_view import stale_view_counts
+            counts = stale_view_counts(REPO_ROOT / 'data' / 'view')
+            print(json.dumps({"categories": [
+                {"name": name, "count": count, "url": name + "/index.html"}
+                for name, count in sorted(counts.items())
+            ], "deferred": True}, ensure_ascii=False))
+            return 0
         from .maintenance import sync_image_files
         counts = sync_image_files(REPO_ROOT)
         categories = []
@@ -309,7 +324,7 @@ def cmd_view(args: argparse.Namespace) -> int:
             if name.startswith(('image_', 'missing_', 'candidates_', 'obfuscation_', 'empty_', 'resource_')):
                 continue
             categories.append({"name": name, "count": count, "url": name + "/index.html"})
-        print(json.dumps({"categories": categories}, ensure_ascii=False))
+        print(json.dumps({"categories": categories, "deferred": False}, ensure_ascii=False))
         return 0
     except Exception as exc:
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
