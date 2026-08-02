@@ -238,6 +238,38 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _fetch_groups_once() -> list[dict[str, str]]:
+    import websockets
+    from .config import load_config
+    config = load_config(REPO_ROOT / "config.yaml")
+    async with websockets.connect(config.onebot_ws_url) as ws:
+        echo = f"groups-{datetime.now().timestamp()}"
+        await ws.send(
+            json.dumps({"action": "get_group_list", "params": {}, "echo": echo}, ensure_ascii=False)
+        )
+        while True:
+            raw = await ws.recv()
+            data = json.loads(raw)
+            if data.get("echo") == echo:
+                rows = data.get("data") or []
+                return [
+                    {"id": str(item.get("group_id") or ""), "name": str(item.get("group_name") or "")}
+                    for item in rows
+                    if item.get("group_id")
+                ]
+
+
+def cmd_groups(args: argparse.Namespace) -> int:
+    import asyncio
+    try:
+        groups = asyncio.run(_fetch_groups_once())
+        print(json.dumps(groups, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -245,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
+    sub.add_parser("groups", help="list groups the bot has joined")
     sub.add_parser("stats")
     sub.add_parser("report-preview")
     sub.add_parser("report-send")
@@ -268,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         "stats": cmd_stats,
         "report-preview": cmd_report_preview,
         "report-send": cmd_report_send,
+        "groups": cmd_groups,
     }
     return handlers[args.command](args)
 

@@ -100,10 +100,12 @@ QWidget *SettingsPage::buildGeneralTab() {
     m_autoStart->setChecked(AutoStart::isEnabled());
     m_notifications = new QCheckBox(general);
     m_notifications->setChecked(true);
+    auto *webui = new QPushButton(Strings::zh("openNapcat"), general);
     generalForm->addRow(Strings::zh("language"), m_language);
     generalForm->addRow(Strings::zh("theme"), m_theme);
     generalForm->addRow(Strings::zh("autoStart"), m_autoStart);
     generalForm->addRow(Strings::zh("notifications"), m_notifications);
+    generalForm->addRow(Strings::zh("webui"), webui);
     layout->addWidget(general);
     layout->addStretch();
 
@@ -121,6 +123,7 @@ QWidget *SettingsPage::buildGeneralTab() {
         emit autoStartToggled(AutoStart::isEnabled());
     });
     connect(m_notifications, &QCheckBox::toggled, this, &SettingsPage::notificationsToggled);
+    connect(webui, &QPushButton::clicked, this, [this] { emit webuiRequested(); });
     return scroll;
 }
 
@@ -180,9 +183,11 @@ QWidget *SettingsPage::buildCollectionEditor() {
     auto *add = new QPushButton(Strings::zh("addGroup"), group);
     auto *edit = new QPushButton(Strings::zh("editGroup"), group);
     auto *remove = new QPushButton(Strings::zh("removeGroup"), group);
+    auto *scan = new QPushButton(Strings::zh("scanGroups"), group);
     buttons->addWidget(add);
     buttons->addWidget(edit);
     buttons->addWidget(remove);
+    buttons->addWidget(scan);
     buttons->addStretch();
     v->addLayout(buttons);
     layout->addWidget(group);
@@ -203,7 +208,49 @@ QWidget *SettingsPage::buildCollectionEditor() {
         rebuildCollectionList();
         markDirty();
     });
+    connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
     return scroll;
+}
+
+void SettingsPage::setGroups(const QVariantList &groups) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(Strings::zh("scanGroups"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *list = new QListWidget(&dialog);
+    for (const QVariant &group : groups) {
+        const QJsonObject obj = group.toJsonObject();
+        const QString id = obj.value("id").toString();
+        const QString name = obj.value("name").toString();
+        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
+        item->setData(Qt::UserRole, id);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
+        list->addItem(item);
+    }
+    layout->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    int added = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        QListWidgetItem *item = list->item(i);
+        if (item->checkState() != Qt::Checked) continue;
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty() || m_collectionMap.contains(id)) continue;
+        QJsonObject rule;
+        rule.insert("images", true);
+        rule.insert("links", true);
+        rule.insert("files", true);
+        rule.insert("forwards", true);
+        m_collectionMap.insert(id, rule);
+        added++;
+    }
+    if (added > 0) {
+        rebuildCollectionList();
+        markDirty();
+    }
 }
 
 void SettingsPage::setSchema(const QVariant &schemaVariant) {

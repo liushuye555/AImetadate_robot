@@ -139,6 +139,19 @@ int main(int argc, char *argv[]) {
         ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
     });
     QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
+    auto *scanControl = new ServiceControl(&window);
+    QObject::connect(settings, &SettingsPage::groupsScanRequested, scanControl, [scanControl] {
+        scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
+    });
+    QObject::connect(scanControl, &ServiceControl::finished, settings, [settings](bool ok, QString out) {
+        if (!ok) return;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isArray())
+            settings->setGroups(doc.array().toVariantList());
+    });
+    QObject::connect(settings, &SettingsPage::webuiRequested, [] {
+        QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
+    });
 
     auto *notifier = new Notifier(window.trayIcon(), &window);
     QObject::connect(settings, &SettingsPage::notificationsToggled, notifier, &Notifier::setEnabled);

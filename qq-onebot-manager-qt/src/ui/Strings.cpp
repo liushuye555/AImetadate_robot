@@ -61,6 +61,8 @@ QString Strings::zh(const QString &key) {
     if (key == "optionalPlaceholder") return "留空=不限";
     if (key == "openNapcat") return "打开 NapCat WebUI";
     if (key == "staleHint") return "状态未知：机器人未运行或状态文件过期。请先在 NapCat WebUI 登录 QQ，再点击“启动”。";
+    if (key == "scanGroups") return "扫描已加入的群";
+    if (key == "webui") return "NapCat WebUI";
     return key;
 }
 
@@ -121,6 +123,8 @@ QString Strings::en(const QString &key) {
     if (key == "optionalPlaceholder") return "Leave empty = unlimited";
     if (key == "openNapcat") return "Open NapCat WebUI";
     if (key == "staleHint") return "Status unknown: bot is not running or status is stale. Log in via NapCat WebUI, then click Start.";
+    if (key == "scanGroups") return "Scan joined groups";
+    if (key == "webui") return "NapCat WebUI";
     return key;
 }
 

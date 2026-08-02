@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <QJsonObject>
+#include <QVariant>
 #include <QHash>
 #include <QMap>
 
@@ -20,12 +21,15 @@ public:
     void setSchema(const QVariant &schema);
     void setSavedMessage(const QString &text);
     void showError(const QString &text);
+    void setGroups(const QVariantList &groups);
     QComboBox *languageCombo() const { return m_language; }
     QComboBox *themeCombo() const { return m_theme; }
     QCheckBox *autoStartBox() const { return m_autoStart; }
     QCheckBox *notificationsBox() const { return m_notifications; }
 signals:
     void saveRequested(QJsonObject patch);
+    void groupsScanRequested();
+    void webuiRequested();
     void providersChanged(const QJsonObject &providers, const QString &secretKeyEnv, const QString &secretValue);
     void languageChanged(const QString &lang);
     void themeChanged(const QString &theme);

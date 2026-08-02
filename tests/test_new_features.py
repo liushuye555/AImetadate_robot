@@ -1,4 +1,5 @@
 from qq_onebot_whitelist import onebot
+from qq_onebot_whitelist import control
 from qq_onebot_whitelist.config import AppConfig
 from qq_onebot_whitelist.daily_report import build_daily_resource_report
 
@@ -75,3 +76,13 @@ def test_daily_report_include_toggles():
     assert "新增文件" in no_links and "新增链接" not in no_links
     no_files = build_daily_resource_report(store, language="zh-CN", include_files=False, enrich_links=False)
     assert "新增链接" in no_files and "新增文件" not in no_files
+
+
+def test_cmd_groups_prints_list(capsys, monkeypatch):
+    async def fake():
+        return [{"id": "123", "name": "测试群"}]
+
+    monkeypatch.setattr(control, "_fetch_groups_once", fake)
+    assert control.cmd_groups(None) == 0
+    out = capsys.readouterr().out
+    assert '"id": "123"' in out and "测试群" in out
