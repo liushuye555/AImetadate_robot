@@ -10,17 +10,13 @@ from typing import Any
 import websockets
 
 from .archive_budget import enforce_archive_budget
-from .collection import collection_allows, is_forward_event
+from .collection import collect_event, collection_allows, is_forward_event
 from .commands import build_reply, scope_for_event
 from .config import AppConfig, load_config
-from .ai_relevance import is_positive_feedback_text
 from .ai_context_analyze import analyze_configured, configured_scopes
 from .daily_report import build_daily_resource_report, should_run_daily_report, split_message, today_key
-from .image_lifecycle import CandidateImage, promote_candidate
 from .maintenance import sync_image_files
-from .images import extract_image_segments, is_probable_sticker_result, process_image_url
 from .policy import extract_text, should_reply
-from .resources import extract_file_segments, extract_resource_links
 from .schedule import is_in_time_windows
 from .store import Store
 
@@ -323,81 +319,9 @@ async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
         await asyncio.sleep(300)
 
 
-def promote_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig) -> None:
-    if not is_positive_feedback_text(text):
-        return
-    candidate = store.latest_candidate_image(scope)
-    if not candidate:
-        return
-    path = candidate.get('kept_path')
-    if not path:
-        return
-    if is_probable_sticker_result(candidate):
-        return
-    source = CandidateImage(scope=scope, sha256=str(candidate.get('sha256') or ''), path=Path(path), created_at=0, score=2)
-    dest = promote_candidate(source, config.data_dir / 'images' / 'ai')
-    store.update_image_retention(int(candidate['id']), kept_path=str(dest), retention_reason='positive_feedback')
-
-
 def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None:
-    if event.get('post_type') != 'message':
-        return
-    scope = scope_for_event(event)
-    user_id = str(event.get('user_id') or '')
-    text = extract_text(event)
-    if is_forward_event(event):
-        if not collection_allows(scope, 'forwards', config):
-            return
-    links = store.record_message(
-        scope=scope,
-        user_id=user_id,
-        text=text,
-        raw=event,
-        collect_links=collection_allows(scope, 'links', config),
-    )
-    message_db_id = store.message_row_id(scope, event)
-    if collection_allows(scope, 'files', config):
-        for file_item in extract_file_segments(event):
-            if file_item.get('kind') in {'model', 'archive', 'workflow'}:
-                store.record_file(
-                    scope=scope,
-                    user_id=user_id,
-                    file_name=file_item['file_name'],
-                    file_size=file_item.get('file_size'),
-                    url=file_item.get('url'),
-                    kind=file_item.get('kind') or 'other',
-                    raw={'file': file_item, 'message_text': text},
-                )
-    nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
-    promote_recent_candidate_if_needed(store, scope, text, config)
-    if not config.feature_image_processing or not collection_allows(scope, 'images', config):
-        return
-    for image in extract_image_segments(event):
-        try:
-            result = process_image_url(
-                image['url'],
-                tmp_dir=config.data_dir / 'tmp',
-                archive_root=config.data_dir / 'images' / 'ai',
-                candidate_root=config.data_dir / 'images' / 'candidates',
-                filename_hint=image.get('file'),
-                nearby_text=nearby_text,
-            )
-            if is_probable_sticker_result(result) and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
-                kept = result.get('kept_path')
-                if kept:
-                    Path(kept).unlink(missing_ok=True)
-                result['kept_path'] = None
-                result['retention_reason'] = 'sticker_filtered'
-            store.record_image(
-                scope=scope,
-                user_id=user_id,
-                result=result,
-                raw={'image': image, 'message_db_id': message_db_id, 'message_id': event.get('message_id')},
-            )
-            # Saved images under data/images/ai are archive, not cache.
-            # Do not enforce a size budget here; only candidates are temporary.
-        except Exception as exc:
-            print(f'image processing failed: {type(exc).__name__}: {exc}')
+    """采集委托：完整流水线在 collection.collect_event。"""
+    collect_event(store, event, config)
 
 
 def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
