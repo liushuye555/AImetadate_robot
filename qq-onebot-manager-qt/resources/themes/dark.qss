@@ -1,15 +1,50 @@
-QMainWindow, QWidget#content { background: #101216; }
-QListWidget#nav { background: #0b0d12; border: none; outline: 0; }
-QListWidget#nav::item { color: #98a2b3; padding: 10px 16px; }
-QListWidget#nav::item:selected { background: #1f2937; color: #ffffff; border-radius: 6px; }
-QFrame#card { background: #171a21; border: 1px solid #2b313d; border-radius: 10px; }
-QLabel#cardTitle { font-size: 15px; font-weight: 600; color: #eef1f6; }
-QLabel#muted { color: #929cab; }
-QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #343a46; background: #1b1f27; color: #eef1f6; }
-QPushButton:hover { background: #242a35; }
-QPushButton:disabled { color: #6b7280; }
-QPushButton#primary { background: #2563eb; color: white; border: none; }
-QPushButton#primary:hover { background: #1d4ed8; }
-QPushButton#danger { background: #b53b49; color: white; border: none; }
-QLineEdit, QTextEdit, QComboBox, QSpinBox { border: 1px solid #343a46; border-radius: 6px; padding: 4px 8px; background: #171a21; color: #eef1f6; }
-QLineEdit.invalid { border: 1px solid #d64550; background: #2a1518; }
+* { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; font-size: 13px; }
+QMainWindow, QWidget#content { background: #101318; }
+QWidget { color: #e6eaf2; }
+
+QListWidget#nav { background: #0b0e14; border: none; outline: 0; padding-top: 10px; }
+QListWidget#nav::item { color: #8f9bb0; padding: 11px 18px; margin: 2px 10px; border-radius: 8px; }
+QListWidget#nav::item:hover { background: #1a212e; color: #cdd6e4; }
+QListWidget#nav::item:selected { background: #2b6ef3; color: #ffffff; }
+
+QLabel#pageTitle { font-size: 20px; font-weight: 700; color: #eef2f9; padding: 18px 26px 6px; }
+
+QFrame#card { background: #171b23; border: 1px solid #262d3a; border-radius: 12px; }
+QLabel#cardTitle { font-size: 15px; font-weight: 700; color: #eef2f9; }
+QLabel#muted { color: #8b96a8; font-size: 12px; }
+
+QPushButton { padding: 7px 16px; border-radius: 8px; border: 1px solid #2b3342; background: #1c222c; color: #e6eaf2; }
+QPushButton:hover { background: #242c3a; border-color: #3a4557; }
+QPushButton:pressed { background: #161b24; }
+QPushButton:disabled { color: #5d6675; background: #161a21; border-color: #232936; }
+QPushButton#primary { background: #2b6ef3; color: white; border: none; }
+QPushButton#primary:hover { background: #3b7cf5; }
+QPushButton#danger { background: #d64550; color: white; border: none; }
+QPushButton#danger:hover { background: #e0505b; }
+
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
+    border: 1px solid #2b3342; border-radius: 8px; padding: 6px 10px; background: #12161d; color: #e6eaf2;
+    selection-background-color: #2b6ef3;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #2b6ef3; }
+QLineEdit.invalid { border: 1px solid #d64550; background: #231519; }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView { border: 1px solid #2b3342; background: #12161d; selection-background-color: #2b6ef3; selection-color: white; }
+
+QGroupBox { border: 1px solid #262d3a; border-radius: 12px; margin-top: 14px; background: #161b23; }
+QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 8px 6px 0; color: #eef2f9; font-weight: 700; font-size: 14px; }
+
+QListWidget { border: 1px solid #262d3a; border-radius: 8px; background: #12161d; outline: 0; }
+QListWidget::item { padding: 8px 10px; border-radius: 6px; }
+QListWidget::item:selected { background: #1d2c4d; color: #9db8f5; }
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: #333c4c; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #414c5f; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+QScrollBar::handle:horizontal { background: #333c4c; border-radius: 5px; min-width: 30px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QPlainTextEdit#logView { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+QDialog { background: #101318; }

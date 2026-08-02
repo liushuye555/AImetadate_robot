@@ -1,15 +1,63 @@
-QMainWindow, QWidget#content { background: #f5f7fb; }
-QListWidget#nav { background: #172033; border: none; outline: 0; }
-QListWidget#nav::item { color: #aab5c9; padding: 10px 16px; }
-QListWidget#nav::item:selected { background: #2d3b5a; color: #ffffff; border-radius: 6px; }
-QFrame#card { background: #ffffff; border: 1px solid #e4e9f1; border-radius: 10px; }
-QLabel#cardTitle { font-size: 15px; font-weight: 600; color: #172033; }
-QLabel#muted { color: #7a879c; }
-QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #cfd6e2; background: #ffffff; }
-QPushButton:hover { background: #eef2f8; }
-QPushButton:disabled { color: #aab2c0; }
-QPushButton#primary { background: #2563eb; color: white; border: none; }
-QPushButton#primary:hover { background: #1d4ed8; }
-QPushButton#danger { background: #b53b49; color: white; border: none; }
-QLineEdit, QTextEdit, QComboBox, QSpinBox { border: 1px solid #cfd6e2; border-radius: 6px; padding: 4px 8px; background: #ffffff; }
-QLineEdit.invalid { border: 1px solid #d64550; background: #fff4f4; }
+* { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; font-size: 13px; }
+QMainWindow, QWidget#content { background: #f3f5f9; }
+QWidget { color: #1f2430; }
+
+/* 侧边导航 */
+QListWidget#nav { background: #171e2b; border: none; outline: 0; padding-top: 10px; }
+QListWidget#nav::item { color: #9aa7bd; padding: 11px 18px; margin: 2px 10px; border-radius: 8px; }
+QListWidget#nav::item:hover { background: #232c3f; color: #dbe3f0; }
+QListWidget#nav::item:selected { background: #2b6ef3; color: #ffffff; }
+QListWidget#nav::item:selected:hover { background: #2b6ef3; }
+
+/* 页面标题 */
+QLabel#pageTitle { font-size: 20px; font-weight: 700; color: #171e2b; padding: 18px 26px 6px; }
+
+/* 卡片 */
+QFrame#card { background: #ffffff; border: 1px solid #e3e8f0; border-radius: 12px; }
+QLabel#cardTitle { font-size: 15px; font-weight: 700; color: #171e2b; }
+QLabel#muted { color: #8a94a6; font-size: 12px; }
+
+/* 按钮 */
+QPushButton { padding: 7px 16px; border-radius: 8px; border: 1px solid #d8dee9; background: #ffffff; color: #2b3446; }
+QPushButton:hover { background: #f0f4fa; border-color: #c3cde0; }
+QPushButton:pressed { background: #e6ebf4; }
+QPushButton:disabled { color: #b6bdcb; background: #f6f8fb; border-color: #e6eaf1; }
+QPushButton#primary { background: #2b6ef3; color: white; border: none; }
+QPushButton#primary:hover { background: #1f5fe0; }
+QPushButton#primary:pressed { background: #1a52c4; }
+QPushButton#danger { background: #e5484d; color: white; border: none; }
+QPushButton#danger:hover { background: #d43d42; }
+
+/* 输入控件 */
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
+    border: 1px solid #d8dee9; border-radius: 8px; padding: 6px 10px; background: #ffffff;
+    selection-background-color: #cfe0ff;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #2b6ef3; }
+QLineEdit.invalid { border: 1px solid #e5484d; background: #fdf1f1; }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView { border: 1px solid #d8dee9; background: white; selection-background-color: #2b6ef3; selection-color: white; }
+
+/* 分区卡片 */
+QGroupBox { border: 1px solid #e3e8f0; border-radius: 12px; margin-top: 14px; background: #ffffff; }
+QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 8px 6px 0; color: #171e2b; font-weight: 700; font-size: 14px; }
+
+/* 列表 */
+QListWidget { border: 1px solid #e3e8f0; border-radius: 8px; background: white; outline: 0; }
+QListWidget::item { padding: 8px 10px; border-radius: 6px; }
+QListWidget::item:selected { background: #e8f0fe; color: #1f4fd0; }
+
+/* 滚动条 */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: #c9d1de; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #aeb8c9; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+QScrollBar::handle:horizontal { background: #c9d1de; border-radius: 5px; min-width: 30px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+/* 日志字体 */
+QPlainTextEdit#logView { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+
+/* 对话框 */
+QDialog { background: #f3f5f9; }

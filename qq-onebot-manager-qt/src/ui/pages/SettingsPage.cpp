@@ -13,6 +13,12 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QPlainTextEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QSpinBox>
 #include <QStyle>
 
 SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
@@ -113,6 +119,25 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             combo->setCurrentText(obj.value("default").toString());
             connect(combo, &QComboBox::currentTextChanged, this, [this] { markDirty(); });
             field = combo;
+        } else if (kind == "list") {
+            auto *edit = new QPlainTextEdit(this);
+            edit->setMaximumHeight(110);
+            const QJsonArray values = obj.value("default").toArray();
+            QStringList lines;
+            for (const QJsonValue &v : values) lines << v.toString();
+            edit->setPlainText(lines.join('\n'));
+            edit->setProperty("key", key);
+            connect(edit, &QPlainTextEdit::textChanged, this, [this] { markDirty(); });
+            field = edit;
+        } else if (kind == "provider-list") {
+            // 供应商单独用编辑器管理，不放进普通字段
+            m_providerMap.clear();
+            const QJsonObject providers = obj.value("default").toObject();
+            for (auto it = providers.constBegin(); it != providers.constEnd(); ++it)
+                m_providerMap.insert(it.key(), it.value().toObject());
+            m_sections->addWidget(buildProviderSection());
+            rebuildProviderList();
+            continue;
         } else {
             auto *edit = new QLineEdit(this);
             if (kind == "secret") edit->setEchoMode(QLineEdit::Password);
@@ -154,9 +179,112 @@ QJsonObject SettingsPage::buildPatch() const {
         QWidget *w = it.value();
         if (auto *box = qobject_cast<QCheckBox *>(w)) patch.insert(key, box->isChecked());
         else if (auto *combo = qobject_cast<QComboBox *>(w)) patch.insert(key, combo->currentText());
+        else if (auto *list = qobject_cast<QPlainTextEdit *>(w)) {
+            QJsonArray values;
+            const QStringList lines = list->toPlainText().split('\n');
+            for (const QString &line : lines) {
+                const QString trimmed = line.trimmed();
+                if (!trimmed.isEmpty()) values.append(trimmed);
+            }
+            patch.insert(key, values);
+        }
         else if (auto *edit = qobject_cast<QLineEdit *>(w)) patch.insert(key, edit->text());
     }
     return patch;
+}
+
+QJsonObject SettingsPage::buildProvidersObject() const {
+    QJsonObject providers;
+    for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it)
+        providers.insert(it.key(), it.value());
+    return providers;
+}
+
+void SettingsPage::rebuildProviderList() {
+    if (!m_providerList) return;
+    m_providerList->clear();
+    for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it) {
+        const QJsonObject p = it.value();
+        const QString summary = it.key() + "  ·  " + p.value("base_url").toString()
+            + "  ·  " + p.value("model").toString();
+        auto *item = new QListWidgetItem(summary, m_providerList);
+        item->setData(Qt::UserRole, it.key());
+        m_providerList->addItem(item);
+    }
+}
+
+QWidget *SettingsPage::buildProviderSection() {
+    auto *group = new QGroupBox(Strings::zh("providers"), this);
+    auto *layout = new QVBoxLayout(group);
+    m_providerList = new QListWidget(group);
+    layout->addWidget(m_providerList);
+    auto *buttons = new QHBoxLayout;
+    auto *add = new QPushButton(Strings::zh("addProvider"), group);
+    auto *edit = new QPushButton(Strings::zh("editProvider"), group);
+    auto *remove = new QPushButton(Strings::zh("removeProvider"), group);
+    buttons->addWidget(add);
+    buttons->addWidget(edit);
+    buttons->addWidget(remove);
+    buttons->addStretch();
+    layout->addLayout(buttons);
+    connect(add, &QPushButton::clicked, this, [this] { openProviderDialog(QString()); });
+    connect(edit, &QPushButton::clicked, this, [this] {
+        if (m_providerList->currentItem())
+            openProviderDialog(m_providerList->currentItem()->data(Qt::UserRole).toString());
+    });
+    connect(remove, &QPushButton::clicked, this, [this] {
+        QListWidgetItem *item = m_providerList->currentItem();
+        if (!item) return;
+        m_providerMap.remove(item->data(Qt::UserRole).toString());
+        rebuildProviderList();
+        emit providersChanged(buildProvidersObject(), QString(), QString());
+    });
+    return group;
+}
+
+void SettingsPage::openProviderDialog(const QString &editName) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(editName.isEmpty() ? Strings::zh("addProvider") : Strings::zh("editProvider"));
+    auto *form = new QFormLayout(&dialog);
+    auto *nameEdit = new QLineEdit(&dialog);
+    auto *urlEdit = new QLineEdit(&dialog);
+    auto *modelEdit = new QLineEdit(&dialog);
+    auto *keyEnvEdit = new QLineEdit(&dialog);
+    auto *timeoutSpin = new QSpinBox(&dialog);
+    timeoutSpin->setRange(1, 3600);
+    timeoutSpin->setValue(60);
+    auto *secretEdit = new QLineEdit(&dialog);
+    secretEdit->setEchoMode(QLineEdit::Password);
+    secretEdit->setPlaceholderText(Strings::zh("secretPlaceholder"));
+    form->addRow("供应商 ID", nameEdit);
+    form->addRow("Base URL", urlEdit);
+    form->addRow("模型", modelEdit);
+    form->addRow("Key 环境变量", keyEnvEdit);
+    form->addRow(Strings::zh("providerTimeout"), timeoutSpin);
+    form->addRow("API Key", secretEdit);
+    if (!editName.isEmpty() && m_providerMap.contains(editName)) {
+        const QJsonObject p = m_providerMap.value(editName);
+        nameEdit->setText(editName);
+        urlEdit->setText(p.value("base_url").toString());
+        modelEdit->setText(p.value("model").toString());
+        keyEnvEdit->setText(p.value("api_key_env").toString());
+        timeoutSpin->setValue(p.value("timeout_seconds").toInt(60));
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString name = nameEdit->text().trimmed();
+    if (name.isEmpty()) return;
+    QJsonObject p;
+    p.insert("base_url", urlEdit->text().trimmed());
+    p.insert("model", modelEdit->text().trimmed());
+    p.insert("api_key_env", keyEnvEdit->text().trimmed());
+    p.insert("timeout_seconds", timeoutSpin->value());
+    m_providerMap.insert(name, p);
+    rebuildProviderList();
+    emit providersChanged(buildProvidersObject(), keyEnvEdit->text().trimmed(), secretEdit->text());
 }
 
 void SettingsPage::setSavedMessage(const QString &text) {

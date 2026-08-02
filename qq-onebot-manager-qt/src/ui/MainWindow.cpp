@@ -2,6 +2,7 @@
 #include "Strings.h"
 #include <QCloseEvent>
 #include <QIcon>
+#include <QLabel>
 #include <QListWidget>
 #include <QMenu>
 #include <QStackedWidget>
@@ -14,6 +15,14 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     m_nav->setObjectName("nav");
     m_nav->setFixedWidth(180);
     m_stack = new QStackedWidget(this);
+    m_header = new QLabel(this);
+    m_header->setObjectName("pageTitle");
+    m_header->setContentsMargins(0, 0, 0, 0);
+    auto *rightColumn = new QVBoxLayout;
+    rightColumn->setContentsMargins(0, 0, 0, 0);
+    rightColumn->setSpacing(0);
+    rightColumn->addWidget(m_header);
+    rightColumn->addWidget(m_stack, 1);
 
     for (const PageDef &page : m_pages) {
         m_nav->addItem(Strings::zh(page.titleKey));
@@ -21,6 +30,10 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     }
     m_nav->setCurrentRow(0);
     connect(m_nav, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0 && row < m_pages.size())
+            m_header->setText(Strings::get(m_pages[row].titleKey, m_lang));
+    });
 
     auto *content = new QFrame(this);
     content->setObjectName("content");
@@ -28,7 +41,7 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addWidget(m_nav);
-    layout->addWidget(m_stack, 1);
+    layout->addLayout(rightColumn, 1);
     setCentralWidget(content);
     resize(960, 640);
     setWindowTitle("QQ OneBot 管理器");
@@ -39,6 +52,7 @@ void MainWindow::setLanguage(const QString &lang) {
     m_lang = lang;
     for (int i = 0; i < m_pages.size(); ++i)
         m_nav->item(i)->setText(Strings::get(m_pages[i].titleKey, lang));
+    m_header->setText(Strings::get(m_pages[m_nav->currentRow()].titleKey, lang));
 }
 
 QWidget *MainWindow::pageWidget(const QString &id) const {

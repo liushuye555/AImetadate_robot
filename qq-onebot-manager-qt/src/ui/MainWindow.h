@@ -5,6 +5,7 @@
 
 class QListWidget;
 class QStackedWidget;
+class QLabel;
 class QWidget;
 class QCloseEvent;
 
@@ -29,6 +30,7 @@ private:
     void setupTray();
     QListWidget *m_nav = nullptr;
     QStackedWidget *m_stack = nullptr;
+    QLabel *m_header = nullptr;
     QVector<PageDef> m_pages;
     QSystemTrayIcon *m_tray = nullptr;
     QString m_lang = "zh-CN";

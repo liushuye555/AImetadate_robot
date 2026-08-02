@@ -40,6 +40,12 @@ QString Strings::zh(const QString &key) {
     if (key == "preview") return "生成预览";
     if (key == "sendTest") return "发送测试日报";
     if (key == "general") return "通用";
+    if (key == "providers") return "AI 供应商";
+    if (key == "addProvider") return "新增";
+    if (key == "editProvider") return "编辑";
+    if (key == "removeProvider") return "删除";
+    if (key == "providerTimeout") return "超时（秒）";
+    if (key == "secretPlaceholder") return "留空则不改动密钥";
     return key;
 }
 
@@ -79,5 +85,11 @@ QString Strings::en(const QString &key) {
     if (key == "preview") return "Generate preview";
     if (key == "sendTest") return "Send test report";
     if (key == "general") return "General";
+    if (key == "providers") return "AI providers";
+    if (key == "addProvider") return "Add";
+    if (key == "editProvider") return "Edit";
+    if (key == "removeProvider") return "Remove";
+    if (key == "providerTimeout") return "Timeout (s)";
+    if (key == "secretPlaceholder") return "Leave empty to keep the key";
     return key;
 }

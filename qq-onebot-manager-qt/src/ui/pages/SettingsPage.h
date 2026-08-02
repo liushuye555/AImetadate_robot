@@ -1,13 +1,17 @@
 #pragma once
 #include <QWidget>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QHash>
+#include <QMap>
 
 class QVBoxLayout;
 class QPushButton;
 class QLabel;
 class QComboBox;
 class QCheckBox;
+class QPlainTextEdit;
+class QListWidget;
 
 class SettingsPage : public QWidget {
     Q_OBJECT
@@ -22,6 +26,7 @@ public:
     QCheckBox *notificationsBox() const { return m_notifications; }
 signals:
     void saveRequested(QJsonObject patch);
+    void providersChanged(const QJsonObject &providers, const QString &secretKeyEnv, const QString &secretValue);
     void languageChanged(const QString &lang);
     void themeChanged(const QString &theme);
     void autoStartToggled(bool enabled);
@@ -29,6 +34,10 @@ signals:
 private:
     QJsonObject buildPatch() const;
     QWidget *buildGeneralSection();
+    QWidget *buildProviderSection();
+    QJsonObject buildProvidersObject() const;
+    void openProviderDialog(const QString &editName);
+    void rebuildProviderList();
     void markDirty();
     QVBoxLayout *m_sections = nullptr;
     QPushButton *m_save = nullptr;
@@ -38,5 +47,7 @@ private:
     QComboBox *m_theme = nullptr;
     QCheckBox *m_autoStart = nullptr;
     QCheckBox *m_notifications = nullptr;
+    QListWidget *m_providerList = nullptr;
+    QMap<QString, QJsonObject> m_providerMap;
     bool m_dirty = false;
 };

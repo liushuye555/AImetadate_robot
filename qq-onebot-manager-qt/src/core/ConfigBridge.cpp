@@ -30,6 +30,13 @@ void ConfigBridge::save(const QJsonObject &patch) {
              QString::fromUtf8(QJsonDocument(nestDottedPatch(patch)).toJson(QJsonDocument::Compact))});
 }
 
+void ConfigBridge::saveEnv(const QJsonObject &values) {
+    m_mode = Mode::EnvSave;
+    runArgs({"-m", "qq_onebot_whitelist.config_bridge", "env-patch", "--config",
+             Paths::repoRoot() + "/config.yaml", "--json",
+             QString::fromUtf8(QJsonDocument(values).toJson(QJsonDocument::Compact))});
+}
+
 void ConfigBridge::runArgs(const QStringList &args) {
     if (m_proc.state() != QProcess::NotRunning) return;
     m_proc.setProgram(Paths::pythonExe());

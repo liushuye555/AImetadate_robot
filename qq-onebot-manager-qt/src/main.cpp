@@ -108,6 +108,16 @@ int main(int argc, char *argv[]) {
         else settings->showError("配置加载失败");
     });
     QObject::connect(settings, &SettingsPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(settings, &SettingsPage::providersChanged, configBridge, [configBridge](const QJsonObject &providers, const QString &keyEnv, const QString &secret) {
+        QJsonObject patch;
+        patch.insert("ai_context.providers", providers);
+        configBridge->save(patch);
+        if (!keyEnv.isEmpty() && !secret.isEmpty()) {
+            QJsonObject env;
+            env.insert(keyEnv, secret);
+            configBridge->saveEnv(env);
+        }
+    });
     QObject::connect(configBridge, &ConfigBridge::saved, settings, [settings](bool ok, const QString &msg) {
         settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
     });
