@@ -90,7 +90,7 @@ int main(int argc, char *argv[]) {
                                .arg(obj.value("links").toInt())
                                .arg(lastReport.isEmpty() ? "无" : lastReport));
     });
-    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats, autoRestart, overview](const QString &action) {
+    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats, autoRestart, overview, collectionControl](const QString &action) {
         if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
