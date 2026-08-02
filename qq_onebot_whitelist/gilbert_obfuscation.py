@@ -33,8 +33,10 @@ MAX_SIDE = 4000
 MIN_SIDE = 4
 
 # ratio = tv_curve / tv_raster（预筛指标，不作为最终结论）
-RESTORE_BORDERLINE = 0.9    # ratio 低于此值才需要逆置换确认
-RESTORE_CONFIRM = 0.75      # 逆置换后栅格 TV ≤ 原值此比例 → 确认混淆
+RESTORE_BORDERLINE = 0.95   # ratio 低于此值才需要逆置换确认
+RESTORE_CONFIRM = 0.75      # 逆置换后栅格 TV ≤ 原值此比例 → 算法级确认
+RESTORE_WEAK = 1.02         # 逆置换后 TV 不升反降/持平 → 疑似（重压或缩放后的混淆）
+RATIO_WEAK_MAX = 0.95       # 疑似档的 ratio 上限
 RATIO_FALLBACK = 0.30       # 超大图无法逆置换时的严格 ratio 兜底
 MAX_LAYERS = 3              # 尝试解混淆的最大层数
 MAX_RESTORE_PIXELS = 6_000_000  # 超过此像素数不做逆置换（内存/耗时）
@@ -208,6 +210,7 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
     ratio = tv_curve / tv_raster if tv_raster > 1e-6 else 1.0
     result: dict[str, Any] = {
         'obfuscated': False,
+        'confidence': None,
         'ratio': ratio,
         'tv_raster': tv_raster,
         'tv_curve': tv_curve,
@@ -217,14 +220,29 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
     if ratio < RESTORE_BORDERLINE and width * height <= MAX_RESTORE_PIXELS:
         ratios = _restore_ratios(mv, width, height, tv_raster)
         result['restore_ratios'] = [round(v, 4) for v in ratios]
+        best_layer = None
+        best_value = None
         for idx, value in enumerate(ratios, start=1):
             if value < RESTORE_CONFIRM:
-                result['obfuscated'] = True
-                result['layers'] = idx
+                best_layer = idx
+                best_value = value
                 break
+        if best_layer is not None:
+            result['obfuscated'] = True
+            result['confidence'] = 'confirmed'
+            result['layers'] = best_layer
+        elif ratio <= RATIO_WEAK_MAX and min(ratios) < RESTORE_WEAK:
+            # 逆置换后 TV 没有明显上升：重压/缩放后的混淆图（弱信号，待人工复核）
+            for idx, value in enumerate(ratios, start=1):
+                if value < RESTORE_WEAK:
+                    result['obfuscated'] = True
+                    result['confidence'] = 'possible'
+                    result['layers'] = idx
+                    break
     elif ratio < RATIO_FALLBACK:
         # 超大图无法逐层逆置换，只能看强 ratio 信号（保守）
         result['obfuscated'] = True
+        result['confidence'] = 'possible'
     return result
 
 

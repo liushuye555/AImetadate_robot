@@ -33,6 +33,25 @@ def _make_gradient(width: int = 64, height: int = 48) -> bytes:
                  for y in range(height) for x in range(width))
 
 
+def _make_checker(width: int = 64, height: int = 48) -> bytes:
+    return bytes(255 if ((x // 4) + (y // 4)) % 2 else 0
+                 for y in range(height) for x in range(width))
+
+
+def _make_noisy_gradient(width: int = 64, height: int = 48, seed: int = 3) -> bytes:
+    rng = _rng(seed)
+    return bytes(
+        max(0, min(255, (x * 60 // max(1, width - 1) + y * 90 // max(1, height - 1))
+                    + rng.randint(-20, 20)))
+        for y in range(height) for x in range(width)
+    )
+
+
+def _rng(seed: int):
+    import random
+    return random.Random(seed)
+
+
 def test_roundtrip_enc_then_dec_restores_exactly(tmp_path):
     w, h = 64, 48
     raw = _make_gradient(w, h)
@@ -50,6 +69,7 @@ def test_detector_marks_obfuscated_image(tmp_path):
     result = analyze_image(obf_path)
     assert result is not None
     assert result['obfuscated'] is True
+    assert result['confidence'] == 'confirmed'
     assert result['layers'] == 1
     assert result['restore_ratios'][0] < 0.75
     assert is_obfuscated(obf_path) is True
@@ -102,6 +122,35 @@ def test_detector_handles_jpeg_recompression(tmp_path):
     Image.frombytes('L', (w, h), obf).save(path, quality=75)
 
     assert is_obfuscated(path) is True
+
+
+def test_detector_marks_heavy_jpeg_as_possible(tmp_path):
+    """同尺寸重压 JPEG（棋盘格原图）：恢复阈值被噪声抬高，降级为疑似档。"""
+    w, h = 128, 96
+    raw = _make_checker(w, h)
+    obf = _permute(raw, w, h, 'enc')
+    path = tmp_path / 'obf_q50.jpg'
+    Image.frombytes('L', (w, h), obf).save(path, quality=50)
+
+    result = analyze_image(path)
+    assert result is not None
+    assert result['obfuscated'] is True
+    assert result['confidence'] == 'possible'
+
+
+def test_detector_marks_resized_obfuscated_as_possible(tmp_path):
+    """缩放破坏像素映射：逆置换不再还原，但 TV 不升 → 疑似档。"""
+    w, h = 128, 96
+    raw = _make_noisy_gradient(w, h)
+    obf = Image.frombytes('L', (w, h), _permute(raw, w, h, 'enc'))
+    small = obf.resize((64, 48), Image.LANCZOS)
+    path = tmp_path / 'resized.png'
+    small.save(path)
+
+    result = analyze_image(path)
+    assert result is not None
+    assert result['obfuscated'] is True
+    assert result['confidence'] == 'possible'
 
 
 def test_oversized_image_skipped(tmp_path):

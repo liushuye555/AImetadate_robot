@@ -116,7 +116,8 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     """重分类图片。
 
     优先级：
-    1. 小番茄混淆（Gilbert 曲线逆置换验证）→ xiaofanqie_obfuscated（算法级确认）；
+    1. 小番茄混淆（Gilbert 曲线逆置换验证）→ xiaofanqie_obfuscated（算法级确认）
+       或 xiaofanqie_compressed（重压/缩放后，弱信号）；
     2. pHash 匹配 AI 归档 → possible_obfuscation（旧启发式，可能误判）；
     3. JPEG 块状伪影过高 → possible_reencode（弱信号）。
     """
@@ -156,8 +157,13 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
             if not path.exists():
                 continue
             cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-            if cached is not None:
-                xfq_result = {'obfuscated': cached[2], 'ratio': cached[0], 'layers': cached[1]}
+            if cached is not None and cached[3] is not None:
+                xfq_result = {
+                    'obfuscated': cached[2],
+                    'ratio': cached[0],
+                    'layers': cached[1],
+                    'confidence': cached[3],
+                }
             else:
                 try:
                     xfq_result = analyze_image(path)
@@ -170,11 +176,16 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                             ratio=float(xfq_result['ratio']),
                             layers=xfq_result.get('layers'),
                             obfuscated=bool(xfq_result.get('obfuscated')),
+                            confidence=xfq_result.get('confidence'),
                         )
                     except Exception:
                         pass
             if xfq_result and xfq_result.get('obfuscated'):
-                conn.execute("UPDATE images SET retention_reason='xiaofanqie_obfuscated' WHERE id=?", (row_id,))
+                if xfq_result.get('confidence') == 'confirmed':
+                    reason = 'xiaofanqie_obfuscated'
+                else:
+                    reason = 'xiaofanqie_compressed'
+                conn.execute("UPDATE images SET retention_reason=? WHERE id=?", (reason, row_id))
                 changed += 1
                 continue
             try:

@@ -266,13 +266,18 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                             ratio=float(xfq_result['ratio']),
                             layers=xfq_result.get('layers'),
                             obfuscated=bool(xfq_result.get('obfuscated')),
+                            confidence=xfq_result.get('confidence'),
                         )
                     except Exception:
                         pass
                     if xfq_result.get('obfuscated'):
-                        result['retention_reason'] = 'xiaofanqie_obfuscated'
+                        confidence = xfq_result.get('confidence')
+                        result['retention_reason'] = (
+                            'xiaofanqie_obfuscated' if confidence == 'confirmed'
+                            else 'xiaofanqie_compressed'
+                        )
             # 无元数据但与 AI 归档图感知哈希高度相似 → 疑似混淆副本
-            if result.get('retention_reason') not in ('xiaofanqie_obfuscated', 'ai_metadata') \
+            if result.get('retention_reason') not in ('xiaofanqie_obfuscated', 'xiaofanqie_compressed', 'ai_metadata') \
                     and not result.get('has_ai_metadata') and result.get('phash') is not None:
                 match = find_obfuscated_match(
                     result['phash'],
