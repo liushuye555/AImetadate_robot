@@ -237,6 +237,17 @@ def contains_at_all(event: dict[str, Any]) -> bool:
     return False
 
 
+PURGE_KEYWORDS = ('清理', '死人', '不活跃', '移除', '踢出', '踢人', '长期未发言', '活跃')
+
+
+def is_purge_announcement(event: dict[str, Any]) -> bool:
+    """判断是否“清理不活跃成员”类公告：@全体成员 且 内容含清理相关关键词。"""
+    if not contains_at_all(event):
+        return False
+    text = extract_text(event).lower()
+    return any(keyword in text for keyword in PURGE_KEYWORDS)
+
+
 async def keepalive_loop(ws, config: AppConfig) -> None:
     last_timed = 0.0
     while True:
@@ -422,8 +433,8 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         return False
     if event.get('message_type') == 'group':
         _group_activity[str(event.get('group_id') or '')] = time.time()
-        if config.keepalive_enabled and config.keepalive_message.strip() and contains_at_all(event):
-            # 管理员 @全体成员（常伴随清理死人）→ 立即发保活消息，避免机器人被当不活跃账号清理
+        if config.keepalive_enabled and config.keepalive_message.strip() and is_purge_announcement(event):
+            # 管理员 @全体成员 宣布清理不活跃成员 → 立即发保活消息，避免机器人被当不活跃账号清理
             await _send_group_message(ws, str(event.get('group_id') or ''), config.keepalive_message)
             _group_activity[str(event.get('group_id') or '')] = time.time()
     if is_blocked_event(event, config):

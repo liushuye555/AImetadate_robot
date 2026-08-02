@@ -278,6 +278,16 @@ def test_contains_at_all_detection():
     assert onebot.contains_at_all({"message": [{"type": "text", "data": {"text": "普通消息"}}]}) is False
 
 
+def test_purge_announcement_requires_keywords():
+    from qq_onebot_whitelist import onebot
+    purge = {"message": [{"type": "at", "data": {"qq": "all"}}, {"type": "text", "data": {"text": "今晚清理死人"}}]}
+    assert onebot.is_purge_announcement(purge) is True
+    notice = {"message": [{"type": "at", "data": {"qq": "all"}}, {"type": "text", "data": {"text": "今晚八点活动"}}]}
+    assert onebot.is_purge_announcement(notice) is False
+    plain_at_all = {"message": [{"type": "at", "data": {"qq": "all"}}]}
+    assert onebot.is_purge_announcement(plain_at_all) is False
+
+
 def test_is_sticker_format():
     from qq_onebot_whitelist.images import is_sticker_format
     assert is_sticker_format({"format": "GIF", "size": 1000, "width": 100, "height": 100}) is True
