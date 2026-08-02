@@ -129,39 +129,58 @@ def test_remove_sticker_records(tmp_path):
     conn.close()
 
 
-def test_should_keep_image_obfuscation():
-    from qq_onebot_whitelist.image_meta import ImageMetadata
-    from qq_onebot_whitelist.image_policy import is_ai_typical_size, should_keep_image
-    assert is_ai_typical_size(1152, 1152) is True
-    assert is_ai_typical_size(800, 600) is False
-    meta = ImageMetadata(format="JPEG", width=1152, height=1152, has_ai_metadata=False)
-    keep, reason = should_keep_image(meta)
-    assert keep is True and reason == "possible_obfuscation"
-    meta2 = ImageMetadata(format="JPEG", width=800, height=600, has_ai_metadata=False)
-    keep2, reason2 = should_keep_image(meta2)
-    assert keep2 is False and reason2 == "no_ai_metadata"
+def test_phash_and_obfuscation_matching(tmp_path):
+    from PIL import Image
+    from qq_onebot_whitelist.obfuscation import find_obfuscated_match, hamming_distance, image_phash
+
+    img = Image.new("RGB", (128, 128))
+    for x in range(128):
+        for y in range(128):
+            # 随机噪声 + 平滑块，接近真实照片纹理
+            img.putpixel((x, y), ((x * 7 + y * 3) % 256, (x * 3 + y * 11) % 256, ((x * y) // 64) % 256))
+    png_path = tmp_path / "a.png"
+    jpg_path = tmp_path / "a2.jpg"
+    img.save(png_path)
+    img.save(jpg_path, quality=55)
+    h1 = image_phash(png_path)
+    h2 = image_phash(jpg_path)
+    assert hamming_distance(h1, h2) <= 8  # 重编码（JPEG）后感知哈希仍应相近
+    match = find_obfuscated_match(h2, [(h1, "sha1")], threshold=10)
+    assert match is not None and match[1] == "sha1"
 
 
 def test_reclassify_possible_obfuscation(tmp_path):
     import sqlite3
+    from PIL import Image
+    from qq_onebot_whitelist.obfuscation import image_phash
     from qq_onebot_whitelist.maintenance import reclassify_possible_obfuscation
     from qq_onebot_whitelist.store import Store
     db_dir = tmp_path / "data"
     db_dir.mkdir(parents=True)
     store = Store(db_dir / "bot.db")
+
+    img = Image.new("RGB", (64, 64))
+    for x in range(64):
+        for y in range(64):
+            img.putpixel((x, y), ((x * 7 + y * 3) % 256, (x * 3 + y * 11) % 256, ((x * y) // 32) % 256))
+    arch = tmp_path / "arch.png"
+    obf = tmp_path / "obf.jpg"
+    img.save(arch)
+    img.save(obf, quality=50)
+
     store.record_image(scope="group:1", user_id="u", result={
-        "sha256": "ob1", "format": "PNG", "size": 1, "width": 1152, "height": 1152,
-        "kept_path": None, "retention_reason": "candidate",
+        "sha256": "arch1", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(arch), "retention_reason": "ai_metadata",
     }, raw={})
+    store.save_image_hash("arch1", image_phash(arch))
     store.record_image(scope="group:1", user_id="u", result={
-        "sha256": "no1", "format": "JPEG", "size": 1, "width": 800, "height": 600,
-        "kept_path": None, "retention_reason": "no_ai_metadata",
+        "sha256": "obf1", "format": "JPEG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(obf), "retention_reason": "candidate",
     }, raw={})
-    changed = reclassify_possible_obfuscation(tmp_path)
+    changed = reclassify_possible_obfuscation(tmp_path, threshold=10)
     assert changed == 1
     conn = sqlite3.connect(db_dir / "bot.db")
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='ob1'").fetchone()[0] == "possible_obfuscation"
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='no1'").fetchone()[0] == "no_ai_metadata"
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='obf1'").fetchone()[0] == "possible_obfuscation"
     conn.close()
 
 

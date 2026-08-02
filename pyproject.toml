@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "websockets>=12",
   "PyYAML>=6",
+  "pillow>=12.3.0",
 ]
 
 [project.optional-dependencies]

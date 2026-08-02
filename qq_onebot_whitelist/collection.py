@@ -15,6 +15,7 @@ from .images import extract_image_segments, is_probable_sticker_result, is_stick
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
+from .obfuscation import find_obfuscated_match
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -247,6 +248,17 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                 filename_hint=image.get('file'),
                 nearby_text=nearby_text,
             )
+            # 无元数据但与 AI 归档图感知哈希高度相似 → 疑似混淆副本
+            if not result.get('has_ai_metadata') and result.get('phash') is not None:
+                match = find_obfuscated_match(
+                    result['phash'],
+                    store.archive_hashes(),
+                    threshold=config.obfuscation_threshold,
+                )
+                if match is not None:
+                    result['retention_reason'] = 'possible_obfuscation'
+            if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
+                store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
             # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式
             is_sticker = is_sticker_format(result) and (store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1) >= max(1, config.sticker_repeat_threshold)
             if is_sticker and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:

@@ -146,6 +146,12 @@ CREATE TABLE IF NOT EXISTS custom_collections (
   message_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_custom_rule_id ON custom_collections(rule, id);
+
+CREATE TABLE IF NOT EXISTS image_hashes (
+  sha256 TEXT PRIMARY KEY,
+  phash TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 
@@ -592,6 +598,26 @@ class Store:
                 (scope, sha256),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def save_image_hash(self, sha256: str, phash: int) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO image_hashes (sha256, phash) VALUES (?, ?) '
+                'ON CONFLICT(sha256) DO UPDATE SET phash = excluded.phash, updated_at = CURRENT_TIMESTAMP',
+                (sha256, str(int(phash))),
+            )
+            conn.commit()
+
+    def archive_hashes(self, limit: int = 20000) -> list[tuple[int, str]]:
+        """返回 AI 归档图片的 (phash, sha256) 列表。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                'SELECT h.phash, h.sha256 FROM image_hashes h '
+                'JOIN images i ON i.sha256 = h.sha256 AND i.retention_reason = ? '
+                'WHERE h.phash IS NOT NULL ORDER BY i.id DESC LIMIT ?',
+                ('ai_metadata', limit),
+            ).fetchall()
+        return [(int(row[0]), str(row[1])) for row in rows if row[0] is not None and str(row[0]).strip()]
 
     def get_history_cursor(self, group_id: str | int) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:

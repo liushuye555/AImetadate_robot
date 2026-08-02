@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from .image_meta import ImageMetadata, parse_image_metadata
 from .image_policy import should_keep_image
+from .obfuscation import image_phash
 
 
 def is_sticker_image_segment(data: dict) -> bool:
@@ -115,6 +116,10 @@ def process_image_url(
     tmp = download_image(url, tmp_dir, filename_hint=filename_hint)
     size = tmp.stat().st_size
     digest = sha256_file(tmp)
+    try:
+        phash_value = image_phash(tmp)
+    except Exception:
+        phash_value = None
     meta = parse_image_metadata(tmp)
     keep, reason = should_keep_image(meta, nearby_text=nearby_text)
     kept_path = None
@@ -141,6 +146,7 @@ def process_image_url(
     return {
         'url': url,
         'sha256': digest,
+        'phash': phash_value,
         'size': size,
         'format': meta.format,
         'width': meta.width,

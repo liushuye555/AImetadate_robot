@@ -112,21 +112,48 @@ def remove_sticker_records(project_dir: str | Path) -> int:
     return removed
 
 
-def reclassify_possible_obfuscation(project_dir: str | Path) -> int:
-    """把无元数据但尺寸符合 AI 典型输出的已有图片重分类为疑似混淆。"""
-    from .image_policy import is_ai_typical_size
+def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10) -> int:
+    """用感知哈希把与 AI 归档图高度相似的无元数据图片重分类为疑似混淆。"""
+    from .obfuscation import find_obfuscated_match, image_phash
+    from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
     if not db.exists():
         return 0
+    store = Store(db)
     changed = 0
     with sqlite3.connect(db) as conn:
-        rows = conn.execute(
-            "SELECT id, width, height FROM images "
-            "WHERE retention_reason IN ('candidate', 'no_ai_metadata') AND has_ai_metadata = 0"
-        ).fetchall()
-        for row_id, width, height in rows:
-            if is_ai_typical_size(width, height):
+        # 1) 补建 AI 归档哈希索引
+        known = {str(row[0]) for row in conn.execute('SELECT sha256 FROM image_hashes')}
+        for sha, kept_path in conn.execute(
+            "SELECT sha256, kept_path FROM images WHERE retention_reason='ai_metadata' AND kept_path IS NOT NULL"
+        ).fetchall():
+            if sha in known:
+                continue
+            path = Path(kept_path)
+            if not path.exists():
+                continue
+            try:
+                store.save_image_hash(sha, image_phash(path))
+                known.add(sha)
+            except Exception:
+                continue
+        # 2) 无元数据/候选图与归档比对
+        archive_hashes = store.archive_hashes()
+        if not archive_hashes:
+            return 0
+        for row_id, kept_path in conn.execute(
+            "SELECT id, kept_path FROM images "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata') AND kept_path IS NOT NULL"
+        ).fetchall():
+            path = Path(kept_path)
+            if not path.exists():
+                continue
+            try:
+                phash_value = image_phash(path)
+            except Exception:
+                continue
+            if find_obfuscated_match(phash_value, archive_hashes, threshold=threshold):
                 conn.execute("UPDATE images SET retention_reason='possible_obfuscation' WHERE id=?", (row_id,))
                 changed += 1
         conn.commit()
