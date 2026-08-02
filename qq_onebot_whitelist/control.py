@@ -55,7 +55,10 @@ def start_services() -> None:
 
     if not port_open(NAPCAT_PORT):
         pid = subprocess.Popen(
-            ["cmd.exe", "/d", "/s", "/c", f'call "{napcat_bat}"'],
+            # 注意：不要给 napcat.bat 加引号。subprocess 在 Windows 会把列表参数里的
+            # 引号转义成 \"，cmd.exe 会将其解析为带引号的路径导致 "不是内部或外部命令"。
+            # 仓库路径不含空格，直接 call 即可。
+            ["cmd.exe", "/d", "/s", "/c", f"call {napcat_bat}"],
             cwd=str(napcat_dir),
             stdout=open(REPO_ROOT / "logs" / "napcat.log", "a", encoding="utf-8", errors="replace"),
             stderr=subprocess.STDOUT,

@@ -56,6 +56,8 @@ def test_start_uses_expected_commands(tmp_path, monkeypatch):
     joined = " ".join(" ".join(part) if isinstance(part, (list, tuple)) else str(part) for part in started)
     assert "napcat.bat" in joined
     assert "qq_onebot_whitelist.onebot" in joined
+    # Windows 引号转义回归：napcat 启动参数不能含被转义的引号（\"），否则 cmd 无法执行
+    assert not any("\\\"" in str(part) for cmd in started for part in cmd)
 
 
 def test_stop_kills_pid_files(tmp_path, monkeypatch):
