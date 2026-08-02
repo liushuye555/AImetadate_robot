@@ -207,7 +207,7 @@ QString Strings::section(const QString &section) {
     if (section == "bot") return "机器人";
     if (section == "ai") return "AI";
     if (section == "daily") return "日报";
-    if (section == "echo") return "复读机";
+    if (section == "keepalive") return "保活";
     if (section == "collection") return "群采集";
     if (section == "access") return "访问控制";
     if (section == "advanced") return "高级";
