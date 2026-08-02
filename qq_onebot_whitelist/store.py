@@ -178,6 +178,13 @@ class Store:
         if 'message_key' not in message_cols:
             conn.execute('ALTER TABLE messages ADD COLUMN message_key TEXT')
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_key ON messages(scope, message_key) WHERE message_key IS NOT NULL')
+        hash_cols = {row[1] for row in conn.execute('PRAGMA table_info(image_hashes)').fetchall()}
+        if 'xfq_ratio' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_ratio REAL')
+        if 'xfq_layers' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_layers INTEGER')
+        if 'xfq_obfuscated' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_obfuscated INTEGER')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
@@ -607,6 +614,33 @@ class Store:
                 (sha256, str(int(phash))),
             )
             conn.commit()
+
+    def save_obfuscation_score(self, sha256: str, *, ratio: float, layers: int | None, obfuscated: bool) -> None:
+        """缓存小番茄混淆检测结果，避免重分类时重复分析。"""
+        if not sha256:
+            return
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO image_hashes (sha256, xfq_ratio, xfq_layers, xfq_obfuscated) VALUES (?, ?, ?, ?) '
+                'ON CONFLICT(sha256) DO UPDATE SET xfq_ratio = excluded.xfq_ratio, '
+                'xfq_layers = excluded.xfq_layers, xfq_obfuscated = excluded.xfq_obfuscated, '
+                'updated_at = CURRENT_TIMESTAMP',
+                (sha256, round(float(ratio), 4), layers, 1 if obfuscated else 0),
+            )
+            conn.commit()
+
+    def obfuscation_score(self, sha256: str) -> tuple[float, int | None, bool] | None:
+        """返回缓存的 (ratio, layers, obfuscated)；未检测过返回 None。"""
+        if not sha256:
+            return None
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                'SELECT xfq_ratio, xfq_layers, xfq_obfuscated FROM image_hashes WHERE sha256 = ?',
+                (sha256,),
+            ).fetchone()
+        if not row or row[0] is None:
+            return None
+        return (float(row[0]), int(row[1]) if row[1] is not None else None, bool(row[2]))
 
     def archive_hashes(self, limit: int = 20000) -> list[tuple[int, str]]:
         """返回 AI 归档图片的 (phash, sha256) 列表。"""

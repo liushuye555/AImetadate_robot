@@ -113,7 +113,14 @@ def remove_sticker_records(project_dir: str | Path) -> int:
 
 
 def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5) -> int:
-    """重分类：pHash 匹配归档 → 疑似混淆；无匹配但 JPEG 块状伪影过高 → 疑似重编码。"""
+    """重分类图片。
+
+    优先级：
+    1. 小番茄混淆（Gilbert 曲线逆置换验证）→ xiaofanqie_obfuscated（算法级确认）；
+    2. pHash 匹配 AI 归档 → possible_obfuscation（旧启发式，可能误判）；
+    3. JPEG 块状伪影过高 → possible_reencode（弱信号）。
+    """
+    from .gilbert_obfuscation import analyze_image
     from .obfuscation import find_obfuscated_match, image_phash, jpeg_blockiness
     from .store import Store
     project_dir = Path(project_dir)
@@ -138,14 +145,37 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 known.add(sha)
             except Exception:
                 continue
-        # 2) 无元数据/候选图与归档比对
+        # 2) 无元数据/候选/疑似图先做小番茄混淆算法级验证（带缓存）
         archive_hashes = store.archive_hashes()
-        for row_id, kept_path, format in conn.execute(
-            "SELECT id, kept_path, format FROM images "
-            "WHERE retention_reason IN ('candidate', 'no_ai_metadata') AND kept_path IS NOT NULL"
+        for row_id, kept_path, format, sha256 in conn.execute(
+            "SELECT id, kept_path, format, sha256 FROM images "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
+            "AND kept_path IS NOT NULL"
         ).fetchall():
             path = Path(kept_path)
             if not path.exists():
+                continue
+            cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
+            if cached is not None:
+                xfq_result = {'obfuscated': cached[2], 'ratio': cached[0], 'layers': cached[1]}
+            else:
+                try:
+                    xfq_result = analyze_image(path)
+                except Exception:
+                    xfq_result = None
+                if xfq_result is not None:
+                    try:
+                        store.save_obfuscation_score(
+                            str(sha256 or ''),
+                            ratio=float(xfq_result['ratio']),
+                            layers=xfq_result.get('layers'),
+                            obfuscated=bool(xfq_result.get('obfuscated')),
+                        )
+                    except Exception:
+                        pass
+            if xfq_result and xfq_result.get('obfuscated'):
+                conn.execute("UPDATE images SET retention_reason='xiaofanqie_obfuscated' WHERE id=?", (row_id,))
+                changed += 1
                 continue
             try:
                 phash_value = image_phash(path)

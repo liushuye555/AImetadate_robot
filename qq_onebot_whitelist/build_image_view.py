@@ -17,6 +17,7 @@ CATEGORY_NAMES = {
     'positive_feedback': '02_群友好评',
     'nearby_ai_context': '03_AI上下文',
     'candidate': '04_候选待观察',
+    'xiaofanqie_obfuscated': '05_小番茄混淆',
     'possible_obfuscation': '05_疑似混淆',
     'possible_reencode': '06_疑似重编码',
     'no_ai_metadata': '99_普通无元数据',
@@ -242,7 +243,11 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '01_AI元数据_*：图片本身带 ComfyUI/NovelAI 等元数据，可信度最高。\n'
         '02_群友好评：被引用/附近好评、求提示词等晋升。\n'
         '03_AI上下文：图片附近有提示词/模型/工作流/参数讨论。\n'
-        '04_候选待观察：暂存，等待后续反馈。\n',
+        '04_候选待观察：暂存，等待后续反馈。\n'
+        '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
+        '05_疑似混淆：旧版 pHash 启发式标记（可能误判，待复核）。\n'
+        '06_疑似重编码：JPEG 块状伪影过高（弱信号）。\n'
+        '99_普通无元数据：正常图片但无 AI 元数据。\n',
         encoding='utf-8',
     )
     write_view_index(view, counts)

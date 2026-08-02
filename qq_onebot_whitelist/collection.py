@@ -16,6 +16,7 @@ from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
 from .obfuscation import find_obfuscated_match
+from .gilbert_obfuscation import analyze_image
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -248,8 +249,31 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                 filename_hint=image.get('file'),
                 nearby_text=nearby_text,
             )
+            # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
+            # 结果缓存到 image_hashes，避免重分类时重复分析。
+            if not result.get('has_ai_metadata') and result.get('kept_path'):
+                xfq_result = None
+                try:
+                    xfq_result = analyze_image(result['kept_path'])
+                except Exception:
+                    pass
+                if xfq_result is not None:
+                    result['xfq_ratio'] = round(float(xfq_result['ratio']), 4)
+                    result['xfq_layers'] = xfq_result.get('layers')
+                    try:
+                        store.save_obfuscation_score(
+                            str(result.get('sha256') or ''),
+                            ratio=float(xfq_result['ratio']),
+                            layers=xfq_result.get('layers'),
+                            obfuscated=bool(xfq_result.get('obfuscated')),
+                        )
+                    except Exception:
+                        pass
+                    if xfq_result.get('obfuscated'):
+                        result['retention_reason'] = 'xiaofanqie_obfuscated'
             # 无元数据但与 AI 归档图感知哈希高度相似 → 疑似混淆副本
-            if not result.get('has_ai_metadata') and result.get('phash') is not None:
+            if result.get('retention_reason') not in ('xiaofanqie_obfuscated', 'ai_metadata') \
+                    and not result.get('has_ai_metadata') and result.get('phash') is not None:
                 match = find_obfuscated_match(
                     result['phash'],
                     store.archive_hashes(),

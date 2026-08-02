@@ -7,6 +7,7 @@ VALUE_SCORE = {
     'ai_metadata': 0,
     'positive_feedback': 1,
     'nearby_ai_context': 2,
+    'xiaofanqie_obfuscated': 2,
     'possible_obfuscation': 2,
     'candidate': 3,
     'no_ai_metadata': 4,
