@@ -12,8 +12,10 @@ add_executable(qq-onebot-manager-qt WIN32
     src/main.cpp
     src/app/SingleInstance.cpp
     src/core/AutoStart.cpp
+    src/core/AutoRestart.cpp
     src/core/ConfigBridge.cpp
     src/core/LogReader.cpp
+    src/core/Notifier.cpp
     src/core/ServiceControl.cpp
     src/core/StatusMonitor.cpp
     src/ui/pages/LogsPage.cpp

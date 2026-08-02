@@ -1,13 +1,16 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QIcon>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
 #include <QUrl>
 #include "app/SingleInstance.h"
+#include "core/AutoRestart.h"
 #include "core/ConfigBridge.h"
+#include "core/Notifier.h"
 #include "core/Paths.h"
 #include "core/ServiceControl.h"
 #include "core/StatusMonitor.h"
@@ -55,6 +58,7 @@ int main(int argc, char *argv[]) {
     auto *statusMonitor = new StatusMonitor(Paths::statusFile(), 4000, &window);
     auto *serviceControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
+    auto *autoRestart = new AutoRestart(serviceControl, &window);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
 
     const auto runControl = [serviceControl](const QStringList &args) {
@@ -74,7 +78,7 @@ int main(int argc, char *argv[]) {
                                .arg(obj.value("links").toInt())
                                .arg(lastReport.isEmpty() ? "无" : lastReport));
     });
-    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats](const QString &action) {
+    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats, autoRestart, overview](const QString &action) {
         if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -85,8 +89,12 @@ int main(int argc, char *argv[]) {
             statusMonitor->refresh();
             fetchStats();
         } else if (action == "start" || action == "restart") {
+            autoRestart->setManualStop(false);
+            overview->setHint(QString());
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
         } else if (action == "stop") {
+            autoRestart->setManualStop(true);
+            overview->setHint(Strings::zh("manualStop"));
             runControl({"-m", "qq_onebot_whitelist.control", "stop"});
         } else if (action == "history") {
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
@@ -100,10 +108,48 @@ int main(int argc, char *argv[]) {
     QObject::connect(configBridge, &ConfigBridge::saved, settings, [settings](bool ok, const QString &msg) {
         settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
     });
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, [autoRestart, overview](bool ok, const QVariant &schema) {
+        if (!ok) return;
+        const QJsonArray items = QJsonDocument::fromVariant(schema).array();
+        for (const QJsonValue &value : items) {
+            if (value.toObject().value("key").toString() == "features.auto_restart") {
+                const bool enabled = value.toObject().value("default").toBool(true);
+                autoRestart->setEnabled(enabled);
+                overview->setAutoRestartText(enabled ? Strings::zh("autoRestartOn") : Strings::zh("autoRestartOff"));
+                break;
+            }
+        }
+    });
     QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
         ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
     });
     QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
+
+    auto *notifier = new Notifier(window.trayIcon(), &window);
+    QObject::connect(settings, &SettingsPage::notificationsToggled, notifier, &Notifier::setEnabled);
+    QObject::connect(statusMonitor, &StatusMonitor::statusChanged, notifier, &Notifier::onStatusChanged);
+    QObject::connect(statusMonitor, &StatusMonitor::statusChanged, autoRestart, &AutoRestart::onStatusChanged);
+    QObject::connect(autoRestart, &AutoRestart::autoRestarted, [statusMonitor] {
+        statusMonitor->refresh();
+    });
+    QObject::connect(&window, &MainWindow::trayAction, [&window, statusMonitor, runControl, autoRestart, overview](const QString &action) {
+        if (action == "quit") {
+            QApplication::quit();
+        } else if (action == "start" || action == "restart") {
+            autoRestart->setManualStop(false);
+            overview->setHint(QString());
+            runControl({"-m", "qq_onebot_whitelist.control", "start"});
+        } else if (action == "stop") {
+            autoRestart->setManualStop(true);
+            overview->setHint(Strings::zh("manualStop"));
+            runControl({"-m", "qq_onebot_whitelist.control", "stop"});
+        } else if (action == "logs") {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
+        } else if (action == "reports") {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/data/view/index.html"));
+        }
+    });
+
     configBridge->fetch();
 
     auto *reports = qobject_cast<ReportsPage *>(window.pageWidget("reports"));
