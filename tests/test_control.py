@@ -73,3 +73,38 @@ def test_stop_kills_pid_files(tmp_path, monkeypatch):
     control.stop_services()
     assert any("111" in " ".join(c) for c in killed)
     assert any("222" in " ".join(c) for c in killed)
+
+
+def test_stats_counts(monkeypatch):
+    class FakeStore:
+        def recent_files(self, **kw):
+            return [{"file_name": "a.zip"}, {"file_name": "b.zip"}]
+
+        def recent_link_records(self, **kw):
+            return [{"url": "https://x"}, {"url": "https://y"}]
+
+        def last_daily_report_sent_at(self):
+            return None
+
+    monkeypatch.setattr(
+        "qq_onebot_whitelist.maintenance.sync_image_files",
+        lambda project_dir: {
+            "image_duplicates_removed": 0,
+            "missing_cleared": 0,
+            "empty_candidate_dirs": 0,
+            "01_AI元数据": 8,
+            "02_群友好评": 4,
+            "resource_links": 5,
+            "resource_files": 3,
+        },
+    )
+    out = control.build_stats(FakeStore())
+    assert out["images"] == 12
+    assert out["links"] == 2
+    assert out["lastReport"] is None
+
+
+def test_cmd_stats_prints_json(capsys, monkeypatch):
+    monkeypatch.setattr(control, "load_stats", lambda: {"images": 1, "links": 2, "lastReport": None})
+    assert control.cmd_stats(None) == 0
+    assert "images" in capsys.readouterr().out

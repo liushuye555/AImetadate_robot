@@ -117,6 +117,50 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return cmd_start(args)
 
 
+def build_stats(store) -> dict:
+    try:
+        from .maintenance import sync_image_files
+        counts = sync_image_files(REPO_ROOT)
+        non_image_keys = {
+            "image_duplicates_removed",
+            "missing_cleared",
+            "empty_candidate_dirs",
+            "resource_links",
+            "resource_files",
+        }
+        images = sum(value for key, value in counts.items() if key not in non_image_keys)
+    except Exception as exc:
+        print(f"stats image count failed: {type(exc).__name__}: {exc}")
+        images = 0
+    try:
+        links = len(store.recent_link_records(limit=100000))
+    except Exception:
+        links = 0
+    try:
+        last_report = store.last_daily_report_sent_at()
+        last_report = last_report.isoformat(timespec="seconds") if last_report else None
+    except Exception:
+        last_report = None
+    return {"images": images, "links": links, "lastReport": last_report}
+
+
+def load_stats() -> dict:
+    from .config import load_config
+    from .store import Store
+    config = load_config(REPO_ROOT / "config.yaml")
+    store = Store(config.data_dir / "bot.db")
+    return build_stats(store)
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    try:
+        print(json.dumps(load_stats(), ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(f"stats failed: {type(exc).__name__}: {exc}")
+        return 1
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     print(json.dumps(load_status(), ensure_ascii=False))
     return 0
@@ -129,13 +173,20 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
+    sub.add_parser("stats")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    handlers = {"status": cmd_status, "start": cmd_start, "stop": cmd_stop, "restart": cmd_restart}
+    handlers = {
+        "status": cmd_status,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "restart": cmd_restart,
+        "stats": cmd_stats,
+    }
     return handlers[args.command](args)
 
 
