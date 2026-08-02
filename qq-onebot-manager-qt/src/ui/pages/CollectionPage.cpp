@@ -15,6 +15,8 @@
 #include <QDialogButtonBox>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QRadioButton>
+#include <QStackedWidget>
 
 CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
@@ -44,10 +46,10 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
         {"features.image_processing", "imageProcessing"},
         {"features.link_analysis", "linkAnalysis"},
         {"features.link_metadata", "linkMetadata"},
-        {"features.daily_report", "dailyReport"},
     };
     for (const auto &row : rows) {
         auto *box = new QCheckBox(templates);
+        box->setChecked(true);  // 内置模板默认开启
         box->setProperty("key", QString::fromLatin1(row.key));
         connect(box, &QCheckBox::toggled, this, [this] { markDirty(); });
         templateForm->addRow(Strings::zh(QLatin1String(row.labelKey)), box);
@@ -267,7 +269,7 @@ void CollectionPage::rebuildCustomRuleList() {
             : rule.value("keywords").toArray().first().toString();
         const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
             + (name.isEmpty() ? Strings::zh("unnamed") : name)
-            + (rule.value("ai_match").toBool(false) ? " [AI]" : "")
+            + (rule.value("ai_match").toBool(false) ? " [AI]" : rule.value("regex").toString().trimmed().isEmpty() ? "" : " [正则]")
             + (keywords.isEmpty() ? "" : "  ·  " + keywords);
         auto *item = new QListWidgetItem(summary, m_customRuleList);
         m_customRuleList->addItem(item);
@@ -322,11 +324,20 @@ void CollectionPage::openCollectionDialog(const QString &editGroup) {
 void CollectionPage::openCustomRuleDialog(int editIndex) {
     QDialog dialog(this);
     dialog.setWindowTitle(editIndex < 0 ? Strings::zh("addRule") : Strings::zh("editRule"));
-    dialog.resize(480, 460);
+    dialog.resize(520, 470);
     auto *form = new QFormLayout(&dialog);
     auto *nameEdit = new QLineEdit(&dialog);
     auto *enabled = new QCheckBox(Strings::zh("ruleEnabled"), &dialog);
     enabled->setChecked(true);
+    auto *modeKeywords = new QRadioButton(Strings::zh("modeKeywords"), &dialog);
+    auto *modeRegex = new QRadioButton(Strings::zh("modeRegex"), &dialog);
+    auto *modeAi = new QRadioButton(Strings::zh("modeAi"), &dialog);
+    modeKeywords->setChecked(true);
+    auto *modeRow = new QHBoxLayout;
+    modeRow->addWidget(modeKeywords);
+    modeRow->addWidget(modeRegex);
+    modeRow->addWidget(modeAi);
+    modeRow->addStretch();
     auto *groupsEdit = new QPlainTextEdit(&dialog);
     groupsEdit->setMaximumHeight(90);
     groupsEdit->setPlaceholderText(Strings::zh("listPlaceholder"));
@@ -334,30 +345,39 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
     keywordsEdit->setMaximumHeight(90);
     keywordsEdit->setPlaceholderText(Strings::zh("keywordsPlaceholder"));
     auto *regexEdit = new QLineEdit(&dialog);
-    auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
-    auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
-    auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
-    auto *aiMatch = new QCheckBox(Strings::zh("aiMatch"), &dialog);
     auto *aiPrompt = new QPlainTextEdit(&dialog);
     aiPrompt->setMaximumHeight(80);
     aiPrompt->setPlaceholderText(Strings::zh("aiPromptPlaceholder"));
+    auto *stack = new QStackedWidget(&dialog);
+    stack->addWidget(keywordsEdit);
+    stack->addWidget(regexEdit);
+    stack->addWidget(aiPrompt);
+    connect(modeKeywords, &QRadioButton::toggled, this, [stack](bool on) { if (on) stack->setCurrentIndex(0); });
+    connect(modeRegex, &QRadioButton::toggled, this, [stack](bool on) { if (on) stack->setCurrentIndex(1); });
+    connect(modeAi, &QRadioButton::toggled, this, [stack](bool on) { if (on) stack->setCurrentIndex(2); });
+    auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
+    auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
+    auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
     images->setChecked(true);
     links->setChecked(true);
     files->setChecked(true);
     form->addRow(Strings::zh("ruleName"), nameEdit);
     form->addRow(enabled);
+    form->addRow(Strings::zh("matchMode"), modeRow);
+    form->addRow(stack);
     form->addRow(Strings::zh("ruleGroups"), groupsEdit);
-    form->addRow(Strings::zh("ruleKeywords"), keywordsEdit);
-    form->addRow(Strings::zh("ruleRegex"), regexEdit);
     form->addRow(images);
     form->addRow(links);
     form->addRow(files);
-    form->addRow(aiMatch);
-    form->addRow(Strings::zh("aiPrompt"), aiPrompt);
     if (editIndex >= 0 && editIndex < m_customRules.size()) {
         const QJsonObject rule = m_customRules.at(editIndex).toObject();
         nameEdit->setText(rule.value("name").toString());
         enabled->setChecked(rule.value("enabled").toBool(true));
+        const bool useAi = rule.value("ai_match").toBool(false);
+        const bool useRegex = !useAi && !rule.value("regex").toString().trimmed().isEmpty();
+        if (useAi) modeAi->setChecked(true);
+        else if (useRegex) modeRegex->setChecked(true);
+        else modeKeywords->setChecked(true);
         QStringList groups;
         for (const QJsonValue &g : rule.value("groups").toArray()) groups << g.toString();
         groupsEdit->setPlainText(groups.join('\n'));
@@ -365,11 +385,10 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
         for (const QJsonValue &k : rule.value("keywords").toArray()) keywords << k.toString();
         keywordsEdit->setPlainText(keywords.join('\n'));
         regexEdit->setText(rule.value("regex").toString());
+        aiPrompt->setPlainText(rule.value("ai_prompt").toString());
         images->setChecked(rule.value("collect_images").toBool(true));
         links->setChecked(rule.value("collect_links").toBool(true));
         files->setChecked(rule.value("collect_files").toBool(true));
-        aiMatch->setChecked(rule.value("ai_match").toBool(false));
-        aiPrompt->setPlainText(rule.value("ai_prompt").toString());
     }
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     form->addRow(buttons);
@@ -383,21 +402,23 @@ void CollectionPage::openCustomRuleDialog(int editIndex) {
         if (!trimmed.isEmpty()) groups.append(trimmed);
     }
     QJsonArray keywords;
-    for (const QString &line : keywordsEdit->toPlainText().split('\n')) {
-        const QString trimmed = line.trimmed();
-        if (!trimmed.isEmpty()) keywords.append(trimmed);
+    if (modeKeywords->isChecked()) {
+        for (const QString &line : keywordsEdit->toPlainText().split('\n')) {
+            const QString trimmed = line.trimmed();
+            if (!trimmed.isEmpty()) keywords.append(trimmed);
+        }
     }
     QJsonObject rule;
     rule.insert("name", nameEdit->text().trimmed());
     rule.insert("enabled", enabled->isChecked());
     rule.insert("groups", groups);
     rule.insert("keywords", keywords);
-    rule.insert("regex", regexEdit->text().trimmed());
+    rule.insert("regex", modeRegex->isChecked() ? regexEdit->text().trimmed() : "");
     rule.insert("collect_images", images->isChecked());
     rule.insert("collect_links", links->isChecked());
     rule.insert("collect_files", files->isChecked());
-    rule.insert("ai_match", aiMatch->isChecked());
-    rule.insert("ai_prompt", aiPrompt->toPlainText().trimmed());
+    rule.insert("ai_match", modeAi->isChecked());
+    rule.insert("ai_prompt", modeAi->isChecked() ? aiPrompt->toPlainText().trimmed() : "");
     if (editIndex >= 0 && editIndex < m_customRules.size())
         m_customRules[editIndex] = rule;
     else

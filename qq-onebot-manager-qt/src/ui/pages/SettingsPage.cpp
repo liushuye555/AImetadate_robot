@@ -191,7 +191,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
 
         // 以下功能开关已拆分到“采集”一级页面
         if (key == "features.image_processing" || key == "features.link_analysis"
-            || key == "features.link_metadata" || key == "features.daily_report") {
+            || key == "features.link_metadata") {
             continue;
         }
 

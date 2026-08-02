@@ -85,6 +85,10 @@ QString Strings::zh(const QString &key) {
     if (key == "linkAnalysis") return "链接分析与分类";
     if (key == "linkMetadata") return "链接标题补全";
     if (key == "dailyReport") return "日报";
+    if (key == "matchMode") return "匹配方式";
+    if (key == "modeKeywords") return "关键词";
+    if (key == "modeRegex") return "正则";
+    if (key == "modeAi") return "AI 语义";
     if (key == "expandForwards") return "展开转发的合并消息（抓取内容归档）";
     if (key == "aiMatch") return "AI 语义匹配";
     if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
@@ -173,6 +177,10 @@ QString Strings::en(const QString &key) {
     if (key == "linkAnalysis") return "Link analysis & classification";
     if (key == "linkMetadata") return "Link metadata enrichment";
     if (key == "dailyReport") return "Daily report";
+    if (key == "matchMode") return "Match mode";
+    if (key == "modeKeywords") return "Keywords";
+    if (key == "modeRegex") return "Regex";
+    if (key == "modeAi") return "AI semantic";
     if (key == "expandForwards") return "Expand forwarded messages (collect their contents)";
     if (key == "aiMatch") return "AI semantic matching";
     if (key == "aiPrompt") return "AI matching description (what to collect)";
