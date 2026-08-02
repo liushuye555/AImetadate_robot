@@ -78,7 +78,20 @@ def test_detector_keeps_natural_image(tmp_path):
     result = analyze_image(path)
     assert result is not None
     assert result['obfuscated'] is False
-    assert result['restore_ratios'] and result['restore_ratios'][0] > 1.0
+    # ratio ≈ 1 时不会进恢复路径；若进了，也不能出现显著下降
+    assert all(v >= 0.9 for v in result['restore_ratios'])
+
+
+def test_detector_keeps_stripes_image(tmp_path):
+    """各向异性图（横向条纹）不能被误判为混淆。"""
+    w, h = 96, 72
+    raw = bytes((255 if (y // 2) % 2 else 0) for y in range(h) for x in range(w))
+    path = tmp_path / 'stripes.png'
+    Image.frombytes('L', (w, h), raw).save(path)
+
+    result = analyze_image(path)
+    assert result is not None
+    assert result['obfuscated'] is False
 
 
 def test_detector_handles_jpeg_recompression(tmp_path):

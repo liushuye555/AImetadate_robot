@@ -13,8 +13,8 @@
 - 进一步确认：把逆置换作用在图上，混淆图会恢复出平滑结构（栅格 TV 大幅下降），
   正常图则会被打乱成噪声（栅格 TV 上升）。
 
-实现说明：曲线用"直线段（run）"表示，避免逐像素构造全图顺序；
-TV 统计只沿直线段做差分，单张 1152x1152 图像约 1-3 秒。
+实现说明：曲线顺序用紧凑的 array('I') 表示（每像素 4 字节），递归生成时直接写入，
+不做中间元组，避免大图上产生数十万个小对象。缓存按总量设上限，长驻 bot 不膨胀。
 """
 
 from __future__ import annotations
@@ -39,15 +39,15 @@ RATIO_FALLBACK = 0.30       # 超大图无法逆置换时的严格 ratio 兜底
 MAX_LAYERS = 3              # 尝试解混淆的最大层数
 MAX_RESTORE_PIXELS = 6_000_000  # 超过此像素数不做逆置换（内存/耗时）
 
-_runs_cache: dict[tuple[int, int], tuple[tuple[int, int, int, int, int], ...]] = {}
+# 曲线顺序缓存：按 (w, h) 存 array('I')，总量上限约 64MB，超出清空
+MAX_CACHE_BYTES = 64 * 1024 * 1024
 _order_cache: dict[tuple[int, int], array] = {}
+_cache_bytes = 0
 
 
-def _gilbert_runs(
-    x: int, y: int, ax: int, ay: int, bx: int, by: int,
-    runs: list[tuple[int, int, int, int, int]],
-) -> None:
-    """生成 Gilbert 曲线的直线段集合（与 xiaofanqiehunxiao.com 内嵌 JS 等价）。"""
+def _gilbert_walk(x: int, y: int, ax: int, ay: int, bx: int, by: int,
+                  order: array, width: int) -> None:
+    """递归生成 Gilbert 曲线，叶节点直接写入扁平像素索引（与网站 JS 等价）。"""
     w = abs(ax + ay)
     h = abs(bx + by)
     dax = 1 if ax > 0 else -1 if ax < 0 else 0
@@ -55,10 +55,10 @@ def _gilbert_runs(
     dbx = 1 if bx > 0 else -1 if bx < 0 else 0
     dby = 1 if by > 0 else -1 if by < 0 else 0
     if h == 1:
-        runs.append((x, y, dax, day, w))
+        _emit_run(order, width, x, y, dax, day, w)
         return
     if w == 1:
-        runs.append((x, y, dbx, dby, h))
+        _emit_run(order, width, x, y, dbx, dby, h)
         return
     ax2 = ax // 2
     ay2 = ay // 2
@@ -70,64 +70,66 @@ def _gilbert_runs(
         if w2 % 2 and w > 2:
             ax2 += dax
             ay2 += day
-        _gilbert_runs(x, y, ax2, ay2, bx, by, runs)
-        _gilbert_runs(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, runs)
+        _gilbert_walk(x, y, ax2, ay2, bx, by, order, width)
+        _gilbert_walk(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, order, width)
     else:
         if h2 % 2 and h > 2:
             bx2 += dbx
             by2 += dby
-        _gilbert_runs(x, y, bx2, by2, ax2, ay2, runs)
-        _gilbert_runs(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, runs)
-        _gilbert_runs(
+        _gilbert_walk(x, y, bx2, by2, ax2, ay2, order, width)
+        _gilbert_walk(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, order, width)
+        _gilbert_walk(
             x + (ax - dax) + (bx2 - dbx),
             y + (ay - day) + (by2 - dby),
-            -bx2, -by2, -(ax - ax2), -(ay - ay2), runs,
+            -bx2, -by2, -(ax - ax2), -(ay - ay2), order, width,
         )
 
 
-def curve_runs(width: int, height: int) -> tuple[tuple[int, int, int, int, int], ...]:
-    """返回 Gilbert 曲线的直线段集合（缓存）。"""
-    key = (width, height)
-    cached = _runs_cache.get(key)
-    if cached is not None:
-        return cached
-    runs: list[tuple[int, int, int, int, int]] = []
-    if width >= height:
-        _gilbert_runs(0, 0, width, 0, 0, height, runs)
+def _emit_run(order: array, width: int, x: int, y: int, dx: int, dy: int, length: int) -> None:
+    """把一条沿轴的直线段（起点+方向+长度）写进顺序表。"""
+    if length <= 0:
+        return
+    if dx and dy:
+        order.extend((y + k * dy) * width + (x + k * dx) for k in range(length))
+    elif dy == 0:
+        base = y * width + x
+        if dx > 0:
+            order.extend(range(base, base + length))
+        else:
+            order.extend(range(base, base - length, -1))
     else:
-        _gilbert_runs(0, 0, 0, height, width, 0, runs)
-    cached = tuple(runs)
-    _runs_cache[key] = cached
-    return cached
+        base = y * width + x
+        if dy > 0:
+            order.extend(range(base, base + length * width, width))
+        else:
+            order.extend(range(base, base - length * width, -width))
 
 
-def curve_order(width: int, height: int) -> array:
-    """返回曲线顺序下的扁平像素索引 order[s]（uint32，缓存，用于逆置换）。"""
+def _curve_order_cached(width: int, height: int) -> array:
+    """返回曲线顺序下的扁平像素索引 order[s]（uint32，缓存，用于逆置换与 TV）。"""
+    global _cache_bytes
     key = (width, height)
     cached = _order_cache.get(key)
     if cached is not None:
         return cached
-    runs = curve_runs(width, height)
     order = array('I')
-    for x, y, dx, dy, length in runs:
-        if dx and dy:
-            order.extend((y + k * dy) * width + (x + k * dx) for k in range(length))
-        elif dy == 0:
-            base = y * width + x
-            if dx > 0:
-                order.extend(range(base, base + length))
-            else:
-                order.extend(range(base, base - length, -1))
-        else:
-            base = y * width + x
-            if dy > 0:
-                order.extend(range(base, base + length * width, width))
-            else:
-                order.extend(range(base, base - length * width, -width))
+    if width >= height:
+        _gilbert_walk(0, 0, width, 0, 0, height, order, width)
+    else:
+        _gilbert_walk(0, 0, 0, height, width, 0, order, width)
     assert len(order) == width * height
-    assert len(set(order)) == width * height
+    # 排列唯一性由算法保证，且单测覆盖；这里不做 O(N) 的 set 校验（大图会瞬时多占 ~100MB）
+    if _cache_bytes > MAX_CACHE_BYTES:
+        _order_cache.clear()
+        _cache_bytes = 0
     _order_cache[key] = order
+    _cache_bytes += len(order) * 4
     return order
+
+
+def curve_order(width: int, height: int) -> array:
+    """公开接口：返回曲线顺序索引（测试/外部使用）。"""
+    return _curve_order_cached(width, height)
 
 
 def _raster_tv(mv, width: int, height: int) -> float:
@@ -146,24 +148,15 @@ def _raster_tv(mv, width: int, height: int) -> float:
     return total / max(1, edges)
 
 
-def _curve_tv(mv, width: int, height: int) -> float:
-    """沿 Gilbert 曲线路径的相邻像素平均绝对差（用直线段直接差分）。"""
-    runs = curve_runs(width, height)
+def _curve_tv(mv, width: int, height: int, order: array) -> float:
+    """沿 Gilbert 曲线路径的相邻像素平均绝对差（直接按顺序表差分）。"""
     total = 0
-    for x, y, dx, dy, length in runs:
-        if length <= 1:
-            continue
-        if dx == 1 and dy == 0:
-            seg = mv[y * width + x:y * width + x + length]
-        elif dx == -1 and dy == 0:
-            seg = mv[y * width + x - length + 1:y * width + x + 1]
-        elif dx == 0 and dy == 1:
-            seg = mv[y * width + x:y * width + x + length * width:width]
-        elif dx == 0 and dy == -1:
-            seg = mv[(y - length + 1) * width + x:(y + 1) * width + x:width]
-        else:
-            seg = [mv[(y + k * dy) * width + (x + k * dx)] for k in range(length)]
-        total += sum(abs(a - b) for a, b in zip(seg, seg[1:]))
+    prev = mv[order[0]]
+    for s in range(1, width * height):
+        cur = mv[order[s]]
+        diff = cur - prev
+        total += diff if diff >= 0 else -diff
+        prev = cur
     return total / max(1, width * height)
 
 
@@ -182,7 +175,7 @@ def _restore_ratios(mv, width: int, height: int, base_tv: float, layers: int = M
     if base_tv <= 1e-6:
         return []
     n = width * height
-    order = curve_order(width, height)
+    order = _curve_order_cached(width, height)
     shift = round((math.sqrt(5) - 1) / 2 * n)
     cur = bytearray(mv)
     ratios: list[float] = []
@@ -210,7 +203,8 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
         mv = memoryview(img.convert('L').tobytes())
 
     tv_raster = _raster_tv(mv, width, height)
-    tv_curve = _curve_tv(mv, width, height)
+    order = _curve_order_cached(width, height)
+    tv_curve = _curve_tv(mv, width, height, order)
     ratio = tv_curve / tv_raster if tv_raster > 1e-6 else 1.0
     result: dict[str, Any] = {
         'obfuscated': False,
