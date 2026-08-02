@@ -103,10 +103,9 @@ int main(int argc, char *argv[]) {
         } else if (action == "history") {
             runControl({"-m", "qq_onebot_whitelist.control", "start"});
         } else if (action == "collection-toggle") {
-            const bool paused = statusMonitor->snapshot().collectionPaused;
-            overview->setCollectionPaused(!paused);
-            runControl({"-m", "qq_onebot_whitelist.control", "collection", paused ? "on" : "off"});
-            statusMonitor->refresh();
+            // 以按钮当前勾选状态为准（勾选=暂停），不依赖可能滞后 30 秒的状态文件
+            runControl({"-m", "qq_onebot_whitelist.control", "collection",
+                        overview->collectionChecked() ? "off" : "on"});
         }
     });
 

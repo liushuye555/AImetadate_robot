@@ -15,6 +15,7 @@ public:
     void setHint(const QString &text);
     void setAutoRestartText(const QString &text);
     void setCollectionPaused(bool paused);
+    bool collectionChecked() const { return m_collection ? m_collection->isChecked() : m_collectionPaused; }
 signals:
     void actionRequested(const QString &action); // start/stop/restart/refresh/logs/reports/config/history
 private:
