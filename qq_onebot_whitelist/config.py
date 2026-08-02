@@ -45,7 +45,7 @@ class AppConfig:
     daily_report_max_enriched_links: int = 8
     daily_report_include_links: bool = True
     daily_report_include_files: bool = True
-    echo_enabled: bool = False
+    echo_enabled: bool = True
     echo_min_repeat: int = 3
     echo_window_seconds: int = 60
     echo_groups: set[str] = field(default_factory=set)
@@ -130,7 +130,7 @@ def load_config(path: str | Path) -> AppConfig:
         daily_report_max_enriched_links=int(daily_report.get('max_enriched_links') or 8),
         daily_report_include_links=bool(daily_report.get('include_links', True)),
         daily_report_include_files=bool(daily_report.get('include_files', True)),
-        echo_enabled=bool(echo.get('enabled', False)),
+        echo_enabled=bool(echo.get('enabled', True)),
         echo_min_repeat=int(echo.get('min_repeat') or 3),
         echo_window_seconds=int(echo.get('window_seconds') or 60),
         echo_groups={str(x) for x in (echo.get('groups') or [])},

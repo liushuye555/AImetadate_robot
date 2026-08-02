@@ -57,7 +57,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('daily_report.max_enriched_links', 'number', daily.get('max_enriched_links', 8), 'Maximum enriched links', '最多补全链接数', section='daily', min=0, max=100),
         field('daily_report.include_links', 'bool', daily.get('include_links', True), 'Include links in daily report', '日报包含链接', section='daily'),
         field('daily_report.include_files', 'bool', daily.get('include_files', True), 'Include files in daily report', '日报包含文件', section='daily'),
-        field('echo.enabled', 'bool', echo.get('enabled', False), 'Echo/repeat enabled', '复读机开关', section='keepalive'),
+        field('echo.enabled', 'bool', echo.get('enabled', True), 'Echo/repeat enabled', '复读机开关', section='keepalive'),
         field('echo.min_repeat', 'number', echo.get('min_repeat', 3), 'Repeat threshold', '复读触发人数', section='keepalive', min=2, max=50),
         field('echo.window_seconds', 'number', echo.get('window_seconds', 60), 'Repeat window (s)', '复读时间窗（秒）', section='keepalive', min=10, max=3600),
         field('echo.groups', 'list', echo.get('groups', []), 'Echo groups (blank = all)', '复读群列表（留空=全部群）', section='keepalive'),
