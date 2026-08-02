@@ -112,9 +112,9 @@ def remove_sticker_records(project_dir: str | Path) -> int:
     return removed
 
 
-def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10) -> int:
-    """用感知哈希把与 AI 归档图高度相似的无元数据图片重分类为疑似混淆。"""
-    from .obfuscation import find_obfuscated_match, image_phash
+def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5) -> int:
+    """重分类：pHash 匹配归档 → 疑似混淆；无匹配但 JPEG 块状伪影过高 → 疑似重编码。"""
+    from .obfuscation import find_obfuscated_match, image_phash, jpeg_blockiness
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -140,10 +140,8 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 continue
         # 2) 无元数据/候选图与归档比对
         archive_hashes = store.archive_hashes()
-        if not archive_hashes:
-            return 0
-        for row_id, kept_path in conn.execute(
-            "SELECT id, kept_path FROM images "
+        for row_id, kept_path, format in conn.execute(
+            "SELECT id, kept_path, format FROM images "
             "WHERE retention_reason IN ('candidate', 'no_ai_metadata') AND kept_path IS NOT NULL"
         ).fetchall():
             path = Path(kept_path)
@@ -153,9 +151,16 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 phash_value = image_phash(path)
             except Exception:
                 continue
-            if find_obfuscated_match(phash_value, archive_hashes, threshold=threshold):
+            if archive_hashes and find_obfuscated_match(phash_value, archive_hashes, threshold=threshold):
                 conn.execute("UPDATE images SET retention_reason='possible_obfuscation' WHERE id=?", (row_id,))
                 changed += 1
+            elif str(format or '').upper().startswith('JPEG'):
+                try:
+                    if jpeg_blockiness(path) >= reencode_threshold:
+                        conn.execute("UPDATE images SET retention_reason='possible_reencode' WHERE id=?", (row_id,))
+                        changed += 1
+                except Exception:
+                    continue
         conn.commit()
     return changed
 

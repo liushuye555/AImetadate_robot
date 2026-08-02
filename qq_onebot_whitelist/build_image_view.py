@@ -18,6 +18,7 @@ CATEGORY_NAMES = {
     'nearby_ai_context': '03_AI上下文',
     'candidate': '04_候选待观察',
     'possible_obfuscation': '05_疑似混淆',
+    'possible_reencode': '06_疑似重编码',
     'no_ai_metadata': '99_普通无元数据',
 }
 

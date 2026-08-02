@@ -7,6 +7,7 @@ from typing import Iterable
 
 
 PHASH_MATCH_THRESHOLD = 10  # 汉明距离阈值，越小越严格
+REENCODE_BLOCKINESS_THRESHOLD = 6.5  # JPEG 块状伪影阈值，越大越严格
 
 
 def image_phash(path: str | Path) -> int:
@@ -50,3 +51,23 @@ def find_obfuscated_match(phash_value: int, archive_hashes: Iterable[tuple[int, 
             if distance == 0:
                 break
     return best if best is not None and best_distance <= threshold else None
+
+
+def jpeg_blockiness(path: str | Path) -> float:
+    """估算 JPEG 块状伪影强度：8x8 块边界的不连续度（重压缩图通常更高）。"""
+    from PIL import Image
+    with Image.open(path) as img:
+        img = img.convert('L')
+        width, height = img.size
+        pixels = list(img.tobytes())
+    total = 0.0
+    count = 0
+    step = max(8, min(width, height) // 64)
+    for y in range(0, max(1, height - 8), step):
+        for x in range(0, max(1, width - 8), step):
+            for yy in range(y, min(y + 8, height - 1)):
+                total += abs(int(pixels[yy * width + x + 7]) - int(pixels[yy * width + x + 8]))
+            for xx in range(x, min(x + 8, width - 1)):
+                total += abs(int(pixels[(y + 7) * width + xx]) - int(pixels[(y + 8) * width + xx]))
+            count += 16
+    return total / max(1, count)

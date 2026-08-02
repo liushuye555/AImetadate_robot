@@ -257,6 +257,10 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                 )
                 if match is not None:
                     result['retention_reason'] = 'possible_obfuscation'
+            # 无原图可比对时：JPEG 块状伪影过高 → 疑似重编码（弱信号，待确认）
+            if result.get('retention_reason') in ('candidate', 'no_ai_metadata') \
+                    and float(result.get('blockiness') or 0) >= config.reencode_threshold:
+                result['retention_reason'] = 'possible_reencode'
             if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
                 store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
             # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式

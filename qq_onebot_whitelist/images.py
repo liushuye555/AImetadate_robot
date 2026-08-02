@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from .image_meta import ImageMetadata, parse_image_metadata
 from .image_policy import should_keep_image
-from .obfuscation import image_phash
+from .obfuscation import image_phash, jpeg_blockiness
 
 
 def is_sticker_image_segment(data: dict) -> bool:
@@ -121,6 +121,10 @@ def process_image_url(
     except Exception:
         phash_value = None
     meta = parse_image_metadata(tmp)
+    try:
+        blockiness_value = jpeg_blockiness(tmp) if str(meta.format or '').upper().startswith('JPEG') else 0.0
+    except Exception:
+        blockiness_value = 0.0
     keep, reason = should_keep_image(meta, nearby_text=nearby_text)
     kept_path = None
     existing = existing_content_path(digest, archive_root, candidate_root)
@@ -147,6 +151,7 @@ def process_image_url(
         'url': url,
         'sha256': digest,
         'phash': phash_value,
+        'blockiness': blockiness_value,
         'size': size,
         'format': meta.format,
         'width': meta.width,

@@ -22,6 +22,7 @@ class AppConfig:
     candidate_ttl_hours: int = 24
     sticker_repeat_threshold: int = 3
     obfuscation_threshold: int = 10
+    reencode_threshold: float = 6.5
     startup_history_enabled: bool = True
     startup_history_mode: str = 'whitelist'
     startup_history_groups: set[str] = field(default_factory=set)
@@ -108,6 +109,7 @@ def load_config(path: str | Path) -> AppConfig:
         candidate_ttl_hours=int(images.get('candidate_ttl_hours') or 24),
         sticker_repeat_threshold=int(images.get('sticker_repeat_threshold') or 3),
         obfuscation_threshold=int(images.get('obfuscation_threshold') or 10),
+        reencode_threshold=float(images.get('reencode_threshold') or 6.5),
         startup_history_enabled=bool(startup_history.get('enabled', True)),
         startup_history_mode=str(startup_history.get('mode') or 'whitelist').lower(),
         startup_history_groups={str(x) for x in (startup_history.get('groups') or [])},

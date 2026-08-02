@@ -184,6 +184,46 @@ def test_reclassify_possible_obfuscation(tmp_path):
     conn.close()
 
 
+def test_jpeg_blockiness_detects_reencoding(tmp_path):
+    from PIL import Image
+    from qq_onebot_whitelist.obfuscation import jpeg_blockiness
+
+    img = Image.new("RGB", (128, 128))
+    for x in range(128):
+        for y in range(128):
+            img.putpixel((x, y), ((x * 7 + y * 3) % 256, (x * 3 + y * 11) % 256, ((x * y) // 64) % 256))
+    png_path = tmp_path / "a.png"
+    jpg_path = tmp_path / "a.jpg"
+    img.save(png_path)
+    img.save(jpg_path, quality=20)
+    assert jpeg_blockiness(jpg_path) > jpeg_blockiness(png_path)
+
+
+def test_reclassify_possible_reencode(tmp_path):
+    import sqlite3
+    from PIL import Image
+    from qq_onebot_whitelist.maintenance import reclassify_possible_obfuscation
+    from qq_onebot_whitelist.store import Store
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    store = Store(db_dir / "bot.db")
+    img = Image.new("RGB", (64, 64))
+    for x in range(64):
+        for y in range(64):
+            img.putpixel((x, y), ((x * 7 + y * 3) % 256, (x * 3 + y * 11) % 256, ((x * y) // 32) % 256))
+    low = tmp_path / "low.jpg"
+    img.save(low, quality=20)
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "l1", "format": "JPEG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(low), "retention_reason": "candidate",
+    }, raw={})
+    changed = reclassify_possible_obfuscation(tmp_path, reencode_threshold=1.0)
+    assert changed == 1
+    conn = sqlite3.connect(db_dir / "bot.db")
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='l1'").fetchone()[0] == "possible_reencode"
+    conn.close()
+
+
 def test_collection_allows_defaults_true():
     config = AppConfig()
     assert onebot.collection_allows("123", "images", config) is True
