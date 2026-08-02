@@ -112,3 +112,7 @@ void OverviewPage::setCollectionPaused(bool paused) {
     m_collection->style()->unpolish(m_collection);
     m_collection->style()->polish(m_collection);
 }
+
+bool OverviewPage::collectionChecked() const {
+    return m_collection ? m_collection->isChecked() : m_collectionPaused;
+}
