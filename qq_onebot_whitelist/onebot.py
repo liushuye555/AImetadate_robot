@@ -189,40 +189,15 @@ async def keepalive_loop(ws, config: AppConfig) -> None:
         await asyncio.sleep(max(1, config.keepalive_interval_minutes) * 60)
 
 
-async def status_writer_loop(ws, config: AppConfig) -> None:
+async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] | None = None) -> None:
     from . import control
+    login = login_info or {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
     while True:
         try:
-            login = {}
-            try:
-                # 用独立连接查询登录态，避免与主消息循环抢同一 WebSocket 的响应
-                async with websockets.connect(config.onebot_ws_url) as info_ws:
-                    echo = f"login-{datetime.now().timestamp()}"
-                    await info_ws.send(
-                        json.dumps({"action": "get_login_info", "params": {}, "echo": echo}, ensure_ascii=False)
-                    )
-                    while True:
-                        raw = await info_ws.recv()
-                        try:
-                            data = json.loads(raw)
-                        except Exception:
-                            continue
-                        if data.get("echo") == echo:
-                            payload = data.get("data") or {}
-                            qq_number = str(payload.get("user_id") or "")
-                            qq_nickname = str(payload.get("nickname") or "")
-                            login = {
-                                "qqLoggedIn": bool(qq_number),
-                                "qqNumber": qq_number,
-                                "qqNickname": qq_nickname,
-                            }
-                            break
-            except Exception as exc:
-                print(f"status_writer get_login_info failed: {type(exc).__name__}: {exc}")
-                login = {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
             control.write_status(
                 {
                     "napcat": control.port_open(control.NAPCAT_PORT),
+                    # 主连接活着即 OneBot 在线、QQ 已登录（端口 3001 只在 QQ 登录后开放）
                     "onebot": True,
                     "bot": True,
                     "collectionPaused": is_collection_paused(),
@@ -373,11 +348,23 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
     except Exception as exc:
         print(f'image view refresh failed on startup: {type(exc).__name__}: {exc}')
     async with websockets.connect(config.onebot_ws_url) as ws:
+        login_info = {}
+        try:
+            resp = await call_action(ws, "get_login_info", {})
+            data = resp.get("data") or {}
+            qq_number = str(data.get("user_id") or "")
+            login_info = {
+                "qqLoggedIn": bool(qq_number),
+                "qqNumber": qq_number,
+                "qqNickname": str(data.get("nickname") or ""),
+            }
+        except Exception as exc:
+            print(f"get_login_info failed at startup: {type(exc).__name__}: {exc}")
         startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
         report_task = asyncio.create_task(daily_report_loop(ws, config, store))
         ai_task = asyncio.create_task(ai_context_loop(config_path, store))
         keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
-        status_task = asyncio.create_task(status_writer_loop(ws, config))
+        status_task = asyncio.create_task(status_writer_loop(ws, config, login_info))
         try:
             async for raw in ws:
                 try:
