@@ -108,3 +108,30 @@ def test_cmd_stats_prints_json(capsys, monkeypatch):
     monkeypatch.setattr(control, "load_stats", lambda: {"images": 1, "links": 2, "lastReport": None})
     assert control.cmd_stats(None) == 0
     assert "images" in capsys.readouterr().out
+
+
+def test_report_preview_builds_text(monkeypatch):
+    class FakeStore:
+        def last_daily_report_sent_at(self):
+            return None
+
+    class FakeConfig:
+        daily_report_enrich_links = True
+        feature_link_metadata = True
+        feature_link_analysis = True
+        daily_report_max_links = 20
+        daily_report_max_enriched_links = 8
+        language = "zh-CN"
+
+    monkeypatch.setattr(
+        "qq_onebot_whitelist.daily_report.build_daily_resource_report",
+        lambda store, **kw: "日报内容",
+    )
+    assert control.build_report_preview(FakeStore(), FakeConfig()) == "日报内容"
+
+
+def test_cmd_report_preview_prints_json(capsys, monkeypatch):
+    monkeypatch.setattr(control, "load_report_preview", lambda: ("内容", 2))
+    assert control.cmd_report_preview(None) == 0
+    out = capsys.readouterr().out
+    assert '"ok": true' in out and "内容" in out

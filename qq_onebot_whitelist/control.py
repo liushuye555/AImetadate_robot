@@ -161,6 +161,77 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
 
 
+def build_report_preview(store, config=None) -> str:
+    from .config import load_config
+    from .daily_report import build_daily_resource_report
+    config = config or load_config(REPO_ROOT / "config.yaml")
+    content = build_daily_resource_report(
+        store,
+        since=store.last_daily_report_sent_at(),
+        enrich_links=config.daily_report_enrich_links and config.feature_link_metadata,
+        analyze_links=config.feature_link_analysis,
+        max_links=config.daily_report_max_links,
+        max_enriched_links=config.daily_report_max_enriched_links,
+        language=config.language,
+    )
+    return content or "（暂无日报内容）"
+
+
+def load_report_preview() -> tuple[str, int]:
+    from .config import load_config
+    from .store import Store
+    config = load_config(REPO_ROOT / "config.yaml")
+    store = Store(config.data_dir / "bot.db")
+    content = build_report_preview(store, config)
+    return content, len(content)
+
+
+def cmd_report_preview(args: argparse.Namespace) -> int:
+    try:
+        content, chars = load_report_preview()
+        print(json.dumps({"ok": True, "content": content, "chars": chars}, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
+async def _send_report_once() -> int:
+    import websockets
+    from .config import load_config
+    from .daily_report import build_daily_resource_report, split_message
+    from .store import Store
+    config = load_config(REPO_ROOT / "config.yaml")
+    store = Store(config.data_dir / "bot.db")
+    content = build_daily_resource_report(
+        store,
+        since=store.last_daily_report_sent_at(),
+        enrich_links=config.daily_report_enrich_links and config.feature_link_metadata,
+        analyze_links=config.feature_link_analysis,
+        max_links=config.daily_report_max_links,
+        max_enriched_links=config.daily_report_max_enriched_links,
+        language=config.language,
+    )
+    if not content:
+        print(json.dumps({"ok": False, "error": "empty report"}, ensure_ascii=False))
+        return 1
+    async with websockets.connect(config.onebot_ws_url) as ws:
+        for chunk in split_message(content, max_chars=1800):
+            for user_id in sorted(config.bot.whitelist_users):
+                await ws.send(json.dumps(
+                    {"action": "send_private_msg",
+                     "params": {"user_id": int(user_id), "message": chunk}},
+                    ensure_ascii=False,
+                ))
+    print(json.dumps({"ok": True, "chars": len(content)}, ensure_ascii=False))
+    return 0
+
+
+def cmd_report_send(args: argparse.Namespace) -> int:
+    import asyncio
+    return asyncio.run(_send_report_once())
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     print(json.dumps(load_status(), ensure_ascii=False))
     return 0
@@ -174,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("stop")
     sub.add_parser("restart")
     sub.add_parser("stats")
+    sub.add_parser("report-preview")
+    sub.add_parser("report-send")
     return parser
 
 
@@ -186,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         "stop": cmd_stop,
         "restart": cmd_restart,
         "stats": cmd_stats,
+        "report-preview": cmd_report_preview,
+        "report-send": cmd_report_send,
     }
     return handlers[args.command](args)
 
