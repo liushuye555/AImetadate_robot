@@ -39,6 +39,25 @@ def test_echo_disabled_by_default():
     assert onebot.echo_reply_text(text_event("1", "x"), config) is None
 
 
+def test_echo_interleaved_text_resets():
+    onebot._echo_state.clear()
+    onebot._echo_last.clear()
+    config = AppConfig(echo_enabled=True, echo_min_repeat=2, echo_window_seconds=0)
+    assert onebot.echo_reply_text(text_event("1", "aaa"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "bbb"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "aaa"), config) is None  # 被 bbb 打断，不连续
+    assert onebot.echo_reply_text(text_event("1", "aaa"), config) == "aaa"  # 连续两条 aaa 触发
+
+
+def test_echo_unlimited_window_consecutive():
+    onebot._echo_state.clear()
+    onebot._echo_last.clear()
+    config = AppConfig(echo_enabled=True, echo_min_repeat=3, echo_window_seconds=0)
+    assert onebot.echo_reply_text(text_event("1", "x"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "x"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "x"), config) == "x"
+
+
 def test_collection_allows_defaults_true():
     config = AppConfig()
     assert onebot.collection_allows("123", "images", config) is True

@@ -29,11 +29,12 @@ from .store import Store
 
 
 _echo_state: dict[tuple[str, str], list[float]] = {}
+_echo_last: dict[str, tuple[str, float]] = {}
 _group_activity: dict[str, float] = {}
 
 
 def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
-    """多人重复同一条消息时返回要复读的文本；未触发返回 None。"""
+    """多人连续重复同一条消息时返回要复读的文本；window_seconds=0 表示无限（只看连续性）。"""
     if not config.echo_enabled or event.get('post_type') != 'message' or event.get('message_type') != 'group':
         return None
     group = str(event.get('group_id') or '')
@@ -45,11 +46,19 @@ def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
     if not text or len(text) > 100:
         return None
     now = time.time()
+    window = max(0, config.echo_window_seconds)
     key = (group, text)
+    # 连续性：本群上一条是不同文本 → 重置该文本的计数
+    last = _echo_last.get(group)
+    if last and last[0] != text:
+        _echo_state.pop((group, last[0]), None)
+    _echo_last[group] = (text, now)
     stamps = _echo_state.setdefault(key, [])
+    if window > 0:
+        cutoff = now - window
+        stamps = [item for item in stamps if item >= cutoff]
+        _echo_state[key] = stamps
     stamps.append(now)
-    cutoff = now - max(1, config.echo_window_seconds)
-    _echo_state[key] = [item for item in stamps if item >= cutoff]
     if len(_echo_state[key]) >= max(2, config.echo_min_repeat):
         _echo_state.pop(key, None)
         return text
