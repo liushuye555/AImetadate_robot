@@ -239,6 +239,21 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
+    archive_budget_removed = 0
+    try:
+        from .archive_budget import enforce_archive_budget
+        from .config import load_config
+        config = load_config(project_dir / 'config.yaml')
+        removed = enforce_archive_budget(
+            project_dir / 'data' / 'images' / 'ai',
+            store.image_records_with_paths(),
+            max_bytes=max(1, int(config.max_archive_mb)) * 1024 * 1024,
+        )
+        archive_budget_removed = len(removed)
+        if removed:
+            print(f'archive budget: removed {len(removed)} files')
+    except Exception as exc:
+        print(f'archive budget failed: {type(exc).__name__}: {exc}')
     image_duplicates_removed = deduplicate_image_storage(project_dir, store)
     missing_cleared = store.clear_missing_image_paths(project_dir)
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
@@ -247,7 +262,7 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

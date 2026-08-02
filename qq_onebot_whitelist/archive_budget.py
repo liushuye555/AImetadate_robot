@@ -13,6 +13,9 @@ VALUE_SCORE = {
     'no_ai_metadata': 4,
 }
 
+# 预算清理只针对 04_候选待观察（临时暂存）；其余分类一律保留
+BUDGET_DELETABLE_REASONS = {'candidate'}
+
 
 def archive_size_bytes(root: str | Path) -> int:
     root = Path(root)
@@ -38,6 +41,9 @@ def enforce_archive_budget(root: str | Path, image_records: list[dict[str, Any]]
         if not path.exists() or not path.is_file():
             continue
         reason = str(record.get('retention_reason') or '')
+        if reason not in BUDGET_DELETABLE_REASONS:
+            # 只有临时候选参与预算清理，其余分类（含 AI 图/上下文/好评）一律保留
+            continue
         value = VALUE_SCORE.get(reason, 5)
         # Lower id is older; lower value is more valuable, so delete high value-score / older first.
         candidates.append((value, int(record.get('id') or 0), path))
