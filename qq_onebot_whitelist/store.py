@@ -582,6 +582,17 @@ class Store:
             })
         return items
 
+    def count_image_occurrences(self, scope: str, sha256: str) -> int:
+        """统计某群内同一图片（sha256）已出现的次数。"""
+        if not sha256:
+            return 0
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                'SELECT COUNT(*) FROM images WHERE scope = ? AND sha256 = ?',
+                (scope, sha256),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def get_history_cursor(self, group_id: str | int) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(

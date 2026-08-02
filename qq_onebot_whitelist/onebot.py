@@ -220,6 +220,23 @@ async def _send_group_message(ws, group_id: str, message: str) -> None:
     ))
 
 
+def contains_at_all(event: dict[str, Any]) -> bool:
+    """检测群消息是否 @全体成员（管理员清理前常发的公告）。"""
+    for segment in (event.get('message') or []):
+        if not isinstance(segment, dict):
+            continue
+        if segment.get('type') == 'at':
+            data = segment.get('data') or {}
+            if str(data.get('qq') or '') in ('all', '0', '全体成员'):
+                return True
+        data = segment.get('data')
+        if isinstance(data, dict):
+            text = str(data.get('text') or '')
+            if '全体成员' in text or '@all' in text.lower():
+                return True
+    return False
+
+
 async def keepalive_loop(ws, config: AppConfig) -> None:
     last_timed = 0.0
     while True:
@@ -405,6 +422,10 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         return False
     if event.get('message_type') == 'group':
         _group_activity[str(event.get('group_id') or '')] = time.time()
+        if config.keepalive_enabled and config.keepalive_message.strip() and contains_at_all(event):
+            # 管理员 @全体成员（常伴随清理死人）→ 立即发保活消息，避免机器人被当不活跃账号清理
+            await _send_group_message(ws, str(event.get('group_id') or ''), config.keepalive_message)
+            _group_activity[str(event.get('group_id') or '')] = time.time()
     if is_blocked_event(event, config):
         return False
     echo_text = echo_reply_text(event, config)

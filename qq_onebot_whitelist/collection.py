@@ -11,7 +11,7 @@ from .store import Store, canonical_message_key
 from .commands import scope_for_event
 from .policy import extract_text
 from .resources import extract_file_segments
-from .images import extract_image_segments, is_probable_sticker_result, process_image_url
+from .images import extract_image_segments, is_probable_sticker_result, is_sticker_format, process_image_url
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
@@ -247,7 +247,9 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                 filename_hint=image.get('file'),
                 nearby_text=nearby_text,
             )
-            if is_probable_sticker_result(result) and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
+            # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式
+            is_sticker = is_sticker_format(result) and (store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1) >= max(1, config.sticker_repeat_threshold)
+            if is_sticker and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
                 kept = result.get('kept_path')
                 if kept:
                     Path(kept).unlink(missing_ok=True)

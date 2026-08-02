@@ -269,3 +269,51 @@ def test_config_keepalive_new_fields(tmp_path):
     assert config.keepalive_mode == "whitelist"
     assert config.keepalive_trigger_enabled is True
     assert config.keepalive_idle_minutes == 30
+
+
+def test_contains_at_all_detection():
+    from qq_onebot_whitelist import onebot
+    assert onebot.contains_at_all({"message": [{"type": "at", "data": {"qq": "all"}}]}) is True
+    assert onebot.contains_at_all({"message": [{"type": "text", "data": {"text": "@全体成员 清理"}}]}) is True
+    assert onebot.contains_at_all({"message": [{"type": "text", "data": {"text": "普通消息"}}]}) is False
+
+
+def test_is_sticker_format():
+    from qq_onebot_whitelist.images import is_sticker_format
+    assert is_sticker_format({"format": "GIF", "size": 1000, "width": 100, "height": 100}) is True
+    assert is_sticker_format({"format": "PNG", "size": 5000, "width": 200, "height": 200}) is True
+    assert is_sticker_format({"format": "PNG", "size": 5000000, "width": 2000, "height": 2000}) is False
+    assert is_sticker_format({"format": "PNG", "size": 1000, "width": 100, "height": 100, "has_ai_metadata": True}) is False
+
+
+def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
+    from qq_onebot_whitelist import collection
+    from qq_onebot_whitelist.store import Store
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+
+    def fake_extract(event):
+        return [{"url": "http://x/1.png", "file": "1.png"}]
+
+    def fake_process(url, **kw):
+        return {
+            "sha256": "abc", "format": "GIF", "size": 1000, "width": 100, "height": 100,
+            "retention_reason": "candidate", "kept_path": None,
+        }
+
+    monkeypatch.setattr(collection, "extract_image_segments", fake_extract)
+    monkeypatch.setattr(collection, "process_image_url", fake_process)
+    store = Store(tmp_path / "bot.db")
+    config = AppConfig(sticker_repeat_threshold=3)
+    event = text_event("1", "图")
+    collection.collect_event(store, event, config)  # 第 1 次：未达阈值
+    rows = store.recent_images_all(limit=5)
+    assert rows and rows[0].get("retention_reason") != "sticker_filtered"
+    for _ in range(2):  # 再插入 2 次，累计 3 次达到阈值
+        store.record_image(scope="group:1", user_id="u", result={
+            "sha256": "abc", "format": "GIF", "size": 1000, "width": 100, "height": 100,
+            "kept_path": None, "retention_reason": "candidate",
+        }, raw={})
+    collection.collect_event(store, event, config)  # 第 4 次：达阈值 → 表情包
+    rows = store.recent_images_all(limit=5)
+    assert rows[0].get("retention_reason") == "sticker_filtered"

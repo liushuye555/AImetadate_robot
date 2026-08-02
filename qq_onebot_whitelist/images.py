@@ -79,6 +79,13 @@ def existing_content_path(digest: str, archive_root: Path, candidate_root: Path 
 def is_probable_sticker_result(result: dict) -> bool:
     if result.get('has_ai_metadata'):
         return False
+    return is_sticker_format(result)
+
+
+def is_sticker_format(result: dict) -> bool:
+    """表情包格式特征：低分辨率/小体积/GIF。"""
+    if result.get('has_ai_metadata'):
+        return False
     fmt = str(result.get('format') or '').upper()
     size = int(result.get('size') or 0)
     width = result.get('width')
