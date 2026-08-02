@@ -6,7 +6,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -26,9 +26,16 @@
 SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(12, 12, 12, 12);
-    m_tabs = new QTabWidget(this);
-    m_tabs->setTabPosition(QTabWidget::West);
-    outer->addWidget(m_tabs, 1);
+    auto *body = new QHBoxLayout;
+    m_subnav = new QListWidget(this);
+    m_subnav->setObjectName("subnav");
+    m_subnav->setFixedWidth(132);
+    m_stack = new QStackedWidget(this);
+    body->addWidget(m_subnav);
+    body->addWidget(m_stack, 1);
+    outer->addLayout(body, 1);
+    connect(m_subnav, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+    m_subnav->setCurrentRow(0);
 
     auto *bottom = new QHBoxLayout;
     m_save = new QPushButton(Strings::zh("save"), this);
@@ -58,25 +65,27 @@ void SettingsPage::installWheelGuard(QWidget *widget) {
 
 QVBoxLayout *SettingsPage::sectionLayout(const QString &section) {
     if (m_tabLayouts.contains(section)) return m_tabLayouts.value(section);
-    auto *scroll = new QScrollArea(m_tabs);
+    auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     auto *container = new QWidget(scroll);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(16, 16, 16, 16);
     scroll->setWidget(container);
-    m_tabs->addTab(scroll, Strings::section(section));
+    m_stack->addWidget(scroll);
+    m_subnav->addItem(Strings::section(section));
     m_tabLayouts.insert(section, layout);
     return layout;
 }
 
 QWidget *SettingsPage::buildGeneralTab() {
-    auto *scroll = new QScrollArea(m_tabs);
+    auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     auto *container = new QWidget(scroll);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(16, 16, 16, 16);
     scroll->setWidget(container);
-    m_tabs->addTab(scroll, Strings::zh("general"));
+    m_stack->addWidget(scroll);
+    m_subnav->addItem(Strings::zh("general"));
 
     auto *general = new QGroupBox(Strings::zh("general"), container);
     auto *generalForm = new QFormLayout(general);
@@ -116,13 +125,14 @@ QWidget *SettingsPage::buildGeneralTab() {
 }
 
 QWidget *SettingsPage::buildProviderEditor() {
-    auto *scroll = new QScrollArea(m_tabs);
+    auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     auto *container = new QWidget(scroll);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(16, 16, 16, 16);
     scroll->setWidget(container);
-    m_tabs->addTab(scroll, Strings::zh("providers"));
+    m_stack->addWidget(scroll);
+    m_subnav->addItem(Strings::zh("providers"));
     auto *group = new QGroupBox(Strings::zh("providers"), container);
     auto *v = new QVBoxLayout(group);
     m_providerList = new QListWidget(group);
@@ -154,13 +164,14 @@ QWidget *SettingsPage::buildProviderEditor() {
 }
 
 QWidget *SettingsPage::buildCollectionEditor() {
-    auto *scroll = new QScrollArea(m_tabs);
+    auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     auto *container = new QWidget(scroll);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(16, 16, 16, 16);
     scroll->setWidget(container);
-    m_tabs->addTab(scroll, Strings::zh("collection"));
+    m_stack->addWidget(scroll);
+    m_subnav->addItem(Strings::zh("collection"));
     auto *group = new QGroupBox(Strings::zh("collection"), container);
     auto *v = new QVBoxLayout(group);
     m_collectionList = new QListWidget(group);
@@ -196,11 +207,12 @@ QWidget *SettingsPage::buildCollectionEditor() {
 }
 
 void SettingsPage::setSchema(const QVariant &schemaVariant) {
-    while (m_tabs->count() > 0) {
-        QWidget *page = m_tabs->widget(0);
-        m_tabs->removeTab(0);
+    while (m_stack->count() > 0) {
+        QWidget *page = m_stack->widget(0);
+        m_stack->removeWidget(page);
         page->deleteLater();
     }
+    m_subnav->clear();
     m_tabLayouts.clear();
     m_fields.clear();
     m_providerMap.clear();
@@ -235,7 +247,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         }
 
         QVBoxLayout *layout = sectionLayout(section);
-        auto *group = new QGroupBox(section, m_tabs);
+        auto *group = new QGroupBox(Strings::section(section), this);
         auto *form = new QFormLayout(group);
         QWidget *field = nullptr;
         if (kind == "bool") {

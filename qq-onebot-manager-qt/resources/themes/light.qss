@@ -9,6 +9,13 @@ QListWidget#nav::item:hover { background: #232c3f; color: #dbe3f0; }
 QListWidget#nav::item:selected { background: #2b6ef3; color: #ffffff; }
 QListWidget#nav::item:selected:hover { background: #2b6ef3; }
 
+/* 二级导航（设置页子菜单） */
+QListWidget#subnav { background: #eef1f6; border: none; border-right: 1px solid #e3e8f0; outline: 0; padding-top: 8px; }
+QListWidget#subnav::item { color: #55617a; padding: 8px 14px; margin: 1px 6px; border-radius: 6px; }
+QListWidget#subnav::item:hover { background: #e2e8f2; }
+QListWidget#subnav::item:selected { background: #2b6ef3; color: white; }
+QListWidget#subnav::item:selected:hover { background: #2b6ef3; }
+
 /* 页面标题 */
 QLabel#pageTitle { font-size: 20px; font-weight: 700; color: #171e2b; padding: 18px 26px 6px; }
 

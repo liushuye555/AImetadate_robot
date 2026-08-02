@@ -11,7 +11,7 @@ class QComboBox;
 class QCheckBox;
 class QPlainTextEdit;
 class QListWidget;
-class QTabWidget;
+class QStackedWidget;
 
 class SettingsPage : public QWidget {
     Q_OBJECT
@@ -47,7 +47,8 @@ private:
     void rebuildCollectionList();
     void markDirty();
     void installWheelGuard(QWidget *widget);
-    QTabWidget *m_tabs = nullptr;
+    QListWidget *m_subnav = nullptr;
+    QStackedWidget *m_stack = nullptr;
     QPushButton *m_save = nullptr;
     QLabel *m_message = nullptr;
     QHash<QString, QWidget *> m_fields;
