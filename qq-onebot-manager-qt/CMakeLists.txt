@@ -12,6 +12,7 @@ add_executable(qq-onebot-manager-qt WIN32
     src/main.cpp
     src/app/SingleInstance.cpp
     src/ui/Strings.cpp
+    src/ui/MainWindow.cpp
     src/ui/theme/ThemeManager.cpp
     resources/resources.qrc
 )
