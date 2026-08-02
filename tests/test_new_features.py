@@ -129,6 +129,42 @@ def test_remove_sticker_records(tmp_path):
     conn.close()
 
 
+def test_should_keep_image_obfuscation():
+    from qq_onebot_whitelist.image_meta import ImageMetadata
+    from qq_onebot_whitelist.image_policy import is_ai_typical_size, should_keep_image
+    assert is_ai_typical_size(1152, 1152) is True
+    assert is_ai_typical_size(800, 600) is False
+    meta = ImageMetadata(format="JPEG", width=1152, height=1152, has_ai_metadata=False)
+    keep, reason = should_keep_image(meta)
+    assert keep is True and reason == "possible_obfuscation"
+    meta2 = ImageMetadata(format="JPEG", width=800, height=600, has_ai_metadata=False)
+    keep2, reason2 = should_keep_image(meta2)
+    assert keep2 is False and reason2 == "no_ai_metadata"
+
+
+def test_reclassify_possible_obfuscation(tmp_path):
+    import sqlite3
+    from qq_onebot_whitelist.maintenance import reclassify_possible_obfuscation
+    from qq_onebot_whitelist.store import Store
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    store = Store(db_dir / "bot.db")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "ob1", "format": "PNG", "size": 1, "width": 1152, "height": 1152,
+        "kept_path": None, "retention_reason": "candidate",
+    }, raw={})
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "no1", "format": "JPEG", "size": 1, "width": 800, "height": 600,
+        "kept_path": None, "retention_reason": "no_ai_metadata",
+    }, raw={})
+    changed = reclassify_possible_obfuscation(tmp_path)
+    assert changed == 1
+    conn = sqlite3.connect(db_dir / "bot.db")
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='ob1'").fetchone()[0] == "possible_obfuscation"
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='no1'").fetchone()[0] == "no_ai_metadata"
+    conn.close()
+
+
 def test_collection_allows_defaults_true():
     config = AppConfig()
     assert onebot.collection_allows("123", "images", config) is True

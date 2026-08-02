@@ -306,7 +306,7 @@ def cmd_view(args: argparse.Namespace) -> int:
         counts = sync_image_files(REPO_ROOT)
         categories = []
         for name, count in sorted(counts.items()):
-            if name.startswith(('image_', 'missing_', 'candidates_', 'empty_', 'resource_')):
+            if name.startswith(('image_', 'missing_', 'candidates_', 'obfuscation_', 'empty_', 'resource_')):
                 continue
             categories.append({"name": name, "count": count, "url": name + "/index.html"})
         print(json.dumps({"categories": categories}, ensure_ascii=False))

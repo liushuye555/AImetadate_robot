@@ -17,6 +17,7 @@ CATEGORY_NAMES = {
     'positive_feedback': '02_群友好评',
     'nearby_ai_context': '03_AI上下文',
     'candidate': '04_候选待观察',
+    'possible_obfuscation': '05_疑似混淆',
     'no_ai_metadata': '99_普通无元数据',
 }
 

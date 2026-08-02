@@ -112,16 +112,38 @@ def remove_sticker_records(project_dir: str | Path) -> int:
     return removed
 
 
+def reclassify_possible_obfuscation(project_dir: str | Path) -> int:
+    """把无元数据但尺寸符合 AI 典型输出的已有图片重分类为疑似混淆。"""
+    from .image_policy import is_ai_typical_size
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, width, height FROM images "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata') AND has_ai_metadata = 0"
+        ).fetchall()
+        for row_id, width, height in rows:
+            if is_ai_typical_size(width, height):
+                conn.execute("UPDATE images SET retention_reason='possible_obfuscation' WHERE id=?", (row_id,))
+                changed += 1
+        conn.commit()
+    return changed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
     image_duplicates_removed = deduplicate_image_storage(project_dir, store)
     missing_cleared = store.clear_missing_image_paths(project_dir)
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
+    obfuscation_reclassified = reclassify_possible_obfuscation(project_dir)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:
