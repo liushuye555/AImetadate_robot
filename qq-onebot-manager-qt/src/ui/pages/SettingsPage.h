@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QVariant>
 #include <QHash>
@@ -43,12 +44,15 @@ private:
     QWidget *buildGeneralTab();
     QWidget *buildProviderEditor();
     QWidget *buildCollectionEditor();
+    QWidget *buildCustomRulesEditor();
     QJsonObject buildProvidersObject() const;
     QJsonObject buildCollectionObject() const;
     void openProviderDialog(const QString &editName);
     void openCollectionDialog(const QString &editGroup);
+    void openCustomRuleDialog(int editIndex);
     void rebuildProviderList();
     void rebuildCollectionList();
+    void rebuildCustomRuleList();
     void markDirty();
     void installWheelGuard(QWidget *widget);
     QListWidget *m_subnav = nullptr;
@@ -65,5 +69,7 @@ private:
     QMap<QString, QJsonObject> m_providerMap;
     QListWidget *m_collectionList = nullptr;
     QMap<QString, QJsonObject> m_collectionMap;
+    QListWidget *m_customRuleList = nullptr;
+    QJsonArray m_customRules;
     bool m_dirty = false;
 };

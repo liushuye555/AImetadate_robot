@@ -212,6 +212,49 @@ QWidget *SettingsPage::buildCollectionEditor() {
     return scroll;
 }
 
+QWidget *SettingsPage::buildCustomRulesEditor() {
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    auto *container = new QWidget(scroll);
+    auto *layout = new QVBoxLayout(container);
+    layout->setContentsMargins(16, 16, 16, 16);
+    scroll->setWidget(container);
+    m_stack->addWidget(scroll);
+    m_subnav->addItem(Strings::zh("customRules"));
+    auto *group = new QGroupBox(Strings::zh("customRules"), container);
+    auto *v = new QVBoxLayout(group);
+    m_customRuleList = new QListWidget(group);
+    v->addWidget(m_customRuleList);
+    auto *buttons = new QHBoxLayout;
+    auto *add = new QPushButton(Strings::zh("addRule"), group);
+    auto *edit = new QPushButton(Strings::zh("editRule"), group);
+    auto *remove = new QPushButton(Strings::zh("removeRule"), group);
+    buttons->addWidget(add);
+    buttons->addWidget(edit);
+    buttons->addWidget(remove);
+    buttons->addStretch();
+    v->addLayout(buttons);
+    layout->addWidget(group);
+    auto *hint = new QLabel(Strings::zh("customRulesHint"), container);
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    layout->addStretch();
+    connect(add, &QPushButton::clicked, this, [this] { openCustomRuleDialog(-1); });
+    connect(edit, &QPushButton::clicked, this, [this] {
+        if (m_customRuleList->currentRow() >= 0)
+            openCustomRuleDialog(m_customRuleList->currentRow());
+    });
+    connect(remove, &QPushButton::clicked, this, [this] {
+        const int row = m_customRuleList->currentRow();
+        if (row < 0 || row >= m_customRules.size()) return;
+        m_customRules.removeAt(row);
+        rebuildCustomRuleList();
+        markDirty();
+    });
+    return scroll;
+}
+
 void SettingsPage::setGroups(const QVariantList &groups) {
     QDialog dialog(this);
     dialog.setWindowTitle(Strings::zh("scanGroups"));
@@ -268,6 +311,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
     buildGeneralTab();
     buildProviderEditor();
     buildCollectionEditor();
+    buildCustomRulesEditor();
 
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     for (const QJsonValue &value : items) {
@@ -290,6 +334,11 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             for (auto it = groups.constBegin(); it != groups.constEnd(); ++it)
                 m_collectionMap.insert(it.key(), it.value().toObject());
             rebuildCollectionList();
+            continue;
+        }
+        if (kind == "custom-rules") {
+            m_customRules = obj.value("default").toArray();
+            rebuildCustomRuleList();
             continue;
         }
 
@@ -386,6 +435,7 @@ QJsonObject SettingsPage::buildPatch() const {
             groups.insert(it.key(), it.value());
         patch.insert("collection.groups", groups);
     }
+    patch.insert("collection.rules", m_customRules);
     return patch;
 }
 
@@ -434,6 +484,103 @@ void SettingsPage::rebuildCollectionList() {
     }
     if (m_collectionList->count() == 0)
         m_collectionList->addItem(Strings::zh("collectionEmpty"));
+}
+
+void SettingsPage::rebuildCustomRuleList() {
+    if (!m_customRuleList) return;
+    m_customRuleList->clear();
+    for (const QJsonValue &value : m_customRules) {
+        const QJsonObject rule = value.toObject();
+        const QString name = rule.value("name").toString();
+        const QString keywords = rule.value("keywords").toArray().isEmpty()
+            ? rule.value("regex").toString()
+            : rule.value("keywords").toArray().first().toString();
+        const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
+            + (name.isEmpty() ? Strings::zh("unnamed") : name)
+            + (keywords.isEmpty() ? "" : "  ·  " + keywords);
+        auto *item = new QListWidgetItem(summary, m_customRuleList);
+        m_customRuleList->addItem(item);
+    }
+    if (m_customRuleList->count() == 0)
+        m_customRuleList->addItem(Strings::zh("customRulesEmpty"));
+}
+
+void SettingsPage::openCustomRuleDialog(int editIndex) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(editIndex < 0 ? Strings::zh("addRule") : Strings::zh("editRule"));
+    dialog.resize(480, 460);
+    auto *form = new QFormLayout(&dialog);
+    auto *nameEdit = new QLineEdit(&dialog);
+    auto *enabled = new QCheckBox(Strings::zh("ruleEnabled"), &dialog);
+    enabled->setChecked(true);
+    auto *groupsEdit = new QPlainTextEdit(&dialog);
+    groupsEdit->setMaximumHeight(90);
+    groupsEdit->setPlaceholderText(Strings::zh("listPlaceholder"));
+    auto *keywordsEdit = new QPlainTextEdit(&dialog);
+    keywordsEdit->setMaximumHeight(90);
+    keywordsEdit->setPlaceholderText(Strings::zh("keywordsPlaceholder"));
+    auto *regexEdit = new QLineEdit(&dialog);
+    auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
+    auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
+    auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
+    images->setChecked(true);
+    links->setChecked(true);
+    files->setChecked(true);
+    form->addRow(Strings::zh("ruleName"), nameEdit);
+    form->addRow(enabled);
+    form->addRow(Strings::zh("ruleGroups"), groupsEdit);
+    form->addRow(Strings::zh("ruleKeywords"), keywordsEdit);
+    form->addRow(Strings::zh("ruleRegex"), regexEdit);
+    form->addRow(images);
+    form->addRow(links);
+    form->addRow(files);
+    if (editIndex >= 0 && editIndex < m_customRules.size()) {
+        const QJsonObject rule = m_customRules.at(editIndex).toObject();
+        nameEdit->setText(rule.value("name").toString());
+        enabled->setChecked(rule.value("enabled").toBool(true));
+        QStringList groups;
+        for (const QJsonValue &g : rule.value("groups").toArray()) groups << g.toString();
+        groupsEdit->setPlainText(groups.join('\n'));
+        QStringList keywords;
+        for (const QJsonValue &k : rule.value("keywords").toArray()) keywords << k.toString();
+        keywordsEdit->setPlainText(keywords.join('\n'));
+        regexEdit->setText(rule.value("regex").toString());
+        images->setChecked(rule.value("collect_images").toBool(true));
+        links->setChecked(rule.value("collect_links").toBool(true));
+        files->setChecked(rule.value("collect_files").toBool(true));
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    if (nameEdit->text().trimmed().isEmpty()) return;
+
+    QJsonArray groups;
+    for (const QString &line : groupsEdit->toPlainText().split('\n')) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.isEmpty()) groups.append(trimmed);
+    }
+    QJsonArray keywords;
+    for (const QString &line : keywordsEdit->toPlainText().split('\n')) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.isEmpty()) keywords.append(trimmed);
+    }
+    QJsonObject rule;
+    rule.insert("name", nameEdit->text().trimmed());
+    rule.insert("enabled", enabled->isChecked());
+    rule.insert("groups", groups);
+    rule.insert("keywords", keywords);
+    rule.insert("regex", regexEdit->text().trimmed());
+    rule.insert("collect_images", images->isChecked());
+    rule.insert("collect_links", links->isChecked());
+    rule.insert("collect_files", files->isChecked());
+    if (editIndex >= 0 && editIndex < m_customRules.size())
+        m_customRules[editIndex] = rule;
+    else
+        m_customRules.append(rule);
+    rebuildCustomRuleList();
+    markDirty();
 }
 
 void SettingsPage::openProviderDialog(const QString &editName) {

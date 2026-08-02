@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .store import Store
+from .store import Store, canonical_message_key
 from .commands import scope_for_event
 from .policy import extract_text
 from .resources import extract_file_segments
 from .images import extract_image_segments, is_probable_sticker_result, process_image_url
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
+from .summary import extract_links
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -37,6 +39,58 @@ def is_forward_event(event: dict[str, Any]) -> bool:
 def is_collection_paused() -> bool:
     """运行时采集总开关（run/collection-paused 标记），无需重启机器人。"""
     return PAUSE_MARKER.exists()
+
+
+def match_custom_rules(event: dict[str, Any], text: str, config: AppConfig) -> list[dict]:
+    """按自定义规则匹配消息：关键词（任一命中）或正则，且群在规则范围内。"""
+    scope = scope_for_event(event)
+    lowered = text.lower()
+    matched: list[dict] = []
+    for rule in config.collection_rules:
+        if not rule.get('enabled', True):
+            continue
+        groups = {str(g) for g in (rule.get('groups') or [])}
+        if groups and scope not in groups:
+            continue
+        keywords = [str(k).strip().lower() for k in (rule.get('keywords') or []) if str(k).strip()]
+        regex = str(rule.get('regex') or '').strip()
+        if not keywords and not regex:
+            continue
+        if keywords and not any(k in lowered for k in keywords):
+            continue
+        if regex:
+            try:
+                if not re.search(regex, text):
+                    continue
+            except re.error:
+                continue
+        matched.append(rule)
+    return matched
+
+
+def collect_custom(store: Store, event: dict[str, Any], text: str, config: AppConfig) -> None:
+    """把命中的自定义规则消息记录到 custom_collections 表。"""
+    if is_collection_paused():
+        return
+    rules = match_custom_rules(event, text, config)
+    if not rules:
+        return
+    scope = scope_for_event(event)
+    user_id = str(event.get('user_id') or '')
+    images = [str(img.get('url') or '') for img in extract_image_segments(event) if img.get('url')]
+    links = extract_links(text)
+    files = [str(f.get('file_name') or '') for f in extract_file_segments(event) if f.get('file_name')]
+    for rule in rules:
+        store.record_custom_collection(
+            rule=str(rule.get('name') or '未命名'),
+            scope=scope,
+            user_id=user_id,
+            text=text,
+            images=images if rule.get('collect_images', True) else [],
+            links=links if rule.get('collect_links', True) else [],
+            files=files if rule.get('collect_files', True) else [],
+            message_key=canonical_message_key(event),
+        )
 
 
 def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig) -> None:
@@ -88,6 +142,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                 )
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
     _promote_recent_candidate_if_needed(store, scope, text, config)
+    collect_custom(store, event, text, config)
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return
     for image in extract_image_segments(event):

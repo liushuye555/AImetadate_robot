@@ -135,3 +135,55 @@ def test_cmd_collection_toggles(monkeypatch, tmp_path):
     args.state = "on"
     assert control.cmd_collection(args) == 0
     assert control.collection_paused() is False
+
+
+def test_match_custom_rules_keywords_and_groups():
+    from qq_onebot_whitelist import collection
+    config = AppConfig(collection_rules=[
+        {"name": "AI会话", "enabled": True, "groups": [], "keywords": ["lora", "checkpoint"], "regex": ""},
+        {"name": "教程", "enabled": True, "groups": ["9"], "keywords": ["教程"], "regex": ""},
+        {"name": "正则规则", "enabled": True, "groups": [], "keywords": [], "regex": r"编号[:：]?(\d+)"},
+        {"name": "禁用", "enabled": False, "groups": [], "keywords": ["x"], "regex": ""},
+    ])
+    event = text_event("1", "这个 lora 不错")
+    matched = collection.match_custom_rules(event, "这个 lora 不错", config)
+    names = [r["name"] for r in matched]
+    assert "AI会话" in names
+    assert "教程" not in names          # 群不在范围内
+    assert "禁用" not in names
+
+    matched_regex = collection.match_custom_rules(text_event("1", "文件编号:12345"), "文件编号:12345", config)
+    assert "正则规则" in [r["name"] for r in matched_regex]
+
+
+def test_collect_custom_records_matched(tmp_path, monkeypatch):
+    from qq_onebot_whitelist import collection
+    from qq_onebot_whitelist.store import Store
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+    store = Store(tmp_path / "bot.db")
+    config = AppConfig(collection_rules=[
+        {"name": "AI会话", "enabled": True, "groups": [], "keywords": ["lora"], "regex": "",
+         "collect_images": True, "collect_links": True, "collect_files": True},
+    ])
+    event = text_event("1", "分享一个 lora 模型")
+    collection.collect_custom(store, event, "分享一个 lora 模型", config)
+    rows = store.recent_custom_collections(rule="AI会话")
+    assert len(rows) == 1
+    assert "lora" in rows[0]["text"]
+    assert rows[0]["rule"] == "AI会话"
+
+
+def test_cmd_custom_prints_records(tmp_path, monkeypatch, capsys):
+    from qq_onebot_whitelist import collection
+    from qq_onebot_whitelist.store import Store
+    marker = tmp_path / "collection-paused"
+    monkeypatch.setattr(collection, "PAUSE_MARKER", marker)
+    store = Store(tmp_path / "bot.db")
+    store.record_custom_collection(rule="AI会话", scope="1", user_id="u", text="test lora")
+    monkeypatch.setattr(control, "load_stats", lambda: None)  # 不相关，占位
+    monkeypatch.setattr("qq_onebot_whitelist.config.load_config", lambda path: AppConfig(data_dir=tmp_path))
+    args = type("Args", (), {"rule": None})()
+    assert control.cmd_custom(args) == 0
+    out = capsys.readouterr().out
+    assert "AI会话" in out and "test lora" in out

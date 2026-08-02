@@ -132,6 +132,20 @@ CREATE TABLE IF NOT EXISTS link_metadata (
   fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
   error TEXT
 );
+
+CREATE TABLE IF NOT EXISTS custom_collections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  rule TEXT,
+  scope TEXT,
+  user_id TEXT,
+  text TEXT,
+  images_json TEXT,
+  links_json TEXT,
+  files_json TEXT,
+  message_key TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_custom_rule_id ON custom_collections(rule, id);
 '''
 
 
@@ -517,6 +531,56 @@ class Store:
         with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute('SELECT 1 FROM daily_reports WHERE report_date = ?', (report_date,)).fetchone()
         return bool(row)
+
+    def record_custom_collection(self, *, rule: str, scope: str, user_id: str, text: str,
+                                 images: list[str] | None = None, links: list[str] | None = None,
+                                 files: list[str] | None = None, message_key: str | None = None) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            if message_key:
+                existing = conn.execute(
+                    'SELECT 1 FROM custom_collections WHERE rule = ? AND message_key = ?',
+                    (rule, message_key),
+                ).fetchone()
+                if existing:
+                    return
+            conn.execute(
+                'INSERT INTO custom_collections (rule, scope, user_id, text, images_json, links_json, files_json, message_key) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (rule, str(scope), str(user_id), text,
+                 json.dumps(images or [], ensure_ascii=False),
+                 json.dumps(links or [], ensure_ascii=False),
+                 json.dumps(files or [], ensure_ascii=False),
+                 message_key),
+            )
+            conn.commit()
+
+    def recent_custom_collections(self, rule: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.path)) as conn:
+            if rule:
+                rows = conn.execute(
+                    'SELECT rule, scope, user_id, text, images_json, links_json, files_json, seen_at '
+                    'FROM custom_collections WHERE rule = ? ORDER BY id DESC LIMIT ?',
+                    (rule, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT rule, scope, user_id, text, images_json, links_json, files_json, seen_at '
+                    'FROM custom_collections ORDER BY id DESC LIMIT ?',
+                    (limit,),
+                ).fetchall()
+        items = []
+        for rule_name, scope, user_id, text, images_json, links_json, files_json, seen_at in rows:
+            items.append({
+                'rule': rule_name,
+                'scope': scope,
+                'user_id': user_id,
+                'text': text,
+                'images': json.loads(images_json or '[]'),
+                'links': json.loads(links_json or '[]'),
+                'files': json.loads(files_json or '[]'),
+                'seen_at': seen_at,
+            })
+        return items
 
     def get_history_cursor(self, group_id: str | int) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:

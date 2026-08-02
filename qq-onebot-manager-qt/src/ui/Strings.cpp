@@ -65,6 +65,19 @@ QString Strings::zh(const QString &key) {
     if (key == "webui") return "NapCat WebUI";
     if (key == "collectionOn") return "采集：采集中";
     if (key == "collectionOff") return "采集：已暂停";
+    if (key == "customRules") return "自定义采集";
+    if (key == "addRule") return "新增规则";
+    if (key == "editRule") return "编辑规则";
+    if (key == "removeRule") return "删除规则";
+    if (key == "customRulesHint") return "按关键词或正则匹配消息，命中后按规则存入分类记录；群留空=全部群。";
+    if (key == "customRulesEmpty") return "尚未配置自定义采集规则，点击“新增规则”创建";
+    if (key == "ruleName") return "规则名称";
+    if (key == "ruleEnabled") return "启用此规则";
+    if (key == "ruleGroups") return "群列表（留空=全部）";
+    if (key == "ruleKeywords") return "关键词（任一命中）";
+    if (key == "ruleRegex") return "正则表达式（可选）";
+    if (key == "keywordsPlaceholder") return "每行一个";
+    if (key == "unnamed") return "未命名";
     return key;
 }
 
@@ -129,6 +142,19 @@ QString Strings::en(const QString &key) {
     if (key == "webui") return "NapCat WebUI";
     if (key == "collectionOn") return "Collect: on";
     if (key == "collectionOff") return "Collect: paused";
+    if (key == "customRules") return "Custom collection";
+    if (key == "addRule") return "Add rule";
+    if (key == "editRule") return "Edit rule";
+    if (key == "removeRule") return "Remove rule";
+    if (key == "customRulesHint") return "Match messages by keywords or regex; matched messages are stored per rule. Blank groups = all groups.";
+    if (key == "customRulesEmpty") return "No custom rules yet. Click Add rule to create one";
+    if (key == "ruleName") return "Rule name";
+    if (key == "ruleEnabled") return "Enable this rule";
+    if (key == "ruleGroups") return "Groups (blank = all)";
+    if (key == "ruleKeywords") return "Keywords (any match)";
+    if (key == "ruleRegex") return "Regex (optional)";
+    if (key == "keywordsPlaceholder") return "One per line";
+    if (key == "unnamed") return "Unnamed";
     return key;
 }
 

@@ -284,12 +284,29 @@ def cmd_groups(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_custom(args: argparse.Namespace) -> int:
+    """查看自定义采集记录（按规则可选）。"""
+    try:
+        from .config import load_config
+        from .store import Store
+        config = load_config(REPO_ROOT / "config.yaml")
+        store = Store(config.data_dir / "bot.db")
+        rows = store.recent_custom_collections(rule=args.rule or None, limit=50)
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="print run/status.json")
     collection_parser = sub.add_parser("collection", help="pause/resume collection")
     collection_parser.add_argument("state", choices=("on", "off"))
+    custom_parser = sub.add_parser("custom", help="inspect custom collection records")
+    custom_parser.add_argument("--rule", default=None, help="filter by rule name")
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -312,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "status": cmd_status,
         "collection": cmd_collection,
+        "custom": cmd_custom,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,
