@@ -115,6 +115,36 @@ async def send_reply(ws, event: dict[str, Any], text: str) -> None:
 async def send_private(ws, user_id: str, text: str) -> None:
     await ws.send(json.dumps({'action': 'send_private_msg', 'params': {'user_id': user_id, 'message': text}}, ensure_ascii=False))
 
+async def status_writer_loop(ws, config: AppConfig) -> None:
+    from . import control
+    while True:
+        try:
+            login = {}
+            try:
+                resp = await call_action(ws, "get_login_info", {})
+                data = resp.get("data") or {}
+                qq_number = str(data.get("user_id") or "")
+                qq_nickname = str(data.get("nickname") or "")
+                login = {
+                    "qqLoggedIn": bool(qq_number),
+                    "qqNumber": qq_number,
+                    "qqNickname": qq_nickname,
+                }
+            except Exception as exc:
+                print(f"status_writer get_login_info failed: {type(exc).__name__}: {exc}")
+                login = {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
+            control.write_status(
+                {
+                    "napcat": control.port_open(control.NAPCAT_PORT),
+                    "onebot": True,
+                    "bot": True,
+                    **login,
+                }
+            )
+        except Exception as exc:
+            print(f"status_writer failed: {type(exc).__name__}: {exc}")
+        await asyncio.sleep(30)
+
 
 def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) -> tuple[bool, int, AppConfig]:
     current = load_config(config_path)
@@ -285,6 +315,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
         report_task = asyncio.create_task(daily_report_loop(ws, config, store))
         ai_task = asyncio.create_task(ai_context_loop(config_path, store))
+        status_task = asyncio.create_task(status_writer_loop(ws, config))
         try:
             async for raw in ws:
                 try:
@@ -299,6 +330,13 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             startup_task.cancel()
             report_task.cancel()
             ai_task.cancel()
+            status_task.cancel()
+            from . import control
+            control.write_status(
+                {"napcat": control.port_open(control.NAPCAT_PORT),
+                 "onebot": False, "bot": True,
+                 "qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
+            )
 
 
 def main() -> int:
