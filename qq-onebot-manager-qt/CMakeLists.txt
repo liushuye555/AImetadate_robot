@@ -19,6 +19,7 @@ add_executable(qq-onebot-manager-qt WIN32
     src/core/ServiceControl.cpp
     src/core/StatusMonitor.cpp
     src/ui/pages/LogsPage.cpp
+    src/ui/pages/CollectionPage.cpp
     src/ui/pages/OverviewPage.cpp
     src/ui/pages/ReportsPage.cpp
     src/ui/pages/SettingsPage.cpp

@@ -1,0 +1,407 @@
+#include "CollectionPage.h"
+#include "../Strings.h"
+#include <QJsonDocument>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QScrollArea>
+#include <QGroupBox>
+#include <QFormLayout>
+#include <QCheckBox>
+#include <QPushButton>
+#include <QLabel>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+
+CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(24, 24, 24, 24);
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    auto *container = new QWidget(scroll);
+    auto *layout = new QVBoxLayout(container);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(14);
+    scroll->setWidget(container);
+    outer->addWidget(scroll, 1);
+
+    // 采集总开关
+    m_collectionToggle = new QPushButton(Strings::zh("collectionOn"), container);
+    m_collectionToggle->setCheckable(true);
+    layout->addWidget(m_collectionToggle);
+    connect(m_collectionToggle, &QPushButton::clicked, this, [this] {
+        setCollectionPaused(m_collectionToggle->isChecked());
+        emit collectionToggle();
+    });
+
+    // 内置采集模板
+    auto *templates = new QGroupBox(Strings::zh("builtinTemplates"), container);
+    auto *templateForm = new QFormLayout(templates);
+    const struct { const char *key; const char *labelKey; } rows[] = {
+        {"features.image_processing", "imageProcessing"},
+        {"features.link_analysis", "linkAnalysis"},
+        {"features.link_metadata", "linkMetadata"},
+        {"features.daily_report", "dailyReport"},
+    };
+    for (const auto &row : rows) {
+        auto *box = new QCheckBox(templates);
+        box->setProperty("key", QString::fromLatin1(row.key));
+        connect(box, &QCheckBox::toggled, this, [this] { markDirty(); });
+        templateForm->addRow(Strings::zh(QLatin1String(row.labelKey)), box);
+        m_templateBoxes.insert(QString::fromLatin1(row.key), box);
+    }
+    layout->addWidget(templates);
+
+    // 群级采集
+    auto *groups = new QGroupBox(Strings::zh("groupCollection"), container);
+    auto *v = new QVBoxLayout(groups);
+    m_expandForwards = new QCheckBox(Strings::zh("expandForwards"), groups);
+    v->addWidget(m_expandForwards);
+    m_collectionList = new QListWidget(groups);
+    v->addWidget(m_collectionList);
+    auto *gButtons = new QHBoxLayout;
+    auto *add = new QPushButton(Strings::zh("addGroup"), groups);
+    auto *edit = new QPushButton(Strings::zh("editGroup"), groups);
+    auto *remove = new QPushButton(Strings::zh("removeGroup"), groups);
+    auto *scan = new QPushButton(Strings::zh("scanGroups"), groups);
+    gButtons->addWidget(add);
+    gButtons->addWidget(edit);
+    gButtons->addWidget(remove);
+    gButtons->addWidget(scan);
+    gButtons->addStretch();
+    v->addLayout(gButtons);
+    layout->addWidget(groups);
+    connect(add, &QPushButton::clicked, this, [this] { openCollectionDialog(QString()); });
+    connect(edit, &QPushButton::clicked, this, [this] {
+        if (m_collectionList->currentItem())
+            openCollectionDialog(m_collectionList->currentItem()->data(Qt::UserRole).toString());
+    });
+    connect(remove, &QPushButton::clicked, this, [this] {
+        QListWidgetItem *item = m_collectionList->currentItem();
+        if (!item) return;
+        m_collectionMap.remove(item->data(Qt::UserRole).toString());
+        rebuildCollectionList();
+        markDirty();
+    });
+    connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
+    connect(m_expandForwards, &QCheckBox::toggled, this, [this] { markDirty(); });
+
+    // 自定义采集规则
+    auto *rules = new QGroupBox(Strings::zh("customRules"), container);
+    auto *rv = new QVBoxLayout(rules);
+    m_customRuleList = new QListWidget(rules);
+    rv->addWidget(m_customRuleList);
+    auto *rButtons = new QHBoxLayout;
+    auto *rAdd = new QPushButton(Strings::zh("addRule"), rules);
+    auto *rEdit = new QPushButton(Strings::zh("editRule"), rules);
+    auto *rRemove = new QPushButton(Strings::zh("removeRule"), rules);
+    rButtons->addWidget(rAdd);
+    rButtons->addWidget(rEdit);
+    rButtons->addWidget(rRemove);
+    rButtons->addStretch();
+    rv->addLayout(rButtons);
+    layout->addWidget(rules);
+    auto *hint = new QLabel(Strings::zh("customRulesHint"), container);
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    layout->addStretch();
+    connect(rAdd, &QPushButton::clicked, this, [this] { openCustomRuleDialog(-1); });
+    connect(rEdit, &QPushButton::clicked, this, [this] {
+        if (m_customRuleList->currentRow() >= 0)
+            openCustomRuleDialog(m_customRuleList->currentRow());
+    });
+    connect(rRemove, &QPushButton::clicked, this, [this] {
+        const int row = m_customRuleList->currentRow();
+        if (row < 0 || row >= m_customRules.size()) return;
+        m_customRules.removeAt(row);
+        rebuildCustomRuleList();
+        markDirty();
+    });
+
+    // 底部保存
+    auto *bottom = new QHBoxLayout;
+    m_save = new QPushButton(Strings::zh("save"), this);
+    m_save->setObjectName("primary");
+    m_message = new QLabel(this);
+    m_message->setObjectName("muted");
+    bottom->addWidget(m_save);
+    bottom->addWidget(m_message);
+    bottom->addStretch();
+    outer->addLayout(bottom);
+    m_save->setEnabled(false);
+    connect(m_save, &QPushButton::clicked, this, [this] { emit saveRequested(buildPatch()); });
+}
+
+void CollectionPage::setSchema(const QVariant &schemaVariant) {
+    const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
+    for (const QJsonValue &value : items) {
+        const QJsonObject obj = value.toObject();
+        const QString key = obj.value("key").toString();
+        if (m_templateBoxes.contains(key)) {
+            m_templateBoxes.value(key)->setChecked(obj.value("default").toBool());
+        } else if (key == "collection.expand_forwards") {
+            m_expandForwards->setChecked(obj.value("default").toBool());
+        } else if (key == "collection.groups") {
+            m_collectionMap.clear();
+            const QJsonObject groups = obj.value("default").toObject();
+            for (auto it = groups.constBegin(); it != groups.constEnd(); ++it)
+                m_collectionMap.insert(it.key(), it.value().toObject());
+            rebuildCollectionList();
+        } else if (key == "collection.rules") {
+            m_customRules = obj.value("default").toArray();
+            rebuildCustomRuleList();
+        }
+    }
+    m_dirty = false;
+    m_save->setEnabled(false);
+}
+
+void CollectionPage::markDirty() {
+    m_dirty = true;
+    m_save->setEnabled(true);
+}
+
+QJsonObject CollectionPage::buildPatch() const {
+    QJsonObject patch;
+    for (auto it = m_templateBoxes.constBegin(); it != m_templateBoxes.constEnd(); ++it)
+        patch.insert(it.key(), it.value()->isChecked());
+    patch.insert("collection.expand_forwards", m_expandForwards->isChecked());
+    QJsonObject groups;
+    for (auto it = m_collectionMap.constBegin(); it != m_collectionMap.constEnd(); ++it)
+        groups.insert(it.key(), it.value());
+    patch.insert("collection.groups", groups);
+    patch.insert("collection.rules", m_customRules);
+    return patch;
+}
+
+void CollectionPage::setCollectionPaused(bool paused) {
+    m_collectionPaused = paused;
+    if (!m_collectionToggle) return;
+    m_collectionToggle->setChecked(paused);
+    m_collectionToggle->setText(paused ? Strings::zh("collectionOff") : Strings::zh("collectionOn"));
+}
+
+void CollectionPage::setGroups(const QVariantList &groups) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(Strings::zh("scanGroups"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *list = new QListWidget(&dialog);
+    for (const QVariant &group : groups) {
+        const QJsonObject obj = group.toJsonObject();
+        const QString id = obj.value("id").toString();
+        const QString name = obj.value("name").toString();
+        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
+        item->setData(Qt::UserRole, id);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
+        list->addItem(item);
+    }
+    layout->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    int added = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        QListWidgetItem *item = list->item(i);
+        if (item->checkState() != Qt::Checked) continue;
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty() || m_collectionMap.contains(id)) continue;
+        QJsonObject rule;
+        rule.insert("images", true);
+        rule.insert("links", true);
+        rule.insert("files", true);
+        rule.insert("forwards", true);
+        m_collectionMap.insert(id, rule);
+        added++;
+    }
+    if (added > 0) {
+        rebuildCollectionList();
+        markDirty();
+    }
+}
+
+bool CollectionPage::collectionChecked() const {
+    return m_collectionToggle ? m_collectionToggle->isChecked() : m_collectionPaused;
+}
+
+void CollectionPage::setSavedMessage(const QString &text) {
+    m_message->setText(text);
+    if (!text.isEmpty()) {
+        m_dirty = false;
+        m_save->setEnabled(false);
+    }
+}
+
+void CollectionPage::rebuildCollectionList() {
+    if (!m_collectionList) return;
+    m_collectionList->clear();
+    for (auto it = m_collectionMap.constBegin(); it != m_collectionMap.constEnd(); ++it) {
+        const QJsonObject p = it.value();
+        const QString summary = it.key()
+            + (p.value("images").toBool() ? " · 图片" : "")
+            + (p.value("links").toBool() ? " · 链接" : "")
+            + (p.value("files").toBool() ? " · 文件" : "")
+            + (p.value("forwards").toBool() ? " · 转发" : "");
+        auto *item = new QListWidgetItem(summary, m_collectionList);
+        item->setData(Qt::UserRole, it.key());
+        m_collectionList->addItem(item);
+    }
+    if (m_collectionList->count() == 0)
+        m_collectionList->addItem(Strings::zh("collectionEmpty"));
+}
+
+void CollectionPage::rebuildCustomRuleList() {
+    if (!m_customRuleList) return;
+    m_customRuleList->clear();
+    for (const QJsonValue &value : m_customRules) {
+        const QJsonObject rule = value.toObject();
+        const QString name = rule.value("name").toString();
+        const QString keywords = rule.value("keywords").toArray().isEmpty()
+            ? rule.value("regex").toString()
+            : rule.value("keywords").toArray().first().toString();
+        const QString summary = (rule.value("enabled").toBool(true) ? "" : "[停] ")
+            + (name.isEmpty() ? Strings::zh("unnamed") : name)
+            + (rule.value("ai_match").toBool(false) ? " [AI]" : "")
+            + (keywords.isEmpty() ? "" : "  ·  " + keywords);
+        auto *item = new QListWidgetItem(summary, m_customRuleList);
+        m_customRuleList->addItem(item);
+    }
+    if (m_customRuleList->count() == 0)
+        m_customRuleList->addItem(Strings::zh("customRulesEmpty"));
+}
+
+void CollectionPage::openCollectionDialog(const QString &editGroup) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(editGroup.isEmpty() ? Strings::zh("addGroup") : Strings::zh("editGroup"));
+    auto *form = new QFormLayout(&dialog);
+    auto *groupEdit = new QLineEdit(&dialog);
+    auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
+    auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
+    auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
+    auto *forwards = new QCheckBox(Strings::zh("collectForwards"), &dialog);
+    images->setChecked(true);
+    links->setChecked(true);
+    files->setChecked(true);
+    forwards->setChecked(true);
+    form->addRow("群号", groupEdit);
+    form->addRow(images);
+    form->addRow(links);
+    form->addRow(files);
+    form->addRow(forwards);
+    if (!editGroup.isEmpty() && m_collectionMap.contains(editGroup)) {
+        const QJsonObject p = m_collectionMap.value(editGroup);
+        groupEdit->setText(editGroup);
+        images->setChecked(p.value("images").toBool(true));
+        links->setChecked(p.value("links").toBool(true));
+        files->setChecked(p.value("files").toBool(true));
+        forwards->setChecked(p.value("forwards").toBool(true));
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString group = groupEdit->text().trimmed();
+    if (group.isEmpty()) return;
+    QJsonObject p;
+    p.insert("images", images->isChecked());
+    p.insert("links", links->isChecked());
+    p.insert("files", files->isChecked());
+    p.insert("forwards", forwards->isChecked());
+    m_collectionMap.insert(group, p);
+    rebuildCollectionList();
+    markDirty();
+}
+
+void CollectionPage::openCustomRuleDialog(int editIndex) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(editIndex < 0 ? Strings::zh("addRule") : Strings::zh("editRule"));
+    dialog.resize(480, 460);
+    auto *form = new QFormLayout(&dialog);
+    auto *nameEdit = new QLineEdit(&dialog);
+    auto *enabled = new QCheckBox(Strings::zh("ruleEnabled"), &dialog);
+    enabled->setChecked(true);
+    auto *groupsEdit = new QPlainTextEdit(&dialog);
+    groupsEdit->setMaximumHeight(90);
+    groupsEdit->setPlaceholderText(Strings::zh("listPlaceholder"));
+    auto *keywordsEdit = new QPlainTextEdit(&dialog);
+    keywordsEdit->setMaximumHeight(90);
+    keywordsEdit->setPlaceholderText(Strings::zh("keywordsPlaceholder"));
+    auto *regexEdit = new QLineEdit(&dialog);
+    auto *images = new QCheckBox(Strings::zh("collectImages"), &dialog);
+    auto *links = new QCheckBox(Strings::zh("collectLinks"), &dialog);
+    auto *files = new QCheckBox(Strings::zh("collectFiles"), &dialog);
+    auto *aiMatch = new QCheckBox(Strings::zh("aiMatch"), &dialog);
+    auto *aiPrompt = new QPlainTextEdit(&dialog);
+    aiPrompt->setMaximumHeight(80);
+    aiPrompt->setPlaceholderText(Strings::zh("aiPromptPlaceholder"));
+    images->setChecked(true);
+    links->setChecked(true);
+    files->setChecked(true);
+    form->addRow(Strings::zh("ruleName"), nameEdit);
+    form->addRow(enabled);
+    form->addRow(Strings::zh("ruleGroups"), groupsEdit);
+    form->addRow(Strings::zh("ruleKeywords"), keywordsEdit);
+    form->addRow(Strings::zh("ruleRegex"), regexEdit);
+    form->addRow(images);
+    form->addRow(links);
+    form->addRow(files);
+    form->addRow(aiMatch);
+    form->addRow(Strings::zh("aiPrompt"), aiPrompt);
+    if (editIndex >= 0 && editIndex < m_customRules.size()) {
+        const QJsonObject rule = m_customRules.at(editIndex).toObject();
+        nameEdit->setText(rule.value("name").toString());
+        enabled->setChecked(rule.value("enabled").toBool(true));
+        QStringList groups;
+        for (const QJsonValue &g : rule.value("groups").toArray()) groups << g.toString();
+        groupsEdit->setPlainText(groups.join('\n'));
+        QStringList keywords;
+        for (const QJsonValue &k : rule.value("keywords").toArray()) keywords << k.toString();
+        keywordsEdit->setPlainText(keywords.join('\n'));
+        regexEdit->setText(rule.value("regex").toString());
+        images->setChecked(rule.value("collect_images").toBool(true));
+        links->setChecked(rule.value("collect_links").toBool(true));
+        files->setChecked(rule.value("collect_files").toBool(true));
+        aiMatch->setChecked(rule.value("ai_match").toBool(false));
+        aiPrompt->setPlainText(rule.value("ai_prompt").toString());
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    if (nameEdit->text().trimmed().isEmpty()) return;
+    QJsonArray groups;
+    for (const QString &line : groupsEdit->toPlainText().split('\n')) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.isEmpty()) groups.append(trimmed);
+    }
+    QJsonArray keywords;
+    for (const QString &line : keywordsEdit->toPlainText().split('\n')) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.isEmpty()) keywords.append(trimmed);
+    }
+    QJsonObject rule;
+    rule.insert("name", nameEdit->text().trimmed());
+    rule.insert("enabled", enabled->isChecked());
+    rule.insert("groups", groups);
+    rule.insert("keywords", keywords);
+    rule.insert("regex", regexEdit->text().trimmed());
+    rule.insert("collect_images", images->isChecked());
+    rule.insert("collect_links", links->isChecked());
+    rule.insert("collect_files", files->isChecked());
+    rule.insert("ai_match", aiMatch->isChecked());
+    rule.insert("ai_prompt", aiPrompt->toPlainText().trimmed());
+    if (editIndex >= 0 && editIndex < m_customRules.size())
+        m_customRules[editIndex] = rule;
+    else
+        m_customRules.append(rule);
+    rebuildCustomRuleList();
+    markDirty();
+}

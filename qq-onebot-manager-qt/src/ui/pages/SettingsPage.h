@@ -22,14 +22,12 @@ public:
     void setSchema(const QVariant &schema);
     void setSavedMessage(const QString &text);
     void showError(const QString &text);
-    void setGroups(const QVariantList &groups);
     QComboBox *languageCombo() const { return m_language; }
     QComboBox *themeCombo() const { return m_theme; }
     QCheckBox *autoStartBox() const { return m_autoStart; }
     QCheckBox *notificationsBox() const { return m_notifications; }
 signals:
     void saveRequested(QJsonObject patch);
-    void groupsScanRequested();
     void webuiRequested();
     void providersChanged(const QJsonObject &providers, const QString &secretKeyEnv, const QString &secretValue);
     void languageChanged(const QString &lang);
@@ -43,16 +41,9 @@ private:
     QVBoxLayout *sectionLayout(const QString &section);
     QWidget *buildGeneralTab();
     QWidget *buildProviderEditor();
-    QWidget *buildCollectionEditor();
-    QWidget *buildCustomRulesEditor();
     QJsonObject buildProvidersObject() const;
-    QJsonObject buildCollectionObject() const;
     void openProviderDialog(const QString &editName);
-    void openCollectionDialog(const QString &editGroup);
-    void openCustomRuleDialog(int editIndex);
     void rebuildProviderList();
-    void rebuildCollectionList();
-    void rebuildCustomRuleList();
     void markDirty();
     void installWheelGuard(QWidget *widget);
     QListWidget *m_subnav = nullptr;
@@ -67,10 +58,5 @@ private:
     QCheckBox *m_notifications = nullptr;
     QListWidget *m_providerList = nullptr;
     QMap<QString, QJsonObject> m_providerMap;
-    QListWidget *m_collectionList = nullptr;
-    QMap<QString, QJsonObject> m_collectionMap;
-    QCheckBox *m_expandForwards = nullptr;
-    QListWidget *m_customRuleList = nullptr;
-    QJsonArray m_customRules;
     bool m_dirty = false;
 };

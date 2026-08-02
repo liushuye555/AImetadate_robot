@@ -17,6 +17,7 @@
 #include "core/StatusMonitor.h"
 #include "ui/MainWindow.h"
 #include "ui/Strings.h"
+#include "ui/pages/CollectionPage.h"
 #include "ui/pages/LogsPage.h"
 #include "ui/pages/OverviewPage.h"
 #include "ui/pages/ReportsPage.h"
@@ -30,6 +31,7 @@ static QWidget *makePlaceholder(const char *key, QWidget *parent) {
 }
 
 static QWidget *makeOverview(QWidget *parent) { return new OverviewPage(parent); }
+static QWidget *makeCollection(QWidget *parent) { return new CollectionPage(parent); }
 static QWidget *makeSettings(QWidget *parent) { return new SettingsPage(parent); }
 static QWidget *makeLogs(QWidget *parent) { return new LogsPage(parent); }
 static QWidget *makeReports(QWidget *parent) { return new ReportsPage(parent); }
@@ -49,6 +51,7 @@ int main(int argc, char *argv[]) {
 
     const QVector<PageDef> pages = {
         {"overview", "overview", makeOverview},
+        {"collection", "collection", makeCollection},
         {"settings", "settings", makeSettings},
         {"logs", "logs", makeLogs},
         {"reports", "reports", makeReports},
@@ -120,6 +123,7 @@ int main(int argc, char *argv[]) {
     });
 
     auto *settings = qobject_cast<SettingsPage *>(window.pageWidget("settings"));
+    auto *collectionPage = qobject_cast<CollectionPage *>(window.pageWidget("collection"));
     auto *configBridge = new ConfigBridge(&window);
     QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, [settings](bool ok, const QVariant &schema) {
         if (ok) settings->setSchema(schema);
@@ -155,15 +159,27 @@ int main(int argc, char *argv[]) {
         ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
     });
     QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, collectionPage, &CollectionPage::setSchema);
+    QObject::connect(collectionPage, &CollectionPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(configBridge, &ConfigBridge::saved, collectionPage, [collectionPage](bool ok, const QString &msg) {
+        collectionPage->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
+    });
     auto *scanControl = new ServiceControl(&window);
-    QObject::connect(settings, &SettingsPage::groupsScanRequested, scanControl, [scanControl] {
+    QObject::connect(collectionPage, &CollectionPage::groupsScanRequested, scanControl, [scanControl] {
         scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
     });
-    QObject::connect(scanControl, &ServiceControl::finished, settings, [settings](bool ok, QString out) {
+    QObject::connect(scanControl, &ServiceControl::finished, collectionPage, [collectionPage](bool ok, QString out) {
         if (!ok) return;
         const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
         if (doc.isArray())
-            settings->setGroups(doc.array().toVariantList());
+            collectionPage->setGroups(doc.array().toVariantList());
+    });
+    QObject::connect(collectionPage, &CollectionPage::collectionToggle, collectionPage, [collectionControl, collectionPage] {
+        collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",
+                                collectionPage->collectionChecked() ? "off" : "on"});
+    });
+    QObject::connect(statusMonitor, &StatusMonitor::statusChanged, collectionPage, [collectionPage](const StatusSnapshot &s) {
+        collectionPage->setCollectionPaused(s.collectionPaused);
     });
     QObject::connect(settings, &SettingsPage::webuiRequested, [] {
         QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));

@@ -78,6 +78,13 @@ QString Strings::zh(const QString &key) {
     if (key == "ruleRegex") return "正则表达式（可选）";
     if (key == "keywordsPlaceholder") return "每行一个";
     if (key == "unnamed") return "未命名";
+    if (key == "collection") return "采集";
+    if (key == "groupCollection") return "群级采集";
+    if (key == "builtinTemplates") return "内置采集模板";
+    if (key == "imageProcessing") return "图片归档（AI 元数据识别）";
+    if (key == "linkAnalysis") return "链接分析与分类";
+    if (key == "linkMetadata") return "链接标题补全";
+    if (key == "dailyReport") return "日报";
     if (key == "expandForwards") return "展开转发的合并消息（抓取内容归档）";
     if (key == "aiMatch") return "AI 语义匹配";
     if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
@@ -159,6 +166,13 @@ QString Strings::en(const QString &key) {
     if (key == "ruleRegex") return "Regex (optional)";
     if (key == "keywordsPlaceholder") return "One per line";
     if (key == "unnamed") return "Unnamed";
+    if (key == "collection") return "Collection";
+    if (key == "groupCollection") return "Per-group collection";
+    if (key == "builtinTemplates") return "Built-in collection templates";
+    if (key == "imageProcessing") return "Image archiving (AI metadata)";
+    if (key == "linkAnalysis") return "Link analysis & classification";
+    if (key == "linkMetadata") return "Link metadata enrichment";
+    if (key == "dailyReport") return "Daily report";
     if (key == "expandForwards") return "Expand forwarded messages (collect their contents)";
     if (key == "aiMatch") return "AI semantic matching";
     if (key == "aiPrompt") return "AI matching description (what to collect)";
