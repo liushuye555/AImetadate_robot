@@ -46,6 +46,17 @@ QString Strings::zh(const QString &key) {
     if (key == "removeProvider") return "删除";
     if (key == "providerTimeout") return "超时（秒）";
     if (key == "secretPlaceholder") return "留空则不改动密钥";
+    if (key == "collection") return "群采集";
+    if (key == "addGroup") return "新增群";
+    if (key == "editGroup") return "编辑群";
+    if (key == "removeGroup") return "删除群";
+    if (key == "collectionHint") return "未配置的群默认采集全部类型；已配置的群按勾选项采集（图片/链接/文件/转发）。";
+    if (key == "providerEmpty") return "尚未配置供应商，点击“新增”添加";
+    if (key == "collectionEmpty") return "尚未配置任何群的采集规则，点击“新增群”添加";
+    if (key == "collectImages") return "采集图片";
+    if (key == "collectLinks") return "采集链接";
+    if (key == "collectFiles") return "采集文件";
+    if (key == "collectForwards") return "采集转发消息";
     return key;
 }
 
@@ -91,5 +102,30 @@ QString Strings::en(const QString &key) {
     if (key == "removeProvider") return "Remove";
     if (key == "providerTimeout") return "Timeout (s)";
     if (key == "secretPlaceholder") return "Leave empty to keep the key";
+    if (key == "collection") return "Group collection";
+    if (key == "addGroup") return "Add group";
+    if (key == "editGroup") return "Edit group";
+    if (key == "removeGroup") return "Remove group";
+    if (key == "collectionHint") return "Unconfigured groups collect all types; configured groups collect only checked types (images/links/files/forwards).";
+    if (key == "providerEmpty") return "No providers configured yet. Click Add to create one";
+    if (key == "collectionEmpty") return "No per-group rules yet. Click Add group to create one";
+    if (key == "collectImages") return "Collect images";
+    if (key == "collectLinks") return "Collect links";
+    if (key == "collectFiles") return "Collect files";
+    if (key == "collectForwards") return "Collect forwarded messages";
     return key;
+}
+
+QString Strings::section(const QString &section) {
+    if (section == "runtime") return "运行环境";
+    if (section == "bot") return "机器人";
+    if (section == "ai") return "AI";
+    if (section == "daily") return "日报";
+    if (section == "echo") return "复读机";
+    if (section == "collection") return "群采集";
+    if (section == "access") return "访问控制";
+    if (section == "advanced") return "高级";
+    if (section == "features") return "功能开关";
+    if (section == "load") return "负载调度";
+    return section;
 }
