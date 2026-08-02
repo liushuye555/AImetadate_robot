@@ -13,11 +13,15 @@ add_executable(qq-onebot-manager-qt WIN32
     src/app/SingleInstance.cpp
     src/core/ConfigBridge.cpp
     src/core/ServiceControl.cpp
+    src/core/StatusMonitor.cpp
+    src/ui/pages/OverviewPage.cpp
+    src/ui/widgets/StatusCard.cpp
     src/ui/Strings.cpp
     src/ui/MainWindow.cpp
     src/ui/theme/ThemeManager.cpp
     resources/resources.qrc
 )
+target_include_directories(qq-onebot-manager-qt PRIVATE src)
 target_link_libraries(qq-onebot-manager-qt PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg)
 
 enable_testing()
