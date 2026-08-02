@@ -29,6 +29,7 @@ from .store import Store
 
 
 _echo_state: dict[tuple[str, str], list[float]] = {}
+_group_activity: dict[str, float] = {}
 
 
 def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
@@ -180,20 +181,71 @@ async def send_private(ws, user_id: str, text: str) -> None:
     await ws.send(json.dumps({'action': 'send_private_msg', 'params': {'user_id': user_id, 'message': text}}, ensure_ascii=False))
 
 
-async def send_keepalive(ws, config: AppConfig) -> None:
-    if not config.keepalive_enabled or config.keepalive_interval_minutes <= 0 or not config.keepalive_message.strip():
-        return
-    for group_id in sorted(config.keepalive_groups):
-        await ws.send(json.dumps({'action': 'send_group_msg', 'params': {'group_id': int(group_id), 'message': config.keepalive_message}}, ensure_ascii=False))
+async def _fetch_group_ids(ws, config: AppConfig) -> set[str]:
+    """通过独立连接获取机器人所在群列表。"""
+    try:
+        async with websockets.connect(config.onebot_ws_url) as action_ws:
+            echo = f"groups-{datetime.now().timestamp()}"
+            await action_ws.send(
+                json.dumps({"action": "get_group_list", "params": {}, "echo": echo}, ensure_ascii=False)
+            )
+            while True:
+                raw = await asyncio.wait_for(action_ws.recv(), timeout=8)
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+                if data.get("echo") == echo:
+                    rows = data.get("data") or []
+                    return {str(item.get("group_id")) for item in rows if item.get("group_id")}
+    except Exception as exc:
+        print(f"fetch group list failed: {type(exc).__name__}: {exc}")
+    return set()
+
+
+async def keepalive_targets(ws, config: AppConfig) -> set[str]:
+    """按保活群范围模式计算目标群：all/whitelist/blacklist/custom。"""
+    if config.keepalive_mode == 'whitelist':
+        return {str(g) for g in config.bot.whitelist_groups}
+    if config.keepalive_mode == 'custom':
+        return {str(g) for g in config.keepalive_groups}
+    groups = await _fetch_group_ids(ws, config)
+    return groups - config.blocked_groups
+
+
+async def _send_group_message(ws, group_id: str, message: str) -> None:
+    await ws.send(json.dumps(
+        {'action': 'send_group_msg', 'params': {'group_id': int(group_id), 'message': message}},
+        ensure_ascii=False,
+    ))
 
 
 async def keepalive_loop(ws, config: AppConfig) -> None:
+    last_timed = 0.0
     while True:
         try:
-            await send_keepalive(ws, config)
+            now = time.time()
+            if config.keepalive_enabled and config.keepalive_message.strip():
+                targets = await keepalive_targets(ws, config)
+                # 定时保活
+                if config.keepalive_interval_minutes > 0 and now - last_timed >= config.keepalive_interval_minutes * 60:
+                    for group_id in sorted(targets):
+                        await _send_group_message(ws, group_id, config.keepalive_message)
+                        _group_activity[group_id] = time.time()
+                    last_timed = now
+                # 触发保活：群空闲超过阈值自动保活
+                if config.keepalive_trigger_enabled and config.keepalive_idle_minutes > 0:
+                    idle_limit = config.keepalive_idle_minutes * 60
+                    for group_id in sorted(targets):
+                        last = _group_activity.get(group_id)
+                        if last is None:
+                            _group_activity[group_id] = now  # 首次见到该群，先记基线
+                        elif now - last >= idle_limit:
+                            await _send_group_message(ws, group_id, config.keepalive_message)
+                            _group_activity[group_id] = time.time()
         except Exception as exc:
             print(f'keepalive_loop failed: {type(exc).__name__}: {exc}')
-        await asyncio.sleep(max(1, config.keepalive_interval_minutes) * 60)
+        await asyncio.sleep(30)
 
 
 async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] | None = None) -> None:
@@ -351,6 +403,8 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
 async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
     if event.get('post_type') != 'message':
         return False
+    if event.get('message_type') == 'group':
+        _group_activity[str(event.get('group_id') or '')] = time.time()
     if is_blocked_event(event, config):
         return False
     echo_text = echo_reply_text(event, config)

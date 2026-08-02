@@ -238,3 +238,34 @@ def test_config_parses_expand_forwards(tmp_path):
     path.write_text("collection:\n  expand_forwards: true\n", encoding="utf-8")
     config = load_config(path)
     assert config.collection_expand_forwards is True
+
+
+def test_keepalive_targets_modes(monkeypatch):
+    import asyncio
+    from qq_onebot_whitelist import onebot
+
+    async def fake_fetch(ws, config):
+        return {"1", "2", "3"}
+
+    monkeypatch.setattr(onebot, "_fetch_group_ids", fake_fetch)
+    config_all = AppConfig(keepalive_mode="all", blocked_groups={"3"})
+    assert asyncio.run(onebot.keepalive_targets(None, config_all)) == {"1", "2"}
+
+    config_white = AppConfig(keepalive_mode="whitelist")
+    config_white.bot.whitelist_groups = {"9"}
+    assert asyncio.run(onebot.keepalive_targets(None, config_white)) == {"9"}
+
+    config_custom = AppConfig(keepalive_mode="custom", keepalive_groups={"7"})
+    assert asyncio.run(onebot.keepalive_targets(None, config_custom)) == {"7"}
+
+
+def test_config_keepalive_new_fields(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "keepalive:\n  mode: whitelist\n  trigger_enabled: true\n  idle_minutes: 30\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert config.keepalive_mode == "whitelist"
+    assert config.keepalive_trigger_enabled is True
+    assert config.keepalive_idle_minutes == 30

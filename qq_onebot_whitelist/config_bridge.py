@@ -93,6 +93,9 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('keepalive.interval_minutes', 'number', keepalive.get('interval_minutes', 0), 'Keepalive interval (minutes)', '群保活间隔（分钟）', section='keepalive', min=0, max=10080),
         field('keepalive.groups', 'list', keepalive.get('groups', []), 'Keepalive groups', '保活群列表', section='keepalive'),
         field('keepalive.message', 'text', keepalive.get('message', ''), 'Keepalive message', '保活消息', section='keepalive'),
+        field('keepalive.mode', 'select', keepalive.get('mode', 'all'), 'Keepalive group scope', '保活群范围', section='keepalive', options=['all', 'whitelist', 'blacklist', 'custom']),
+        field('keepalive.trigger_enabled', 'bool', keepalive.get('trigger_enabled', False), 'Trigger keepalive when group is idle', '触发保活（群空闲时）', section='keepalive'),
+        field('keepalive.idle_minutes', 'number', keepalive.get('idle_minutes', 60), 'Idle threshold (minutes)', '空闲阈值（分钟）', section='keepalive', min=1, max=1440),
     ]
 
 

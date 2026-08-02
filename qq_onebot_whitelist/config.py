@@ -65,6 +65,9 @@ class AppConfig:
     keepalive_interval_minutes: int = 0
     keepalive_groups: set[str] = field(default_factory=set)
     keepalive_message: str = ''
+    keepalive_mode: str = 'all'
+    keepalive_trigger_enabled: bool = False
+    keepalive_idle_minutes: int = 60
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -150,4 +153,7 @@ def load_config(path: str | Path) -> AppConfig:
         keepalive_interval_minutes=int(keepalive.get('interval_minutes') or 0),
         keepalive_groups={str(x) for x in (keepalive.get('groups') or [])},
         keepalive_message=str(keepalive.get('message') or ''),
+        keepalive_mode=str(keepalive.get('mode') or 'all').lower(),
+        keepalive_trigger_enabled=bool(keepalive.get('trigger_enabled', False)),
+        keepalive_idle_minutes=int(keepalive.get('idle_minutes') or 60),
     )
