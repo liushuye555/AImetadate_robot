@@ -75,6 +75,13 @@ void MainWindow::setupTray() {
     menu->addSeparator();
     menu->addAction(Strings::zh("quit"), this, [this] { emit trayAction("quit"); });
     m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
+        if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
+            showNormal();
+            raise();
+            activateWindow();
+        }
+    });
     m_tray->show();
 }
 

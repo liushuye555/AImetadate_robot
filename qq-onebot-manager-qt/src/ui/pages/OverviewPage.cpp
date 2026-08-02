@@ -90,7 +90,6 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
         return;
     }
     m_hint->clear();
-    setCollectionPaused(s.collectionPaused);
     m_napcat->setValue(s.napcat ? Strings::zh("running") : Strings::zh("stopped"), s.napcat);
     m_onebot->setValue(s.onebot ? Strings::zh("running") : Strings::zh("stopped"), s.onebot);
     m_bot->setValue(s.bot ? Strings::zh("running") : Strings::zh("stopped"), s.bot);

@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFileInfo>
 #include <QLabel>
 #include <QMessageBox>
 #include <QUrl>
@@ -55,6 +56,8 @@ int main(int argc, char *argv[]) {
     MainWindow window(pages);
 
     auto *overview = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
+    // 采集按钮初始状态来自暂停标记文件（不依赖滞后的状态刷新）
+    overview->setCollectionPaused(QFileInfo::exists(Paths::repoRoot() + "/run/collection-paused"));
     auto *statusMonitor = new StatusMonitor(Paths::statusFile(), 4000, &window);
     // 机器人每 30 秒写一次状态；过期阈值取 90 秒，避免两次写入之间误显示“未知”
     statusMonitor->setStaleSeconds(90);
@@ -62,6 +65,9 @@ int main(int argc, char *argv[]) {
     auto *statsControl = new ServiceControl(&window);
     auto *autoRestart = new AutoRestart(serviceControl, &window);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
+    QObject::connect(serviceControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
+        if (!ok) overview->setHint("操作失败：" + out.trimmed());
+    });
 
     const auto runControl = [serviceControl](const QStringList &args) {
         serviceControl->run(args);
