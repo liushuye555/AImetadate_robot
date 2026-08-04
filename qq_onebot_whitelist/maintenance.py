@@ -338,14 +338,62 @@ def backfill_prompt_keys(project_dir: str | Path) -> int:
     return changed
 
 
+def reclassify_prompt_judge(project_dir: str | Path, *, mode: str = 'rule') -> int:
+    """对存量 prompt_bound 行做 LLM 复核（mode=llm/both 时）；不通过的降级。"""
+    if mode == 'rule':
+        return 0
+    from .prompt_judge import llm_judge_prompt, prompt_hash
+    from .prompt_binding import is_params_message
+    from .store import Store
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    store = Store(db)
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, scope, raw_json, bound_prompt FROM images "
+            "WHERE retention_reason='prompt_bound' AND bound_prompt IS NOT NULL"
+        ).fetchall()
+        for row_id, scope, raw_json, bound in rows:
+            prompt = str(bound or '')
+            if not prompt.strip():
+                continue
+            phash = prompt_hash(prompt)
+            cached = store.get_prompt_judge(phash)
+            if cached is None:
+                keep, _ = llm_judge_prompt(prompt)
+                store.set_prompt_judge(phash, keep)
+            else:
+                keep = cached
+            if keep:
+                continue
+            # 复核不通过：按参数讨论降级或转候选
+            records = []
+            if scope:
+                try:
+                    message_db_id = int(json.loads(raw_json or '{}').get('message_db_id'))
+                except Exception:
+                    message_db_id = None
+                records = store.recent_records_before(str(scope), message_db_id, limit=6)
+            if any(is_params_message(str(r.get('text') or '')) for r in records[-6:]):
+                conn.execute("UPDATE images SET retention_reason='params_discussion', bound_prompt=NULL WHERE id=?", (row_id,))
+            else:
+                conn.execute("UPDATE images SET retention_reason='candidate', bound_prompt=NULL WHERE id=?", (row_id,))
+            changed += 1
+        conn.commit()
+    return changed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
+    from .config import load_config
+    config = load_config(project_dir / 'config.yaml')
     archive_budget_removed = 0
     try:
         from .archive_budget import enforce_archive_budget
-        from .config import load_config
-        config = load_config(project_dir / 'config.yaml')
         removed = enforce_archive_budget(
             project_dir / 'data' / 'images' / 'ai',
             store.image_records_with_paths(),
@@ -363,10 +411,11 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     obfuscation_restored = restore_confirmed_obfuscation(project_dir)
     historical_03 = reclassify_historical_03(project_dir)
     prompt_keys_backfilled = backfill_prompt_keys(project_dir)
+    prompt_judge_reclassified = reclassify_prompt_judge(project_dir, mode=config.prompt_judge_mode)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

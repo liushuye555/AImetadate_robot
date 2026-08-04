@@ -20,6 +20,7 @@ from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, promote_restored, restore_image
 from .load_aware import load_aware_ok
 from .prompt_binding import bind_prompt_for_image
+from .prompt_binding import is_params_message
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -320,8 +321,31 @@ def process_event_image(
                 own_message_id=str((event or {}).get('message_id') or '') or None,
             )
             if kind == 'prompt':
-                result['retention_reason'] = 'prompt_bound'
-                result['bound_prompt'] = prompt[:2000]
+                keep = True
+                # LLM 复核模式（rule/llm/both）：校验提示词文本是否像真实出图提示词
+                if config.prompt_judge_mode != 'rule' and prompt:
+                    from .prompt_judge import prompt_hash
+                    phash = prompt_hash(prompt)
+                    try:
+                        cached_verdict = store.get_prompt_judge(phash)
+                    except Exception:
+                        cached_verdict = None
+                    if cached_verdict is None:
+                        from .prompt_judge import llm_judge_prompt
+                        keep, tokens = llm_judge_prompt(prompt)
+                        try:
+                            store.set_prompt_judge(phash, keep, tokens)
+                        except Exception:
+                            pass
+                    else:
+                        keep = cached_verdict
+                    if not keep:
+                        kind = 'params' if any(is_params_message(str(r.get('text') or '')) for r in records[-6:]) else None
+                if keep:
+                    result['retention_reason'] = 'prompt_bound'
+                    result['bound_prompt'] = prompt[:2000]
+                elif kind == 'params':
+                    result['retention_reason'] = 'params_discussion'
             elif kind == 'params':
                 result['retention_reason'] = 'params_discussion'
         # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，

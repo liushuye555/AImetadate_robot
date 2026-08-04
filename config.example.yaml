@@ -58,6 +58,8 @@ images:
   candidate_ttl_hours: 24
   # 参数/模型讨论判定模式：rule（关键词，零成本）| llm（DeepSeek 复核）| both
   ai_discussion_judge: rule
+  # 提示词绑定复核模式：rule（规则，零成本）| llm（DeepSeek 复核提示词文本）| both
+  prompt_judge: rule
 
 storage:
   data_dir: "data"

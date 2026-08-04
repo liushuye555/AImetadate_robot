@@ -21,6 +21,8 @@ def test_is_prompt_message_rejects_false_positives():
     assert not is_prompt_message("/绘图 模型")
     assert not is_prompt_message("/绘图 状态")
     assert not is_prompt_message("/绘图 文生图")
+    assert not is_prompt_message("1girl")
+    assert not is_prompt_message("1girl 好可爱")
 
 
 def test_is_params_message_detects_param_talk():
@@ -74,3 +76,23 @@ def test_no_prompt_falls_through():
 def test_no_signal_returns_none():
     records = [{"text": "吃饭了吗"}, {"text": "哈哈"}]
     assert bind_prompt_for_image(records, reply_to=None) == (None, "")
+
+
+def test_temporal_binding_breaks_when_interleaved():
+    records = [
+        {"text": "/绘图 文生图 fox girl", "id": 10},
+        {"text": "真好看", "id": 11},
+        {"text": ""},  # 图片消息（空文本）
+    ]
+    kind, prompt = bind_prompt_for_image(records, reply_to=None)
+    assert kind != 'prompt'
+
+
+def test_temporal_binding_requires_immediate_predecessor():
+    records = [
+        {"text": "/绘图 文生图 fox girl", "id": 10},
+        {"text": ""},  # 图片消息
+    ]
+    kind, prompt = bind_prompt_for_image(records, reply_to=None)
+    assert kind == 'prompt'
+    assert 'fox girl' in prompt

@@ -159,6 +159,13 @@ CREATE TABLE IF NOT EXISTS link_judges (
   tokens INTEGER,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS prompt_judges (
+  prompt_hash TEXT PRIMARY KEY,
+  verdict INTEGER,
+  tokens INTEGER,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 
@@ -332,6 +339,28 @@ class Store:
                 'ON CONFLICT(url_key) DO UPDATE SET purpose = excluded.purpose, '
                 'tokens = excluded.tokens, updated_at = CURRENT_TIMESTAMP',
                 (url_key, purpose, int(tokens)),
+            )
+            conn.commit()
+
+    def get_prompt_judge(self, prompt_hash: str) -> bool | None:
+        if not prompt_hash:
+            return None
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                'SELECT verdict FROM prompt_judges WHERE prompt_hash = ?',
+                (prompt_hash,),
+            ).fetchone()
+        return bool(row[0]) if row else None
+
+    def set_prompt_judge(self, prompt_hash: str, verdict: bool, tokens: int = 0) -> None:
+        if not prompt_hash:
+            return
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO prompt_judges (prompt_hash, verdict, tokens) VALUES (?, ?, ?) '
+                'ON CONFLICT(prompt_hash) DO UPDATE SET verdict = excluded.verdict, '
+                'tokens = excluded.tokens, updated_at = CURRENT_TIMESTAMP',
+                (prompt_hash, 1 if verdict else 0, int(tokens)),
             )
             conn.commit()
 

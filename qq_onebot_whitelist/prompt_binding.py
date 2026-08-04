@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import re
 
-PROMPT_RE = re.compile(
-    r'(/绘图|文生图|图生图'
-    r'|\b(1girl|1boy|masterpiece|best quality)\b'
-    r'|prompt\s*[:：]'
-    r'|\b(lora|sdxl|flux|novelai)\b)', re.I)
+STRONG_PROMPT_RE = re.compile(
+    r'(masterpiece|best quality|loRA|checkpoint|comfyui|workflow|prompt\s*[:：]'
+    r'|\b(sdxl|flux|novelai)\b)', re.I)
+
+TAG_RE = re.compile(
+    r'\b(1girl|1boy|1other|solo|kemonomimi|animal ears|long hair|short hair|'
+    r'blonde|brown hair|black hair|white hair|blue eyes|red eyes|green eyes|'
+    r'cat ears|fox ears)\b', re.I)
 
 # /绘图 命令后仅出现这些关键字（无实质提示词/模型名）时不算提示词消息
 BARE_DRAW_KEYWORDS = {'模型', '状态', '帮助', 'help', '菜单', '功能', '文生图', '图生图'}
@@ -23,15 +26,20 @@ PARAMS_RE = re.compile(
 
 def is_prompt_message(text: str) -> bool:
     t = (text or '').strip()
-    if not PROMPT_RE.search(t):
+    if not t:
         return False
     m = re.match(r'^/绘图[\s:：]*', t)
     if m:
         rest = t[m.end():].strip()
         # 命令后没有内容、只有短关键字（如"模型/状态"）→ 是机器人命令而非提示词
-        if not rest or rest in BARE_DRAW_KEYWORDS or len(rest) <= 4:
-            return False
-    return True
+        return bool(rest) and rest not in BARE_DRAW_KEYWORDS and len(rest) > 4
+    if '文生图' in t or '图生图' in t:
+        rest = re.sub(r'^.*?(文生图|图生图)[\s:：]*', '', t).strip()
+        return bool(rest) and len(rest) > 2
+    if STRONG_PROMPT_RE.search(t):
+        return True
+    # booru tag 行：至少 2 个逗号分隔的已知标签才算提示词（单个词命中不算）
+    return len(TAG_RE.findall(t)) >= 2 and ',' in t
 
 
 def is_params_message(text: str) -> bool:
@@ -67,13 +75,12 @@ def bind_prompt_for_image(
             if str(rec.get('reply_to_message_id') or '') == str(own_message_id) \
                     and is_prompt_message(str(rec.get('text') or '')):
                 return 'prompt', str(rec.get('text') or '')
-    # 时序绑定：最近 6 条中最后一条提示词消息
-    last_prompt = None
-    for rec in records[-6:]:
-        if is_prompt_message(str(rec.get('text') or '')):
-            last_prompt = str(rec.get('text') or '')
-    if last_prompt:
-        return 'prompt', last_prompt
+    # 时序绑定：提示词消息必须是图片紧邻的前一条内容消息（中间有人插话就不绑）
+    non_empty = [rec for rec in records[-6:] if str(rec.get('text') or '').strip()]
+    if non_empty:
+        last = non_empty[-1]
+        if is_prompt_message(str(last.get('text') or '')):
+            return 'prompt', str(last.get('text') or '')
     # 参数/模型讨论
     if any(is_params_message(str(rec.get('text') or '')) for rec in records[-6:]):
         return 'params', ''
