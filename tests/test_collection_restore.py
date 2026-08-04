@@ -29,14 +29,14 @@ def test_process_event_image_replaces_with_restored(tmp_path, monkeypatch):
     def fake_analyze(path):
         return {"obfuscated": True, "confidence": "confirmed", "ratio": 0.5, "layers": 1}
 
-    def fake_restore(src, out, layers=None):
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"restored-content")
-        return out, 1
+    def fake_safe_restore(src, tmp_out, archive_root, digest, layers=None):
+        dest = Path(archive_root) / "ab" / f"{digest}.png"
+        dest.write_bytes(b"restored-content")
+        return dest
 
     monkeypatch.setattr(collection, "process_image_url", fake_process_image_url)
     monkeypatch.setattr(collection, "analyze_image", fake_analyze)
-    monkeypatch.setattr(collection, "restore_image", fake_restore)
+    monkeypatch.setattr(collection, "safe_restore", fake_safe_restore)
 
     image = {"url": "http://x/img.png", "file": "img.png"}
     collection.process_event_image(

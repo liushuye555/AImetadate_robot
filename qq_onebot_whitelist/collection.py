@@ -17,7 +17,7 @@ from .images import extract_image_segments, is_probable_sticker_result, is_stick
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
-from .gilbert_obfuscation import analyze_image, promote_restored, restore_image
+from .gilbert_obfuscation import analyze_image, restore_image, safe_restore
 from .load_aware import load_aware_ok
 from .prompt_binding import bind_prompt_for_image
 from .prompt_binding import is_params_message
@@ -382,20 +382,19 @@ def process_event_image(
                     # 确认档自动解混淆：还原到临时文件后提升为唯一存档（删原图）
                     if confidence == 'confirmed' and result.get('kept_path'):
                         try:
-                            restored, _ = restore_image(
+                            final = safe_restore(
                                 result['kept_path'],
                                 config.data_dir / 'tmp' / f"{result.get('sha256')}.restore.png",
-                                layers=xfq_result.get('layers'),
-                            )
-                            final = promote_restored(
-                                result['kept_path'],
-                                restored,
                                 config.data_dir / 'images' / 'ai',
                                 str(result.get('sha256') or ''),
+                                layers=xfq_result.get('layers'),
                             )
-                            result['kept_path'] = str(final)
-                            result['restored_path'] = str(final)
-                            result['deobfuscated'] = True
+                            if final is not None:
+                                result['kept_path'] = str(final)
+                                result['restored_path'] = str(final)
+                                result['deobfuscated'] = True
+                            else:
+                                print('restore failed verification, keeping original')
                         except Exception as exc:
                             print(f'restore failed: {type(exc).__name__}: {exc}')
         if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:

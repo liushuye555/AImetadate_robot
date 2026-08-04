@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .build_image_view import build_view
-from .gilbert_obfuscation import promote_restored, restore_image
+from .gilbert_obfuscation import safe_restore
 from .resource_view import write_resource_pages
 from .store import Store
 
@@ -128,7 +128,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     - 重压/缩放弱信号 → xiaofanqie_compressed；
     - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
-    from .gilbert_obfuscation import analyze_image, promote_restored, restore_image
+    from .gilbert_obfuscation import analyze_image, safe_restore
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -198,13 +198,14 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                     if current and current.get('obfuscated'):
                         tmp_dir = project_dir / 'data' / 'tmp'
                         tmp_dir.mkdir(parents=True, exist_ok=True)
-                        restored, _ = restore_image(
+                        final = safe_restore(
                             path,
                             tmp_dir / f'{sha256}.restore.png',
+                            archive_root,
+                            str(sha256),
                             layers=xfq_result.get('layers'),
                         )
-                        final = promote_restored(path, restored, archive_root, str(sha256))
-                        restored_final = str(final)
+                        restored_final = str(final) if final is not None else None
                     else:
                         # 文件已是还原内容：只标记，不重还原
                         restored_final = str(path)
@@ -258,18 +259,20 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
             try:
                 tmp_dir = project_dir / 'data' / 'tmp'
                 tmp_dir.mkdir(parents=True, exist_ok=True)
-                restored, _ = restore_image(
+                final = safe_restore(
                     path,
                     tmp_dir / f'{sha256}.restore.png',
+                    archive_root,
+                    str(sha256 or ''),
                     layers=layers,
                 )
-                final = promote_restored(path, restored, archive_root, str(sha256 or ''))
-                store.mark_image_deobfuscated(
-                    row_id,
-                    kept_path=str(final),
-                    restored_path=str(final),
-                )
-                changed += 1
+                if final is not None:
+                    store.mark_image_deobfuscated(
+                        row_id,
+                        kept_path=str(final),
+                        restored_path=str(final),
+                    )
+                    changed += 1
             except Exception:
                 continue
         conn.commit()

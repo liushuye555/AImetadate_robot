@@ -49,13 +49,13 @@ def test_restore_confirmed_obfuscation_replaces_and_marks(tmp_path, monkeypatch)
     }, raw={})
     store.save_obfuscation_score("abc", ratio=0.5, layers=1, obfuscated=True, confidence="confirmed")
 
-    def fake_restore(src, out, layers=None):
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"restored-content")
-        return out, 1
+    def fake_safe_restore(src, tmp_out, archive_root, digest, layers=None):
+        dest = Path(archive_root) / "ab" / f"{digest}.png"
+        dest.write_bytes(b"restored-content")
+        return dest
 
     import qq_onebot_whitelist.maintenance as m
-    monkeypatch.setattr(m, "restore_image", fake_restore)
+    monkeypatch.setattr(m, "safe_restore", fake_safe_restore)
 
     changed = restore_confirmed_obfuscation(tmp_path)
     assert changed == 1
@@ -85,11 +85,11 @@ def test_restore_confirmed_obfuscation_skips_missing_restored(tmp_path, monkeypa
     }, raw={})
     store.save_obfuscation_score("abc", ratio=0.5, layers=1, obfuscated=True, confidence="confirmed")
 
-    def fake_restore(src, out, layers=None):
+    def fake_safe_restore_fail(src, tmp_out, archive_root, digest, layers=None):
         raise FileNotFoundError("restore failed")
 
     import qq_onebot_whitelist.maintenance as m
-    monkeypatch.setattr(m, "restore_image", fake_restore)
+    monkeypatch.setattr(m, "safe_restore", fake_safe_restore_fail)
 
     changed = restore_confirmed_obfuscation(tmp_path)
     assert changed == 0

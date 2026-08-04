@@ -323,3 +323,21 @@ def promote_restored(
     if original.exists() and original.resolve() != dest.resolve():
         original.unlink(missing_ok=True)
     return dest
+
+
+def safe_restore(
+    src_path: str | Path,
+    tmp_out: str | Path,
+    archive_root: str | Path,
+    digest: str,
+    layers: int | None = None,
+) -> Path | None:
+    """还原并校验：输出必须是正常图（未判混淆且 ratio ≥ 0.8）才替换归档。
+
+    校验不通过返回 None（保留原图，不标记 deobfuscated），避免把坏还原当成品。
+    """
+    restored, _ = restore_image(src_path, tmp_out, layers=layers)
+    check = analyze_image(restored)
+    if not (check and not check.get('obfuscated') and check.get('ratio', 0) >= 0.8):
+        return None
+    return promote_restored(src_path, restored, archive_root, digest)
