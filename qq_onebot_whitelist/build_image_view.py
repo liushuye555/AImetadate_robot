@@ -189,13 +189,14 @@ h1{{font-size:18px;margin:0 0 4px}}
 #overlay{{display:none;position:fixed;inset:0;background:#000d;z-index:10;align-items:center;justify-content:center;cursor:zoom-out}}
 #overlay img{{max-width:92vw;max-height:92vh;border-radius:6px}}
 </style></head><body>
-<header><a id="back" href="../index.html">← 返回</a><h1>{title}</h1><div class="muted">{count} 张</div></header>
+<header><a id="back" href="../index.html">← 返回</a><h1>{title}</h1><div class="muted">{count} 张</div>
 <div class="toolbar">
   <span class="muted">共 {count} 张</span>
   <input id="jumpTo" type="number" min="1" max="{count}" placeholder="跳转">
   <button id="topBtn">回顶部</button>
   <span id="collapseInfo" class="muted"></span>
 </div>
+</header>
 <div class="grid">{cells}</div>
 <div id="overlay"><img id="lightbox" src=""></div>
 <script>
