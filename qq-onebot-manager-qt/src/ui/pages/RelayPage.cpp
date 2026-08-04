@@ -219,39 +219,23 @@ void RelayPage::setSchema(const QVariant &schemaVariant) {
 }
 
 void RelayPage::setGroups(const QVariantList &groups) {
-    QDialog dialog(this);
-    dialog.setWindowTitle(Strings::zh("scanGroups"));
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *list = new QListWidget(&dialog);
+    if (!m_groups) return;
+    int added = 0;
     for (const QVariant &group : groups) {
         const QJsonObject obj = group.toJsonObject();
         const QString id = obj.value("id").toString();
         const QString name = obj.value("name").toString();
-        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
-        item->setData(Qt::UserRole, id);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Unchecked);
-        list->addItem(item);
-    }
-    layout->addWidget(list);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
-    int added = 0;
-    for (int i = 0; i < list->count(); ++i) {
-        const QString id = list->item(i)->data(Qt::UserRole).toString();
         if (id.isEmpty()) continue;
+        m_groupNames.insert(id, name);
         bool exists = false;
         for (int j = 0; j < m_groups->count(); ++j)
             if (m_groups->item(j)->data(Qt::UserRole).toString() == id) { exists = true; break; }
         if (exists) continue;
-        auto *newItem = new QListWidgetItem(id, m_groups);
-        newItem->setData(Qt::UserRole, id);
-        newItem->setFlags(newItem->flags() | Qt::ItemIsUserCheckable);
-        newItem->setCheckState(list->item(i)->checkState());
-        m_groups->addItem(newItem);
+        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", m_groups);
+        item->setData(Qt::UserRole, id);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
+        m_groups->addItem(item);
         added++;
     }
     if (added > 0) markDirty();

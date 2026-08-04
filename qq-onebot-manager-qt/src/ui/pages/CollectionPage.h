@@ -1,4 +1,6 @@
 #pragma once
+#include <QSet>
+#include <QStringList>
 #include <QWidget>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -40,6 +42,9 @@ private:
     QMap<QString, QJsonObject> m_collectionMap;
     QListWidget *m_customRuleList = nullptr;
     QJsonArray m_customRules;
+    QStringList m_groupIds;
+    QMap<QString, QString> m_groupNames;
+    QSet<QString> m_blockedGroups;
     bool m_suppressRuleChange = false;
     QMap<QString, QCheckBox *> m_templateBoxes;
     bool m_suppressGroupChange = false;

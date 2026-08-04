@@ -276,6 +276,9 @@ int main(int argc, char *argv[]) {
     reportControl->run({"-m", "qq_onebot_whitelist.control", "view-list"});
     reports->setNextTime("日报发送时间可在设置页配置");
 
+    // 启动时自动拉取已加入的群，填充群采集/群搬运页面的群列表
+    scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
+
     // 启动时查询一次数据概况
     fetchStats();
 

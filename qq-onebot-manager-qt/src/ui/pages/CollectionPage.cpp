@@ -11,6 +11,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QBrush>
+#include <QColor>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLineEdit>
@@ -67,31 +69,37 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     m_collectionList = new QListWidget(groups);
     v->addWidget(m_collectionList);
     auto *gButtons = new QHBoxLayout;
-    auto *add = new QPushButton(Strings::zh("addGroup"), groups);
     auto *edit = new QPushButton(Strings::zh("editGroup"), groups);
-    auto *remove = new QPushButton(Strings::zh("removeGroup"), groups);
     auto *scan = new QPushButton(Strings::zh("scanGroups"), groups);
-    gButtons->addWidget(add);
     gButtons->addWidget(edit);
-    gButtons->addWidget(remove);
     gButtons->addWidget(scan);
     gButtons->addStretch();
     v->addLayout(gButtons);
     layout->addWidget(groups);
-    connect(add, &QPushButton::clicked, this, [this] { openCollectionDialog(QString()); });
+    auto *groupsHint = new QLabel(Strings::zh("collectionGroupsHint"), groups);
+    groupsHint->setObjectName("muted");
+    groupsHint->setWordWrap(true);
+    v->addWidget(groupsHint);
     connect(edit, &QPushButton::clicked, this, [this] {
         if (m_collectionList->currentItem())
             openCollectionDialog(m_collectionList->currentItem()->data(Qt::UserRole).toString());
     });
-    connect(remove, &QPushButton::clicked, this, [this] {
-        QListWidgetItem *item = m_collectionList->currentItem();
-        if (!item) return;
-        m_collectionMap.remove(item->data(Qt::UserRole).toString());
+    connect(m_collectionList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+        if (m_suppressGroupChange) return;
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty() || m_blockedGroups.contains(id)) return;
+        QJsonObject p = m_collectionMap.value(id);
+        if (item->checkState() == Qt::Checked) {
+            if (p.isEmpty() || (!p.value("images").toBool() && !p.value("links").toBool()
+                                && !p.value("files").toBool() && !p.value("forwards").toBool())) {
+                p = QJsonObject{{"images", true}, {"links", true}, {"files", true}, {"forwards", true}};
+            }
+        } else {
+            p = QJsonObject{{"images", false}, {"links", false}, {"files", false}, {"forwards", false}};
+        }
+        m_collectionMap.insert(id, p);
         rebuildCollectionList();
         markDirty();
-    });
-    connect(m_collectionList, &QListWidget::itemChanged, this, [this] {
-        if (!m_suppressGroupChange) markDirty();
     });
     connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
     connect(m_expandForwards, &QCheckBox::toggled, this, [this] { markDirty(); });
@@ -200,8 +208,15 @@ void CollectionPage::setSchema(const QVariant &schemaVariant) {
         } else if (key == "collection.groups") {
             m_collectionMap.clear();
             const QJsonObject groups = obj.value("default").toObject();
-            for (auto it = groups.constBegin(); it != groups.constEnd(); ++it)
+            for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
                 m_collectionMap.insert(it.key(), it.value().toObject());
+                if (!m_groupIds.contains(it.key())) m_groupIds << it.key();
+            }
+            rebuildCollectionList();
+        } else if (key == "listen.blocked_groups") {
+            m_blockedGroups.clear();
+            for (const QJsonValue &v : obj.value("default").toArray())
+                m_blockedGroups.insert(v.toString());
             rebuildCollectionList();
         } else if (key == "collection.rules") {
             m_customRules = obj.value("default").toArray();
@@ -226,9 +241,14 @@ QJsonObject CollectionPage::buildPatch() const {
     for (int i = 0; i < m_collectionList->count(); ++i) {
         QListWidgetItem *item = m_collectionList->item(i);
         const QString id = item->data(Qt::UserRole).toString();
-        if (id.isEmpty() || item->checkState() != Qt::Checked) continue;
-        const QJsonObject rule = m_collectionMap.value(id);
-        if (!rule.isEmpty()) groups.insert(id, rule);
+        if (id.isEmpty() || m_blockedGroups.contains(id)) continue;
+        QJsonObject p = m_collectionMap.value(id);
+        if (item->checkState() == Qt::Checked) {
+            if (p.isEmpty()) p = QJsonObject{{"images", true}, {"links", true}, {"files", true}, {"forwards", true}};
+        } else {
+            p = QJsonObject{{"images", false}, {"links", false}, {"files", false}, {"forwards", false}};
+        }
+        groups.insert(id, p);
     }
     patch.insert("collection.groups", groups);
     patch.insert("collection.rules", m_customRules);
@@ -243,44 +263,18 @@ void CollectionPage::setCollectionPaused(bool paused) {
 }
 
 void CollectionPage::setGroups(const QVariantList &groups) {
-    QDialog dialog(this);
-    dialog.setWindowTitle(Strings::zh("scanGroups"));
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *hint = new QLabel(Strings::zh("scanToCheck"), &dialog);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-    auto *list = new QListWidget(&dialog);
     for (const QVariant &group : groups) {
         const QJsonObject obj = group.toJsonObject();
         const QString id = obj.value("id").toString();
         const QString name = obj.value("name").toString();
-        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
-        item->setData(Qt::UserRole, id);
-        list->addItem(item);
+        if (id.isEmpty()) continue;
+        m_groupNames.insert(id, name);
+        if (!m_groupIds.contains(id)) m_groupIds << id;
+        if (!m_collectionMap.contains(id))
+            m_collectionMap.insert(id, QJsonObject{{"images", true}, {"links", true}, {"files", true}, {"forwards", true}});
     }
-    layout->addWidget(list);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
-    int added = 0;
-    for (int i = 0; i < list->count(); ++i) {
-        QListWidgetItem *item = list->item(i);
-        const QString id = item->data(Qt::UserRole).toString();
-        if (id.isEmpty() || m_collectionMap.contains(id)) continue;
-        QJsonObject rule;
-        rule.insert("images", true);
-        rule.insert("links", true);
-        rule.insert("files", true);
-        rule.insert("forwards", true);
-        m_collectionMap.insert(id, rule);
-        added++;
-    }
-    if (added > 0) {
-        rebuildCollectionList();
-        markDirty();
-    }
+    rebuildCollectionList();
+    markDirty();
 }
 
 bool CollectionPage::collectionChecked() const {
@@ -299,17 +293,27 @@ void CollectionPage::rebuildCollectionList() {
     if (!m_collectionList) return;
     m_suppressGroupChange = true;
     m_collectionList->clear();
-    for (auto it = m_collectionMap.constBegin(); it != m_collectionMap.constEnd(); ++it) {
-        const QJsonObject p = it.value();
-        const QString summary = it.key()
+    for (const QString &id : m_groupIds) {
+        const QJsonObject p = m_collectionMap.value(id);
+        const bool blocked = m_blockedGroups.contains(id);
+        const QString name = m_groupNames.value(id);
+        const QString label = name.isEmpty() ? id : name + " (" + id + ")";
+        const QString summary = QString(blocked ? "【已屏蔽】" : "")
             + (p.value("images").toBool() ? " · 图片" : "")
             + (p.value("links").toBool() ? " · 链接" : "")
             + (p.value("files").toBool() ? " · 文件" : "")
             + (p.value("forwards").toBool() ? " · 转发" : "");
-        auto *item = new QListWidgetItem(summary, m_collectionList);
-        item->setData(Qt::UserRole, it.key());
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Checked);
+        auto *item = new QListWidgetItem(label + summary, m_collectionList);
+        item->setData(Qt::UserRole, id);
+        if (blocked) {
+            item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
+            item->setForeground(QBrush(QColor("#8b96a8")));
+        } else {
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            const bool any = p.isEmpty() || p.value("images").toBool() || p.value("links").toBool()
+                             || p.value("files").toBool() || p.value("forwards").toBool();
+            item->setCheckState(any ? Qt::Checked : Qt::Unchecked);
+        }
         m_collectionList->addItem(item);
     }
     if (m_collectionList->count() == 0)

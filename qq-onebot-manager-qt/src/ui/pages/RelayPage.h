@@ -1,5 +1,6 @@
 #pragma once
 #include <QJsonObject>
+#include <QMap>
 #include <QStringList>
 #include <QWidget>
 
@@ -33,6 +34,7 @@ private:
     QListWidget *m_groups = nullptr;
     QListWidget *m_inputGroups = nullptr;
     QListWidget *m_outputGroups = nullptr;
+    QMap<QString, QString> m_groupNames;
     QCheckBox *m_ordinary = nullptr;
     QPlainTextEdit *m_keywords = nullptr;
     QLineEdit *m_regex = nullptr;

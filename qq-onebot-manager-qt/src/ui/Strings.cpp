@@ -50,9 +50,9 @@ QString Strings::zh(const QString &key) {
     if (key == "addGroup") return "新增群";
     if (key == "editGroup") return "编辑群";
     if (key == "removeGroup") return "删除群";
-    if (key == "collectionHint") return "未配置的群默认采集全部类型；已配置的群按勾选项采集（图片/链接/文件/转发）。";
+    if (key == "collectionGroupsHint") return "勾选=采集该群，取消勾选=不采集；未显示的群默认采集全部类型；黑名单群（已屏蔽）在“设置→访问控制”管理。";
     if (key == "providerEmpty") return "尚未配置供应商，点击“新增”添加";
-    if (key == "collectionEmpty") return "尚未配置任何群的采集规则，点击“新增群”添加";
+    if (key == "collectionEmpty") return "尚未获取群列表，点击“扫描已加入的群”";
     if (key == "collectImages") return "采集图片";
     if (key == "collectLinks") return "采集链接";
     if (key == "collectFiles") return "采集文件";
@@ -177,9 +177,9 @@ QString Strings::en(const QString &key) {
     if (key == "addGroup") return "Add group";
     if (key == "editGroup") return "Edit group";
     if (key == "removeGroup") return "Remove group";
-    if (key == "collectionHint") return "Unconfigured groups collect all types; configured groups collect only checked types (images/links/files/forwards).";
+    if (key == "collectionGroupsHint") return "Checked = collect this group, unchecked = skip. Groups not listed collect all types by default. Blocked groups are managed in Settings → Access.";
     if (key == "providerEmpty") return "No providers configured yet. Click Add to create one";
-    if (key == "collectionEmpty") return "No per-group rules yet. Click Add group to create one";
+    if (key == "collectionEmpty") return "Group list not loaded yet. Click Scan groups";
     if (key == "collectImages") return "Collect images";
     if (key == "collectLinks") return "Collect links";
     if (key == "collectFiles") return "Collect files";
