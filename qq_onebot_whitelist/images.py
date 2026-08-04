@@ -6,7 +6,7 @@ import shutil
 import urllib.request
 from urllib.parse import urlparse
 
-from .image_meta import ImageMetadata, parse_image_metadata
+from .image_meta import ImageMetadata, extract_prompt_signature, parse_image_metadata
 from .image_policy import should_keep_image
 from .obfuscation import image_phash, jpeg_blockiness
 
@@ -121,6 +121,7 @@ def process_image_url(
     except Exception:
         phash_value = None
     meta = parse_image_metadata(tmp)
+    prompt_key = extract_prompt_signature(tmp) if meta.has_ai_metadata else None
     try:
         blockiness_value = jpeg_blockiness(tmp) if str(meta.format or '').upper().startswith('JPEG') else 0.0
     except Exception:
@@ -160,6 +161,7 @@ def process_image_url(
         'has_ai_metadata': meta.has_ai_metadata,
         'ai_source': meta.ai_source,
         'text_excerpt': meta.text_excerpt,
+        'prompt_key': prompt_key,
         'kept_path': str(kept_path) if kept_path else None,
         'retention_reason': reason,
     }

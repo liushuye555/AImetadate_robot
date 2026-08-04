@@ -275,6 +275,27 @@ def build_view(project_dir: Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     prompt_bound_items: list[dict[str, object]] = []
     dedup_seen: dict[str, set[str]] = {}
+    # 同批判定：同一提示词签名 且 组大小 2..10 且 时间跨度 ≤ 2 小时
+    batch_keys: set[str] = set()
+    if 'prompt_key' in image_cols:
+        from datetime import datetime as _dt
+        try:
+            for pk, cnt, mn, mx in conn.execute(
+                "SELECT prompt_key, COUNT(*), MIN(seen_at), MAX(seen_at) FROM images "
+                "WHERE retention_reason='ai_metadata' AND prompt_key IS NOT NULL GROUP BY prompt_key"
+            ).fetchall():
+                if not (2 <= int(cnt) <= 10):
+                    continue
+                def _ts(v: object):
+                    try:
+                        return _dt.fromisoformat(str(v).replace('T', ' '))
+                    except Exception:
+                        return None
+                t1, t2 = _ts(mn), _ts(mx)
+                if t1 and t2 and (t2 - t1).total_seconds() <= 2 * 3600:
+                    batch_keys.add(str(pk))
+        except Exception:
+            batch_keys = set()
     for row in rows:
         src = source_path(project_dir, row['kept_path'])
         if not src.exists():
@@ -303,7 +324,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
         is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
         # 遮罩标记只加在 02/03（05 小番茄混淆不遮罩）
         mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'prompt_bound', 'params_discussion')) else ''
-        pk = str(row['prompt_key'] or '')[:8] if 'prompt_key' in row.keys() and row['prompt_key'] else ''
+        pk = str(row['prompt_key'] or '')[:8] if (
+            'prompt_key' in row.keys() and row['prompt_key'] and str(row['prompt_key']) in batch_keys
+        ) else ''
         filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}") + ext
         dst = view / cat / size_class / filename
         mode = make_link_or_copy(src, dst)

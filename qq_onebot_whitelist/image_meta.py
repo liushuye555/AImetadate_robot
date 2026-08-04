@@ -156,3 +156,46 @@ def _classify_ai(meta: ImageMetadata, text: str) -> None:
             meta.has_ai_metadata = True
             meta.ai_source = source
             return
+
+
+def extract_prompt_signature(path: str | Path) -> str | None:
+    """从图片元数据的 prompt 图谱中提取全部文本节点（正/负面提示词等），返回 sha1 前 16 位。
+
+    用于"同批"分组：同一提示词（seed 不同）→ 相同签名；不同提示词 → 不同签名。
+    无元数据/无文本节点返回 None。
+    """
+    import hashlib
+    import json
+
+    from PIL import Image
+
+    path = Path(path)
+    try:
+        with Image.open(path) as img:
+            prompt = img.info.get('prompt')
+    except Exception:
+        return None
+    if isinstance(prompt, bytes):
+        prompt = prompt.decode('utf-8', errors='replace')
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    try:
+        data = json.loads(prompt)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    texts: list[str] = []
+    for node in data.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get('inputs')
+        if not isinstance(inputs, dict):
+            continue
+        for field in ('text', 'value', 'string'):
+            value = inputs.get(field)
+            if isinstance(value, str) and value.strip():
+                texts.append(value.strip())
+    if not texts:
+        return None
+    return hashlib.sha1('\n'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:16]
