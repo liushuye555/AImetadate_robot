@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS chat_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_turns_user ON chat_turns(scope, user_id, id);
 
+CREATE TABLE IF NOT EXISTS favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT,
+  content_hash TEXT,
+  forward_id TEXT,
+  summary TEXT,
+  nodes_json TEXT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, id);
+
 CREATE TABLE IF NOT EXISTS prompt_judges (
   prompt_hash TEXT PRIMARY KEY,
   verdict INTEGER,
@@ -406,6 +417,35 @@ class Store:
             dict(role=r[0], text=r[1] or '', seen_at=r[2] or '')
             for r in reversed(rows)
         ]
+
+    def save_favorite(self, *, user_id: str, content_hash: str, forward_id: str = '',
+                      summary: str = '', nodes_json: str = '') -> bool:
+        """保存私聊收藏；同一用户同一内容不重复存。"""
+        if not content_hash:
+            return False
+        with closing(sqlite3.connect(self.path)) as conn:
+            dup = conn.execute(
+                'SELECT 1 FROM favorites WHERE user_id = ? AND content_hash = ?',
+                (str(user_id), str(content_hash)),
+            ).fetchone()
+            if dup:
+                return False
+            conn.execute(
+                'INSERT INTO favorites (user_id, content_hash, forward_id, summary, nodes_json) VALUES (?, ?, ?, ?, ?)',
+                (str(user_id), str(content_hash), str(forward_id or ''),
+                 str(summary or ''), str(nodes_json or '')),
+            )
+            conn.commit()
+        return True
+
+    def list_favorites(self, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                'SELECT id, seen_at, summary, forward_id FROM favorites '
+                'WHERE user_id = ? ORDER BY id DESC LIMIT ?',
+                (str(user_id), int(limit)),
+            ).fetchall()
+        return [dict(id=r[0], seen_at=r[1] or '', summary=r[2] or '', forward_id=r[3] or '') for r in rows]
 
     def get_prompt_judge(self, prompt_hash: str) -> bool | None:
         if not prompt_hash:

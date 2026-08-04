@@ -169,5 +169,15 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
                 fallback = summarize_records(records, language=language)
                 return tr('summary_failed', language, reason=type(exc).__name__, fallback=fallback)
         return summarize_records(records, language=language)
+    if is_private and normalized in {'收藏夹', '收藏', 'favorites', 'fav', 'saved'}:
+        favs = store.list_favorites(str(event.get('user_id') or ''), limit=20)
+        if not favs:
+            return tr('fav_none', language)
+        lines = [tr('fav_title', language, count=len(favs))]
+        for idx, fav in enumerate(favs, 1):
+            when = str(fav.get('seen_at') or '')[:16]
+            summary = str(fav.get('summary') or '')
+            lines.append(f'{idx}. [{when}] {summary[:80]}')
+        return '\n'.join(lines)
     # 未匹配任何命令：返回空串，由调用方决定（聊天优先，否则发送通用兜底 ack）
     return ''

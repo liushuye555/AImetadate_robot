@@ -496,6 +496,9 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
     if config.relay_enabled:
         from .relay import relay_event
         asyncio.create_task(relay_event(ws, store, event, config))
+    if event.get('message_type') == 'private' and is_forward_event(event):
+        from .favorites import maybe_save_private_forward
+        asyncio.create_task(maybe_save_private_forward(ws, store, event, config))
     if not should_reply(event, config.bot):
         return False
     def load_aware_view_builder():

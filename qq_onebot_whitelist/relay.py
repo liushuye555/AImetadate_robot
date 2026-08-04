@@ -71,7 +71,7 @@ def ordinary_worth_relaying(text: str, images: list[dict], links: list[str], fil
     return False
 
 
-def _forward_text(messages: list[dict]) -> str:
+def forward_text(messages: list[dict]) -> str:
     lines = []
     for sub in messages:
         name = str(sub.get('nickname') or (sub.get('sender') or {}).get('nickname') or '匿名')
@@ -85,6 +85,22 @@ def _forward_text(messages: list[dict]) -> str:
             text = str(seg)
         lines.append(f'{name}: {text}')
     return '\n'.join(lines) or '[转发消息]'
+
+
+def build_forward_nodes(messages: list[dict]) -> list[dict]:
+    """把合并消息内容转成 send_forward_msg 的 node 列表。"""
+    nodes = []
+    for sub in messages:
+        seg = sub.get('message') or []
+        nodes.append({
+            'type': 'node',
+            'data': {
+                'name': str(sub.get('nickname') or (sub.get('sender') or {}).get('nickname') or '匿名'),
+                'uin': str(sub.get('user_id') or ''),
+                'content': seg if isinstance(seg, list) else str(seg),
+            },
+        })
+    return nodes
 
 
 def _relay_judge_ok(text: str) -> bool:
@@ -143,25 +159,15 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
     key = forward_content(messages)
     if store.relay_seen(key, hours=config.relay_dedupe_hours):
         return
-    if config.relay_ai_filter and not _relay_judge_ok(_forward_text(messages)):
+    if config.relay_ai_filter and not _relay_judge_ok(forward_text(messages)):
         return
-    nodes = []
-    for sub in messages:
-        seg = sub.get('message') or []
-        nodes.append({
-            'type': 'node',
-            'data': {
-                'name': str(sub.get('nickname') or (sub.get('sender') or {}).get('nickname') or '匿名'),
-                'uin': str(sub.get('user_id') or ''),
-                'content': seg if isinstance(seg, list) else str(seg),
-            },
-        })
+    nodes = build_forward_nodes(messages)
     for gid in targets:
         try:
             await call_action(ws, 'send_forward_msg', {'group_id': int(gid), 'messages': nodes})
         except Exception as exc:
             print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
-            await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': _forward_text(messages)})
+            await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
     store.relay_log(key, 'forward')
 
 
