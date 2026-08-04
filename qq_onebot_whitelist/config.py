@@ -63,6 +63,21 @@ class AppConfig:
     network_proxy_enabled: bool = True
     network_proxy_host: str = '127.0.0.1'
     network_proxy_port: int = 7897
+    relay_enabled: bool = False
+    relay_mode: str = 'whitelist'
+    relay_groups: set[str] = field(default_factory=set)
+    relay_input_groups: set[str] = field(default_factory=set)
+    relay_output_groups: set[str] = field(default_factory=set)
+    relay_ordinary: bool = True
+    relay_text_keywords: list[str] = field(default_factory=list)
+    relay_text_regex: str = ''
+    relay_ai_filter: bool = False
+    relay_dedupe_hours: int = 24
+    chat_enabled: bool = False
+    chat_persona: str = ''
+    chat_memory_turns: int = 10
+    chat_admin_memory_turns: int = 50
+    chat_cooldown_seconds: int = 5
     feature_link_analysis: bool = True
     feature_link_metadata: bool = True
     links_link_judge: str = 'both'
@@ -101,6 +116,8 @@ def load_config(path: str | Path) -> AppConfig:
     load_aware = raw.get('load_aware') or {}
     network = raw.get('network') or {}
     proxy = network.get('proxy') or {}
+    relay = raw.get('relay') or {}
+    chat = raw.get('chat') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
@@ -163,6 +180,21 @@ def load_config(path: str | Path) -> AppConfig:
         network_proxy_enabled=bool(proxy.get('enabled', True)),
         network_proxy_host=str(proxy.get('host') or '127.0.0.1'),
         network_proxy_port=int(proxy.get('port') or 7897),
+        relay_enabled=bool(relay.get('enabled', False)),
+        relay_mode=str(relay.get('mode') or 'whitelist').lower(),
+        relay_groups={str(x) for x in (relay.get('groups') or [])},
+        relay_input_groups={str(x) for x in (relay.get('input_groups') or [])},
+        relay_output_groups={str(x) for x in (relay.get('output_groups') or [])},
+        relay_ordinary=bool(relay.get('ordinary', True)),
+        relay_text_keywords=[str(x) for x in (relay.get('text_keywords') or [])],
+        relay_text_regex=str(relay.get('text_regex') or ''),
+        relay_ai_filter=bool(relay.get('ai_filter', False)),
+        relay_dedupe_hours=int(relay.get('dedupe_hours') or 24),
+        chat_enabled=bool(chat.get('enabled', False)),
+        chat_persona=str(chat.get('persona') or ''),
+        chat_memory_turns=int(chat.get('memory_turns') or 10),
+        chat_admin_memory_turns=int(chat.get('admin_memory_turns') or 50),
+        chat_cooldown_seconds=int(chat.get('cooldown_seconds') or 5),
         feature_link_analysis=bool(features.get('link_analysis', True)),
         feature_link_metadata=bool(features.get('link_metadata', daily_report.get('enrich_links', True))),
         links_link_judge=str((raw.get('links') or {}).get('link_judge') or 'both').lower(),

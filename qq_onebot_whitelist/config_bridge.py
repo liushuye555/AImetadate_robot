@@ -26,6 +26,8 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
     load_aware = data.get('load_aware') or {}
     network = data.get('network') or {}
     proxy = network.get('proxy') or {}
+    relay = data.get('relay') or {}
+    chat = data.get('chat') or {}
 
     def field(key: str, kind: str, default: Any, en: str, zh: str, **extra: Any) -> dict[str, Any]:
         item = {'key': key, 'kind': kind, 'default': default, 'label': {'en-US': en, 'zh-CN': zh}}
@@ -72,6 +74,21 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('network.proxy.enabled', 'bool', proxy.get('enabled', True), 'Use HTTP proxy', '启用代理', section='network'),
         field('network.proxy.host', 'text', proxy.get('host', '127.0.0.1'), 'Proxy host', '代理主机', section='network'),
         field('network.proxy.port', 'number', proxy.get('port', 7897), 'Proxy port', '代理端口', section='network', min=1, max=65535),
+        field('relay.enabled', 'bool', relay.get('enabled', False), 'Relay between groups', '群搬运开关', section='relay'),
+        field('relay.mode', 'select', relay.get('mode', 'whitelist'), 'Relay group mode', '搬运群模式', section='relay', options=['whitelist', 'blacklist']),
+        field('relay.groups', 'list', relay.get('groups', []), 'Relay groups (mode applies)', '搬运群列表（按模式生效）', section='relay'),
+        field('relay.input_groups', 'list', relay.get('input_groups', []), 'Input groups (blank = mode list)', '输入群（留空=按模式列表）', section='relay'),
+        field('relay.output_groups', 'list', relay.get('output_groups', []), 'Output groups (blank = mode list)', '输出群（留空=按模式列表）', section='relay'),
+        field('relay.ordinary', 'bool', relay.get('ordinary', True), 'Relay link/image/file messages', '转发含链接/图片/文件的普通消息', section='relay'),
+        field('relay.text_keywords', 'list', relay.get('text_keywords', []), 'Text keywords to relay', '纯文本转发关键词', section='relay'),
+        field('relay.text_regex', 'text', relay.get('text_regex', ''), 'Text regex to relay', '纯文本转发正则', section='relay'),
+        field('relay.ai_filter', 'bool', relay.get('ai_filter', False), 'AI filter before relay', '转发前 AI 过滤', section='relay'),
+        field('relay.dedupe_hours', 'number', relay.get('dedupe_hours', 24), 'Relay dedupe hours', '转发去重时长（小时）', section='relay', min=1, max=168),
+        field('chat.enabled', 'bool', chat.get('enabled', False), 'Chat with persona', '聊天开关', section='chat'),
+        field('chat.persona', 'text', chat.get('persona', ''), 'Persona (system prompt)', '人设（系统提示词）', section='chat'),
+        field('chat.memory_turns', 'number', chat.get('memory_turns', 10), 'Memory turns (normal users)', '普通用户记忆条数', section='chat', min=1, max=100),
+        field('chat.admin_memory_turns', 'number', chat.get('admin_memory_turns', 50), 'Memory turns (admins)', '管理员记忆条数', section='chat', min=1, max=500),
+        field('chat.cooldown_seconds', 'number', chat.get('cooldown_seconds', 5), 'Reply cooldown (s)', '回复冷却（秒）', section='chat', min=1, max=3600),
         field('reply.whitelist_groups', 'list', reply.get('whitelist_groups', []), 'Whitelisted groups', '群白名单', section='access'),
         field('reply.whitelist_users', 'list', reply.get('whitelist_users', []), 'Whitelisted users', '用户白名单', section='access'),
         field('reply.require_at_in_group', 'bool', reply.get('require_at_in_group', True), 'Require @ in groups', '群聊必须 @ 机器人', section='access'),

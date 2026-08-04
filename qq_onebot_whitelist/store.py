@@ -160,6 +160,22 @@ CREATE TABLE IF NOT EXISTS link_judges (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS relay_log (
+  key TEXT PRIMARY KEY,
+  kind TEXT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT,
+  user_id TEXT,
+  role TEXT,
+  text TEXT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_chat_turns_user ON chat_turns(scope, user_id, id);
+
 CREATE TABLE IF NOT EXISTS prompt_judges (
   prompt_hash TEXT PRIMARY KEY,
   verdict INTEGER,
@@ -348,6 +364,48 @@ class Store:
                 (url_key, purpose, int(tokens)),
             )
             conn.commit()
+
+    def relay_seen(self, key: str, *, hours: int = 24) -> bool:
+        """搬运去重：key 在最近 hours 小时内已转发过。"""
+        if not key:
+            return False
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM relay_log WHERE key = ? AND seen_at >= datetime('now', ?)",
+                (key, f'-{max(1, int(hours))} hours'),
+            ).fetchone()
+        return row is not None
+
+    def relay_log(self, key: str, kind: str = '') -> None:
+        if not key:
+            return
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT OR REPLACE INTO relay_log (key, kind) VALUES (?, ?)',
+                (key, str(kind or '')),
+            )
+            conn.execute("DELETE FROM relay_log WHERE seen_at < datetime('now', '-72 hours')")
+            conn.commit()
+
+    def record_chat_turn(self, scope: str, user_id: str, role: str, text: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO chat_turns (scope, user_id, role, text) VALUES (?, ?, ?, ?)',
+                (str(scope), str(user_id), str(role), str(text or '')),
+            )
+            conn.commit()
+
+    def recent_chat_turns(self, scope: str, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                'SELECT role, text, seen_at FROM chat_turns '
+                'WHERE scope = ? AND user_id = ? ORDER BY id DESC LIMIT ?',
+                (str(scope), str(user_id), int(limit)),
+            ).fetchall()
+        return [
+            dict(role=r[0], text=r[1] or '', seen_at=r[2] or '')
+            for r in reversed(rows)
+        ]
 
     def get_prompt_judge(self, prompt_hash: str) -> bool | None:
         if not prompt_hash:

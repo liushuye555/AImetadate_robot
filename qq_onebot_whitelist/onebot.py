@@ -493,6 +493,9 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         asyncio.create_task(collect_forward_contents(store, event, config))
     if any(rule.get('ai_match') for rule in config.collection_rules):
         asyncio.create_task(asyncio.to_thread(ai_match_and_collect, store, event, extract_text(event), config))
+    if config.relay_enabled:
+        from .relay import relay_event
+        asyncio.create_task(relay_event(ws, store, event, config))
     if not should_reply(event, config.bot):
         return False
     def load_aware_view_builder():
@@ -510,6 +513,12 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         config_path=config_path,
         language=config.language,
     )
+    if not reply and config.chat_enabled:
+        from .chat import maybe_chat_reply
+        chat_reply = await asyncio.to_thread(maybe_chat_reply, store, event, config)
+        if chat_reply:
+            await send_reply(ws, event, chat_reply)
+            return True
     await send_reply(ws, event, reply)
     return True
 
