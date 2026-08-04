@@ -126,7 +126,7 @@ def link_category(url: str, context: str = '') -> str:
     host = urlparse(url).netloc.lower()
     text = (context or '').lower()
     if any(x in host for x in ['civitai.com', 'huggingface.co', 'modelscope.cn',
-                               'pan.baidu.com', 'aliyundrive', 'alipan', '115.com', '123pan', 'lanzou']) \
+                               'civitai.red', 'pan.baidu.com', 'aliyundrive', 'alipan', '115.com', '123pan', 'lanzou']) \
             or any(x in text for x in MODEL_HINTS):
         return 'AI模型'
     if any(x in text for x in WORKFLOW_HINTS):

@@ -54,6 +54,8 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
             continue
         item = {**item, 'purpose': purpose}
         item['category'] = link_category(url, context)
+        if purpose == '核心AI资源' and item['category'] == '其他':
+            item['category'] = 'AI资源'  # 核心AI资源兜底，绝不落"其他"
         score = link_score(item)
         old = selected.get(key)
         if old is None or score > int(old.get('_score') or 0):
@@ -89,7 +91,7 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
     for item in links:
         grouped.setdefault(str(item.get('category') or '其他'), []).append(item)
     CATEGORY_ORDER = [
-        'AI模型', 'AI工作流', 'AI工具插件', 'AI在线服务', 'AI数据集',
+        'AI模型', 'AI工作流', 'AI工具插件', 'AI在线服务', 'AI数据集', 'AI资源',
         '教程', '教程视频', '图片', '音乐', '导航', '娱乐视频', '新闻', '其他',
     ]
     ordered = [(c, grouped[c]) for c in CATEGORY_ORDER if c in grouped]
