@@ -77,6 +77,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('images.sticker_repeat_threshold', 'number', images.get('sticker_repeat_threshold', 3), 'Sticker repeat threshold', '表情包重复阈值（次）', section='advanced', min=1, max=20),
         field('images.obfuscation_threshold', 'number', images.get('obfuscation_threshold', 10), 'Obfuscation match threshold', '混淆匹配阈值（汉明距离）', section='advanced', min=1, max=20),
         field('images.reencode_threshold', 'number', images.get('reencode_threshold', 6.5), 'Re-encode blockiness threshold', '重编码疑似阈值（块状伪影）', section='advanced', min=1, max=20),
+        field('images.ai_discussion_judge', 'select', images.get('ai_discussion_judge', 'rule'), 'Discussion judge mode', '参数讨论判定模式', section='advanced', options=['rule', 'llm', 'both']),
         field('storage.data_dir', 'text', storage.get('data_dir', 'data'), 'Data directory', '数据目录', section='advanced'),
         field('startup_history.enabled', 'bool', startup.get('enabled', True), 'Load startup history', '启动时读取历史消息', section='advanced'),
         field('startup_history.mode', 'select', startup.get('mode', 'blacklist'), 'Startup history mode', '启动历史模式', section='advanced', options=['blacklist', 'whitelist']),
