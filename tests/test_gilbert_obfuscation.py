@@ -191,6 +191,21 @@ def test_restore_image_detects_layer_count(tmp_path):
         assert im.convert('L').tobytes() == raw
 
 
+def test_restore_image_recovers_via_forward_permutation(tmp_path):
+    """文件是"被提前解了一层"的状态时，顺置换（enc）能恢复原图。"""
+    w, h = 128, 96
+    raw = _make_gradient(w, h)
+    over_state = _permute(raw, w, h, 'dec')
+    path = tmp_path / 'over.png'
+    Image.frombytes('L', (w, h), over_state).save(path)
+
+    out = tmp_path / 'restored.png'
+    _, layers = restore_image(path, out, layers=None)
+    with Image.open(out) as im:
+        assert im.convert('L').tobytes() == raw
+    assert layers == 1
+
+
 def test_promote_restored_replaces_original(tmp_path):
     from qq_onebot_whitelist.gilbert_obfuscation import promote_restored
     archive = tmp_path / "ai" / "ab"

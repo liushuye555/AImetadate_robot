@@ -162,14 +162,28 @@ def _curve_tv(mv, width: int, height: int, order: array) -> float:
     return total / max(1, width * height)
 
 
-def _apply_decoder(src: bytearray, order: array, width: int, shift: int) -> bytearray:
-    """逆置换一层：dst[order[s]] = src[order[(s+shift) % N]]。"""
+def _apply_permutation(src: bytearray, order: array, width: int, shift: int, forward: bool) -> bytearray:
+    """置换一层：forward=enc（dst[order[(s+shift)%N]]=src[order[s]]）或 forward=dec（逆）。"""
     n = len(src)
     dst = bytearray(n)
     src_mv = memoryview(src)
-    for s in range(n):
-        dst[order[s]] = src_mv[order[(s + shift) % n]]
+    if forward:
+        for s in range(n):
+            dst[order[(s + shift) % n]] = src_mv[order[s]]
+    else:
+        for s in range(n):
+            dst[order[s]] = src_mv[order[(s + shift) % n]]
     return dst
+
+
+def _apply_decoder(src: bytearray, order: array, width: int, shift: int) -> bytearray:
+    """逆置换一层（与网站"解混淆"一致）。"""
+    return _apply_permutation(src, order, width, shift, forward=False)
+
+
+def _apply_encoder(src: bytearray, order: array, width: int, shift: int) -> bytearray:
+    """顺置换一层（网站"混淆"方向）。"""
+    return _apply_permutation(src, order, width, shift, forward=True)
 
 
 def _restore_ratios(mv, width: int, height: int, base_tv: float, layers: int = MAX_LAYERS) -> list[float]:
@@ -276,21 +290,23 @@ def restore_image(
     shift = round((math.sqrt(5) - 1) / 2 * n)
 
     layer_candidates = [max(1, int(layers))] if layers else list(range(1, max_layers + 1))
-    best: tuple[float, int, list[bytes]] | None = None
+    best: tuple[float, int, bool, list[bytes]] | None = None
     for k in layer_candidates:
-        restored_channels: list[bytes] = []
-        for channel in channels:
-            cur = bytearray(channel)
-            for _ in range(k):
-                cur = _apply_decoder(cur, order, width, shift)
-            restored_channels.append(bytes(cur))
-        # 用 R 通道的栅格 TV 近似还原质量（层数正确时最平滑）
-        tv = _raster_tv(memoryview(restored_channels[0]), width, height)
-        if best is None or tv < best[0]:
-            best = (tv, k, restored_channels)
+        for forward in (False, True):
+            # 逆置换解不开时也试顺置换（文件可能是"被提前解了一层"的状态）
+            restored_channels: list[bytes] = []
+            for channel in channels:
+                cur = bytearray(channel)
+                for _ in range(k):
+                    cur = _apply_permutation(cur, order, width, shift, forward)
+                restored_channels.append(bytes(cur))
+            # 用 R 通道的栅格 TV 近似还原质量（层数/方向正确时最平滑）
+            tv = _raster_tv(memoryview(restored_channels[0]), width, height)
+            if best is None or tv < best[0]:
+                best = (tv, k, forward, restored_channels)
     if best is None:
         raise ValueError('无法确定还原层数')
-    _, used_layers, restored_channels = best
+    _, used_layers, _forward, restored_channels = best
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     merged = _Image.merge('RGB', [_Image.frombytes('L', (width, height), c) for c in restored_channels])
