@@ -9,6 +9,8 @@ def test_is_prompt_message_recognizes_real_prompts():
     assert is_prompt_message("1girl, solo, cat girl, blonde hair")
     assert is_prompt_message("prompt: 1girl, best quality")
     assert is_prompt_message("图生图 一个女孩坐在椅子上")
+    assert is_prompt_message("/绘图 模型 Anima_latent_sharp")
+    assert is_prompt_message("/绘图 文生图 1girl, solo")
 
 
 def test_is_prompt_message_rejects_false_positives():
@@ -16,6 +18,9 @@ def test_is_prompt_message_rejects_false_positives():
     assert not is_prompt_message("提示词是什么")
     assert not is_prompt_message("fp8下好了，测测fp8")
     assert not is_prompt_message("4090 48g")
+    assert not is_prompt_message("/绘图 模型")
+    assert not is_prompt_message("/绘图 状态")
+    assert not is_prompt_message("/绘图 文生图")
 
 
 def test_is_params_message_detects_param_talk():

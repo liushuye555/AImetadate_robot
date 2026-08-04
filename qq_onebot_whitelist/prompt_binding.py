@@ -13,13 +13,25 @@ PROMPT_RE = re.compile(
     r'|prompt\s*[:：]'
     r'|\b(lora|sdxl|flux|novelai)\b)', re.I)
 
+# /绘图 命令后仅出现这些关键字（无实质提示词/模型名）时不算提示词消息
+BARE_DRAW_KEYWORDS = {'模型', '状态', '帮助', 'help', '菜单', '功能', '文生图', '图生图'}
+
 PARAMS_RE = re.compile(
     r'(ckpt|sampler|denoise|steps|seed|lora|模型|显卡|炼丹|出图|生成'
     r'|显存|fp8|低噪|重绘|画质|分辨率|seedvr)', re.I)
 
 
 def is_prompt_message(text: str) -> bool:
-    return bool(PROMPT_RE.search(text or ''))
+    t = (text or '').strip()
+    if not PROMPT_RE.search(t):
+        return False
+    m = re.match(r'^/绘图[\s:：]*', t)
+    if m:
+        rest = t[m.end():].strip()
+        # 命令后没有内容、只有短关键字（如"模型/状态"）→ 是机器人命令而非提示词
+        if not rest or rest in BARE_DRAW_KEYWORDS or len(rest) <= 4:
+            return False
+    return True
 
 
 def is_params_message(text: str) -> bool:
