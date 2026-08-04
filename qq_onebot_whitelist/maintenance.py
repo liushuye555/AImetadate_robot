@@ -127,74 +127,86 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     - 重压/缩放弱信号 → xiaofanqie_compressed；
     - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
-    from .gilbert_obfuscation import analyze_image
+    from .gilbert_obfuscation import analyze_image, promote_restored, restore_image
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
     if not db.exists():
         return 0
     store = Store(db)
-    changed = 0
+    decisions: list[tuple[int, str, str | None]] = []
     with sqlite3.connect(db) as conn:
-        # 无元数据/候选/疑似图做小番茄混淆算法级验证（带缓存）
-        for row_id, kept_path, format, sha256, reason in conn.execute(
+        rows = conn.execute(
             "SELECT id, kept_path, format, sha256, retention_reason FROM images "
             "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
             "AND kept_path IS NOT NULL"
-        ).fetchall():
-            path = Path(kept_path)
-            if not path.exists():
-                continue
-            cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-            if cached is not None and cached[3] is not None:
-                xfq_result = {
-                    'obfuscated': cached[2],
-                    'ratio': cached[0],
-                    'layers': cached[1],
-                    'confidence': cached[3],
-                }
-            else:
+        ).fetchall()
+    # 两阶段：先全部判定（独立连接，避免外层写事务内再开连接导致 SQLite 锁）
+    archive_root = project_dir / 'data' / 'images' / 'ai'
+    for row_id, kept_path, format, sha256, reason in rows:
+        path = Path(kept_path)
+        if not path.exists():
+            continue
+        cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
+        if cached is not None and cached[3] is not None:
+            xfq_result = {
+                'obfuscated': cached[2],
+                'ratio': cached[0],
+                'layers': cached[1],
+                'confidence': cached[3],
+            }
+        else:
+            try:
+                xfq_result = analyze_image(path)
+            except Exception:
+                xfq_result = None
+            if xfq_result is not None:
                 try:
-                    xfq_result = analyze_image(path)
+                    store.save_obfuscation_score(
+                        str(sha256 or ''),
+                        ratio=float(xfq_result['ratio']),
+                        layers=xfq_result.get('layers'),
+                        obfuscated=bool(xfq_result.get('obfuscated')),
+                        confidence=xfq_result.get('confidence') or 'none',
+                    )
                 except Exception:
-                    xfq_result = None
-                if xfq_result is not None:
-                    try:
-                        store.save_obfuscation_score(
-                            str(sha256 or ''),
-                            ratio=float(xfq_result['ratio']),
-                            layers=xfq_result.get('layers'),
-                            obfuscated=bool(xfq_result.get('obfuscated')),
-                            confidence=xfq_result.get('confidence') or 'none',
-                        )
-                    except Exception:
-                        pass
-            if xfq_result and xfq_result.get('obfuscated'):
-                if xfq_result.get('confidence') == 'confirmed':
-                    reason = 'xiaofanqie_obfuscated'
-                else:
-                    reason = 'xiaofanqie_compressed'
-                conn.execute("UPDATE images SET retention_reason=? WHERE id=?", (reason, row_id))
-                # 确认档自动解混淆：还原原图并存到 images/restored/
-                if reason == 'xiaofanqie_obfuscated' and xfq_result.get('layers'):
-                    try:
-                        restored_root = project_dir / 'data' / 'images' / 'restored'
-                        restored, _ = restore_image(
-                            path,
-                            restored_root / f'{sha256}.png',
-                            layers=xfq_result.get('layers'),
-                        )
-                        conn.execute("UPDATE images SET restored_path=? WHERE id=?", (str(restored), row_id))
-                    except Exception:
-                        pass
-                changed += 1
-                continue
+                    pass
+        if xfq_result and xfq_result.get('obfuscated'):
+            new_reason = (
+                'xiaofanqie_obfuscated' if xfq_result.get('confidence') == 'confirmed'
+                else 'xiaofanqie_compressed'
+            )
+            restored_final = None
+            # 确认档：还原即替换（删混淆原图、归档指向还原图）
+            if new_reason == 'xiaofanqie_obfuscated' and xfq_result.get('layers') and sha256:
+                try:
+                    tmp_dir = project_dir / 'data' / 'tmp'
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    restored, _ = restore_image(
+                        path,
+                        tmp_dir / f'{sha256}.restore.png',
+                        layers=xfq_result.get('layers'),
+                    )
+                    final = promote_restored(path, restored, archive_root, str(sha256))
+                    restored_final = str(final)
+                except Exception:
+                    pass
+            decisions.append((row_id, new_reason, restored_final))
+        elif reason in ('possible_obfuscation', 'possible_reencode'):
             # 旧启发式临时分类退役：非混淆图退回普通无元数据
-            if reason in ('possible_obfuscation', 'possible_reencode'):
-                conn.execute("UPDATE images SET retention_reason='no_ai_metadata' WHERE id=?", (row_id,))
-                changed += 1
-        conn.commit()
-    return changed
+            decisions.append((row_id, 'no_ai_metadata', None))
+    if decisions:
+        with sqlite3.connect(db) as conn:
+            for row_id, new_reason, restored_final in decisions:
+                if restored_final:
+                    conn.execute(
+                        "UPDATE images SET retention_reason=?, kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?",
+                        (new_reason, restored_final, restored_final, row_id),
+                    )
+                else:
+                    conn.execute("UPDATE images SET retention_reason=? WHERE id=?", (new_reason, row_id))
+            conn.commit()
+    return len(decisions)
 
 
 def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
@@ -248,29 +260,33 @@ def reclassify_historical_03(project_dir: str | Path) -> int:
         return 0
     store = Store(db)
     changed = 0
+    decisions: list[tuple[str, str | None, int]] = []
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
             "SELECT id, scope, raw_json FROM images WHERE retention_reason='nearby_ai_context'"
         ).fetchall()
-        for row_id, scope, raw_json in rows:
-            try:
-                message_db_id = int(json.loads(raw_json or '{}').get('message_db_id'))
-            except Exception:
-                message_db_id = None
-            records = store.recent_records(str(scope), limit=6) if scope else []
-            kind, prompt = bind_prompt_for_image(records)
-            if kind == 'prompt':
-                conn.execute("UPDATE images SET retention_reason='prompt_bound', bound_prompt=? WHERE id=?",
-                             (prompt[:2000], row_id))
-                changed += 1
-            elif kind == 'params':
-                conn.execute("UPDATE images SET retention_reason='params_discussion' WHERE id=?", (row_id,))
-                changed += 1
-            else:
-                conn.execute("UPDATE images SET retention_reason='candidate' WHERE id=?", (row_id,))
-                changed += 1
-        conn.commit()
-    return changed
+    # 两阶段：先全部判定（独立连接读库，避免外层写事务内再开连接导致 SQLite 锁）
+    for row_id, scope, raw_json in rows:
+        try:
+            message_db_id = int(json.loads(raw_json or '{}').get('message_db_id'))
+        except Exception:
+            message_db_id = None
+        records = store.recent_records_before(str(scope), message_db_id, limit=6) if scope else []
+        kind, prompt = bind_prompt_for_image(records)
+        if kind == 'prompt':
+            decisions.append(('prompt_bound', prompt[:2000], row_id))
+        elif kind == 'params':
+            decisions.append(('params_discussion', None, row_id))
+        else:
+            decisions.append(('candidate', None, row_id))
+    if decisions:
+        with sqlite3.connect(db) as conn:
+            conn.executemany(
+                "UPDATE images SET retention_reason=?, bound_prompt=? WHERE id=?",
+                [(kind, prompt, row_id) for kind, prompt, row_id in decisions],
+            )
+            conn.commit()
+    return len(decisions)
 
 
 def backfill_prompt_keys(project_dir: str | Path) -> int:

@@ -365,6 +365,57 @@ class Store:
             })
         return records
 
+    def recent_records_before(self, scope: str, before_id: int | None, limit: int = 6) -> list[dict[str, Any]]:
+        """以指定消息 id 为锚点的附近消息记录（含该消息及其前 limit-1 条）。
+
+        与 recent_records 结构一致（含 quoted_text / reply_to_message_id），
+        供历史图片绑定判定使用——取图片当时附近的窗口，而非当前最新消息。
+        """
+        with closing(sqlite3.connect(self.path)) as conn:
+            if before_id is not None:
+                rows = conn.execute(
+                    'SELECT id, seen_at, user_id, text, links_json, raw_json '
+                    'FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
+                    (scope, int(before_id), int(limit)),
+                ).fetchall()
+                context_rows = conn.execute(
+                    'SELECT text, raw_json FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
+                    (scope, int(before_id), max(int(limit) * 5, 500)),
+                ).fetchall()
+            else:
+                return self.recent_records(scope, limit=limit)
+        by_message_id: dict[str, str] = {}
+        for text, raw_json in context_rows:
+            try:
+                raw = json.loads(raw_json or '{}')
+            except Exception:
+                raw = {}
+            for mid in raw_message_ids(raw):
+                by_message_id[mid] = text or ''
+        records = []
+        for msg_id, seen_at, user_id, text, links_json, raw_json in reversed(rows):
+            try:
+                links = json.loads(links_json or '[]')
+            except Exception:
+                links = []
+            try:
+                raw = json.loads(raw_json or '{}')
+            except Exception:
+                raw = {}
+            reply_id = reply_to_message_id(raw)
+            records.append({
+                'id': msg_id,
+                'seen_at': seen_at,
+                'user_id': user_id,
+                'nickname': (raw.get('sender') or {}).get('nickname') or '',
+                'card': (raw.get('sender') or {}).get('card') or '',
+                'text': text or '',
+                'links': links,
+                'reply_to_message_id': reply_id,
+                'quoted_text': by_message_id.get(reply_id or '') if reply_id else None,
+            })
+        return records
+
     def recent_records_all(self, limit: int = 100) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as conn:
             rows = conn.execute(
