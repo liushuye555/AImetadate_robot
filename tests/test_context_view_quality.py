@@ -57,7 +57,8 @@ def test_context_batches_show_only_reusable_context_without_review_section(tmp_p
     assert 'batches/23.html' not in index_text
     assert not (context_dir / 'batches' / '22.html').exists()
     assert not (context_dir / 'batches' / '23.html').exists()
-    assert not stale.exists()
+    # build_context_view 只写自己管理的页面；陈旧文件清理由 build_view 的整目录重建负责
+    assert stale.exists()
 
     high_text = (context_dir / 'batches' / '21.html').read_text(encoding='utf-8')
     assert 'IMAGE_21' in high_text
