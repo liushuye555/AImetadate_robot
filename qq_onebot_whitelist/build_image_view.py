@@ -203,7 +203,7 @@ const cells=[...document.querySelectorAll('.cell')];const overlay=document.getEl
 let masked=true;try{{masked=localStorage.getItem("maskRestored")!=="0";}}catch(e){{}}
 cells.forEach(a=>{{if(masked&&a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='blur(14px)';}}}});
 const collapse=localStorage.getItem("collapseBatches")!=="0";
-if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});let folded=0;Object.values(groups).forEach(g=>{{if(g.length>1){{folded++;g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});const b=document.createElement('span');b.textContent='同批 '+g.length+' 张';b.style.cssText='position:absolute;top:6px;left:6px;background:#000c;color:#ffd98a;font-size:12px;padding:2px 8px;border-radius:999px;cursor:pointer;z-index:2';g[0].style.position='relative';g[0].appendChild(b);b.addEventListener('click',e=>{{e.preventDefault();e.stopPropagation();g.forEach(a=>{{a.style.display='';}});b.remove();}});}}}});const ci=document.getElementById('collapseInfo');if(ci&&folded){{ci.textContent='已折叠 '+folded+' 组同批，点角标展开';}}}}
+if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});let folded=0;Object.values(groups).forEach(g=>{{if(g.length>1&&g.length<=10){{folded++;g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});const b=document.createElement('span');b.textContent='同批 '+g.length+' 张';b.style.cssText='position:absolute;top:6px;left:6px;background:#000c;color:#ffd98a;font-size:12px;padding:2px 8px;border-radius:999px;cursor:pointer;z-index:2';g[0].style.position='relative';g[0].appendChild(b);b.addEventListener('click',e=>{{e.preventDefault();e.stopPropagation();g.forEach(a=>{{a.style.display='';}});b.remove();}});}}}});const ci=document.getElementById('collapseInfo');if(ci&&folded){{ci.textContent='已折叠 '+folded+' 组同批（≤10 张），点角标展开';}}}}
 const jump=document.getElementById('jumpTo');jump.addEventListener('keydown',e=>{{if(e.key==='Enter'){{const n=parseInt(jump.value,10);if(n>0&&n<=cells.length){{cells[n-1].scrollIntoView({{block:'center'}});}}}}}});
 document.getElementById('topBtn').addEventListener('click',()=>window.scrollTo({{top:0,behavior:'smooth'}}));
 function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
@@ -284,8 +284,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
             cat = cat + '_' + safe_name(str(row['ai_source']))
-        # 03 分类按 sha 去重：同一张图（同 sha）只显示最新一条
-        if reason in ('prompt_bound', 'params_discussion'):
+        # 03/05 分类按 sha 去重：同一张图（同 sha）只显示最新一条
+        if reason in ('prompt_bound', 'params_discussion', 'xiaofanqie_obfuscated'):
             seen = dedup_seen.setdefault(cat, set())
             if sha256 and sha256 in seen:
                 continue
