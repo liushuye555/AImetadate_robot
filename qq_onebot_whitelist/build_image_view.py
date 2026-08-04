@@ -200,7 +200,7 @@ h1{{font-size:18px;margin:0 0 4px}}
 <script>
 const cells=[...document.querySelectorAll('.cell')];const overlay=document.getElementById('overlay');const img=document.getElementById('lightbox');let cur=0;
 let masked=true;try{{masked=localStorage.getItem("maskRestored")!=="0";}}catch(e){{}}
-cells.forEach(a=>{{if(masked&&/还原/.test(a.getAttribute('href')||'')){{const im=a.querySelector('img');im.style.filter='blur(14px)';a.dataset.masked='1';}}}});
+cells.forEach(a=>{{if(masked&&a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='blur(14px)';}}}});
 const collapse=localStorage.getItem("collapseBatches")!=="0";
 if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});Object.values(groups).forEach(g=>{{if(g.length>1){{g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});}}}});}}
 function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
@@ -209,11 +209,14 @@ overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.displa
 document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(e.key==='Escape')overlay.style.display='none';if(e.key==='ArrowLeft')show(cur-1);if(e.key==='ArrowRight')show(cur+1);}}}});
 </script></body></html>'''
     for page_idx, page_images in enumerate(pages, start=1):
-        rels = [os.path.relpath(p, cat_dir).replace(os.sep, '/') for p in page_images]
-        cells = ''.join(
-            f'<a class="cell" href="{url_path(r)}"><img loading="lazy" src="{url_path(r)}" alt=""></a>'
-            for r in rels
-        )
+        cells = ''
+        for p in page_images:
+            r = os.path.relpath(p, cat_dir).replace(os.sep, '/')
+            mask_attr = ' data-masked="1"' if '还原' in p.name else ''
+            cells += (
+                f'<a class="cell"{mask_attr} href="{url_path(r)}">'
+                f'<img loading="lazy" src="{url_path(r)}" alt=""></a>'
+            )
         page_doc = doc.format(
             title=html.escape(cat_dir.name),
             count=len(images),
@@ -242,18 +245,29 @@ def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) ->
         cards = []
         for item in page_items:
             url = url_path(str(item['image_rel']))
+            mask_attr = ' class="masked-card"' if item.get('deobfuscated') else ''
             cards.append(
                 '<article class="card">'
-                f'<a href="{url}"><img src="{url}" loading="lazy"></a>'
+                f'<a href="{url}"{mask_attr}><img src="{url}" loading="lazy"></a>'
                 f'<p class="muted">#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
                 f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
                 f'{html.escape(str(item.get("prompt") or ""))}</pre>'
                 '</article>'
             )
+        mask_script = (
+            '<script>'
+            'try{const m=localStorage.getItem("maskRestored")!=="0";'
+            'if(m){document.querySelectorAll("a.masked-card").forEach(a=>{'
+            'a.querySelector("img").style.filter="blur(14px)";'
+            'a.addEventListener("click",e=>{e.preventDefault();'
+            'a.querySelector("img").style.filter="none";a.classList.remove("masked-card");});});}'
+            '}catch(e){}'
+            '</script>'
+        )
         page_doc = template.format(
             pager=_gallery_pager(page_idx, total_pages, len(items)),
             cards=''.join(cards),
-        )
+        ) + mask_script
         name = 'index.html' if page_idx == 1 else f'page-{page_idx}.html'
         (cat_dir / name).write_text(page_doc, encoding='utf-8')
 
@@ -310,6 +324,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'image_rel': image_rel,
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                 'prompt': str(row['bound_prompt'] or ''),
+                'deobfuscated': is_deobfuscated,
             })
     if prompt_bound_items:
         write_prompt_bound_gallery(view / CATEGORY_NAMES['prompt_bound'], prompt_bound_items)
