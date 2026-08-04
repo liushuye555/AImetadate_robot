@@ -72,3 +72,14 @@ def test_chat_disabled_or_llm_failure_returns_none(tmp_path, monkeypatch):
 
     monkeypatch.setattr(chat.netutil, 'open_url', boom)
     assert chat.maybe_chat_reply(store, event, make_config()) is None
+
+
+def test_build_reply_returns_empty_for_unmatched_private_text():
+    """私聊普通文本不再被“已收到”兜底拦截，聊天才有机会回复。"""
+    from qq_onebot_whitelist.commands import build_reply
+
+    event = {
+        'post_type': 'message', 'message_type': 'private', 'user_id': '2718273234',
+        'message': [{'type': 'text', 'data': {'text': '你好'}}],
+    }
+    assert build_reply(event, None) == ''

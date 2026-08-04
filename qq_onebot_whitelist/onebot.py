@@ -513,13 +513,17 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         config_path=config_path,
         language=config.language,
     )
-    if not reply and config.chat_enabled:
+    if reply:
+        await send_reply(ws, event, reply)
+        return True
+    if config.chat_enabled:
         from .chat import maybe_chat_reply
         chat_reply = await asyncio.to_thread(maybe_chat_reply, store, event, config)
         if chat_reply:
             await send_reply(ws, event, chat_reply)
             return True
-    await send_reply(ws, event, reply)
+    from .i18n import text as tr
+    await send_reply(ws, event, tr('ack', config.language))
     return True
 
 

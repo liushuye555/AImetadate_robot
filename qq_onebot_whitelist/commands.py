@@ -169,4 +169,5 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
                 fallback = summarize_records(records, language=language)
                 return tr('summary_failed', language, reason=type(exc).__name__, fallback=fallback)
         return summarize_records(records, language=language)
-    return tr('ack', language)
+    # 未匹配任何命令：返回空串，由调用方决定（聊天优先，否则发送通用兜底 ack）
+    return ''

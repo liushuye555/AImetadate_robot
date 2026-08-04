@@ -78,7 +78,7 @@ def start_services() -> None:
 
     # bot 自身不监听端口，直接尝试启动（计划中已注明简化：幂等检查暂省略）
     bot_pid = subprocess.Popen(
-        ["uv", "run", "python", "-m", "qq_onebot_whitelist.onebot", "--config", str(config)],
+        ["uv", "run", "python", "-u", "-m", "qq_onebot_whitelist.onebot", "--config", str(config)],
         cwd=str(REPO_ROOT),
         stdout=open(REPO_ROOT / "logs" / "bot.log", "a", encoding="utf-8", errors="replace"),
         stderr=subprocess.STDOUT,
