@@ -99,5 +99,58 @@ def is_local_link(url: str) -> bool:
     return False
 
 
+VIDEO_HOSTS = {
+    'bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be',
+    'youku.com', 'www.youku.com', 'iqiyi.com', 'www.iqiyi.com', 'douyin.com', 'www.douyin.com',
+}
+IMAGE_HOSTS = {
+    'pixiv.net', 'www.pixiv.net', 'danbooru.donmai.us', 'yande.re', 'konachan.com',
+    'gelbooru.com', 'sankakucomplex.com', 'zerochan.net', 'x.com', 'twitter.com',
+}
+MUSIC_HOSTS = {
+    'music.163.com', 'y.qq.com', 'open.spotify.com', 'music.apple.com', 'kugou.com',
+    'weishi.qq.com',
+}
+TUTORIAL_HINTS = ['教程', '教学', 'tutorial', 'guide', '学习', '安装', '部署', '使用方法', '入门']
+NAV_HINTS = ['导航', '收藏夹', '大全', '合集', '入口', '资源站', '目录']
+MODEL_HINTS = ['lora', 'ckpt', '模型', 'checkpoint', 'safetensors', '底模', '大模型']
+WORKFLOW_HINTS = ['workflow', '工作流', '节点', '流程图']
+TOOL_HINTS = ['插件', '脚本', '扩展', '工具', 'comfyui-manager']
+ONLINE_HINTS = ['api', 'demo', '在线', '试用', '测试', '接口']
+DATASET_HINTS = ['数据集', 'dataset', '训练集', 'tag集']
+NEWS_HINTS = ['新闻', '资讯', '快讯', '报道']
+
+
+def link_category(url: str, context: str = '') -> str:
+    """链接类型：AI模型/AI工作流/AI工具插件/AI在线服务/AI数据集/教程/教程视频/图片/音乐/导航/娱乐视频/新闻/其他。"""
+    host = urlparse(url).netloc.lower()
+    text = (context or '').lower()
+    if any(x in host for x in ['civitai.com', 'huggingface.co', 'modelscope.cn',
+                               'pan.baidu.com', 'aliyundrive', 'alipan', '115.com', '123pan', 'lanzou']) \
+            or any(x in text for x in MODEL_HINTS):
+        return 'AI模型'
+    if any(x in text for x in WORKFLOW_HINTS):
+        return 'AI工作流'
+    if 'github.com' in host or any(x in text for x in TOOL_HINTS):
+        return 'AI工具插件'
+    if any(x in text for x in ONLINE_HINTS):
+        return 'AI在线服务'
+    if any(x in text for x in DATASET_HINTS):
+        return 'AI数据集'
+    if any(x in text for x in TUTORIAL_HINTS):
+        return '教程视频' if any(h in host for h in VIDEO_HOSTS) else '教程'
+    if any(h in host for h in VIDEO_HOSTS):
+        return '娱乐视频'
+    if any(h in host for h in IMAGE_HOSTS):
+        return '图片'
+    if any(h in host for h in MUSIC_HOSTS):
+        return '音乐'
+    if any(x in text for x in NAV_HINTS):
+        return '导航'
+    if any(x in text for x in NEWS_HINTS):
+        return '新闻'
+    return '其他'
+
+
 def extract_resource_links(text: str) -> list[dict[str, str]]:
     return [{'url': url, 'kind': classify_link(url, text)} for url in extract_links(text)]

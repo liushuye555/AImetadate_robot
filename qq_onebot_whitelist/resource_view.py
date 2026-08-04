@@ -8,7 +8,7 @@ from .content_utils import fallback_link_description, file_description, redact_s
 from .daily_report import canonical_url, dedupe_url_key, format_size, is_low_value_link, link_purpose, link_score
 from .scope_names import display_scope
 from .llm_link_judge import cost_log, llm_judge_link
-from .resources import is_local_link
+from .resources import is_local_link, link_category
 
 
 def _html_page(title: str, intro: str, sections: list[str]) -> str:
@@ -53,6 +53,7 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
         if low_value:
             continue
         item = {**item, 'purpose': purpose}
+        item['category'] = link_category(url, context)
         score = link_score(item)
         old = selected.get(key)
         if old is None or score > int(old.get('_score') or 0):
@@ -86,21 +87,25 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
     link_count = len(links)
     grouped: dict[str, list[dict]] = {}
     for item in links:
-        grouped.setdefault(str(item.get('scope') or '未知群'), []).append(item)
+        grouped.setdefault(str(item.get('category') or '其他'), []).append(item)
+    CATEGORY_ORDER = [
+        'AI模型', 'AI工作流', 'AI工具插件', 'AI在线服务', 'AI数据集',
+        '教程', '教程视频', '图片', '音乐', '导航', '娱乐视频', '新闻', '其他',
+    ]
+    ordered = [(c, grouped[c]) for c in CATEGORY_ORDER if c in grouped]
+    for c, items in grouped.items():
+        if c not in CATEGORY_ORDER:
+            ordered.append((c, items))
     link_sections.append(
         '<div class="toolbar"><style>.pf{padding:6px 14px;border-radius:8px;border:1px solid #343a46;background:#171a21;color:#9fc2ff;cursor:pointer;margin-right:8px}.pf.active{background:#27344d;color:#fff}</style>'
         '<span class="muted">共 ' + str(link_count) + ' 条</span>'
-        '<button class="pf" data-pf="">全部</button>'
-        '<button class="pf" data-pf="核心AI资源">核心AI资源</button>'
-        '<button class="pf" data-pf="值得一看">值得一看</button>'
-        '</div>'
+        '<button class="pf active" data-pf="">全部</button>'
+        + ''.join(f'<button class="pf" data-pf="{c}">{c}</button>' for c, _ in ordered)
+        + '</div>'
     )
-    for scope, items in grouped.items():
-        scope_name = display_scope(scope, group_names)
-        if scope.startswith('group:') and scope_name == scope:
-            scope_name = '未知群'
+    for category, items in ordered:
         link_sections.append(
-            f'<section class="card"><h2>{html.escape(scope_name)} '
+            f'<section class="card"><h2>{html.escape(category)} '
             f'<span class="muted">{len(items)} 条</span></h2><ul class="resource-list">'
         )
         for item in items:
@@ -110,8 +115,12 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
                 or fallback_link_description(url, purpose_text)
             host = urlparse(url).netloc.lower()
             seen = str(item.get('seen_at') or '')[:10]
+            scope = str(item.get('scope') or '')
+            scope_name = display_scope(scope, group_names)
+            if scope.startswith('group:') and scope_name == scope:
+                scope_name = '未知群'
             link_sections.append(
-                '<li><article class="resource-item" data-purpose="' + html.escape(purpose_text) + '">'
+                '<li><article class="resource-item" data-purpose="' + html.escape(category) + '">'
                 f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
                 f'<p class="desc">{html.escape(description)}</p>'
                 f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
