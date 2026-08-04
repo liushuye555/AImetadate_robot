@@ -2,6 +2,10 @@ onebot:
   # NapCat/Lagrange 的 OneBot v11 正向 WebSocket 地址。
   ws_url: "ws://127.0.0.1:3001"
 
+ui:
+  # auto follows the Windows user language; supported explicit values: en-US, zh-CN.
+  language: auto
+
 listen:
   # 黑名单群：不记录、不分析、不回复。
   blocked_groups: []
@@ -20,11 +24,40 @@ summary:
   default_limit: 100
   max_limit: 500
 
+daily_report:
+  enabled: true
+  hour: 20
+  max_links: 20
+  enrich_links: true
+  max_enriched_links: 8
+
+features:
+  # 原始消息和 URL 始终保留；以下开关只控制对应的后续处理。
+  link_analysis: true
+  link_metadata: true
+  image_processing: true
+  ai_context: true
+  daily_report: true
+  startup_history: true
+  auto_restart: true
+links:
+  # 链接用途判定模式：rule（规则，零成本）| llm（DeepSeek 复核判不出用途的链接）| both
+  link_judge: rule
+
+keepalive:
+  # 默认关闭；开启后仅向明确列出的群发送定时消息。
+  enabled: false
+  interval_minutes: 0
+  groups: []
+  message: ""
+
 images:
   # 兼容旧配置；data/images/ai 是长期归档，不执行预算删除。
   max_archive_mb: 500
   # 只适用于 data/images/candidates 临时候选。
   candidate_ttl_hours: 24
+  # 参数/模型讨论判定模式：rule（关键词，零成本）| llm（DeepSeek 复核）| both
+  ai_discussion_judge: rule
 
 storage:
   data_dir: "data"
@@ -33,8 +66,8 @@ startup_history:
   enabled: true
   # blacklist = 自动获取群列表，跳过 listen.blocked_groups。
   mode: blacklist
-  # true = 尽量全量翻页；依靠消息唯一键去重。
-  all: true
+  # false = 正常启动按游标增量追赶，遇到上次最新消息即停止。
+  all: false
   max_pages: 200
   count: 50
 

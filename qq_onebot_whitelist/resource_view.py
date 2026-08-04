@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from .content_utils import fallback_link_description, file_description, redact_secrets, resource_context
 from .daily_report import canonical_url, dedupe_url_key, format_size, is_low_value_link, link_purpose, link_score
 from .scope_names import display_scope
+from .llm_link_judge import cost_log, llm_judge_link
 
 
 def _html_page(title: str, intro: str, sections: list[str]) -> str:
@@ -23,18 +24,36 @@ def _html_page(title: str, intro: str, sections: list[str]) -> str:
     )
 
 
-def select_resource_links(store, *, limit: int = 10000) -> list[dict]:
+def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> list[dict]:
+    """筛选高价值链接。mode=llm/both 时，规则判不出/判为低价值的链接交给 LLM 复核（按 URL 缓存）。"""
+    from .daily_report import canonical_url, link_purpose
     selected: dict[str, dict] = {}
     for item in store.recent_link_records(limit=limit):
         url = str(item.get('url') or '')
         context = str(item.get('message_text') or item.get('quoted_text') or '')
-        if not url or is_low_value_link(url, context):
+        if not url:
             continue
-        score = link_score(item)
         key = dedupe_url_key(url)
+        purpose = link_purpose(item) or ''
+        low_value = is_low_value_link(url, context)
+        if mode != 'rule' and (low_value or not purpose):
+            cached = store.get_link_judge(key)
+            if cached is None:
+                judge_purpose, tokens = llm_judge_link(url, context)
+                cost_log["calls"] += 1
+                cost_log["total_tokens"] += int(tokens or 0)
+                store.set_link_judge(key, judge_purpose)
+                cached = judge_purpose
+            if cached:
+                purpose = cached
+                low_value = False
+        if low_value:
+            continue
+        item = {**item, 'purpose': purpose}
+        score = link_score(item)
         old = selected.get(key)
         if old is None or score > int(old.get('_score') or 0):
-            selected[key] = {**item, 'url': canonical_url(url), 'purpose': link_purpose(item) or '值得一看', '_score': score}
+            selected[key] = {**item, 'url': canonical_url(url), 'purpose': purpose or '值得一看', '_score': score}
     return sorted(selected.values(), key=lambda x: (-int(x.get('_score') or 0), str(x.get('url') or '')))
 
 
@@ -54,12 +73,12 @@ def select_resource_files(store, *, limit: int = 10000) -> list[dict]:
     return sorted(seen.values(), key=lambda x: (str(x.get('kind') or ''), str(x.get('file_name') or '').lower()))
 
 
-def write_resource_pages(view: str | Path, store) -> dict[str, int]:
+def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rule') -> dict[str, int]:
     view = Path(view)
     view.mkdir(parents=True, exist_ok=True)
 
     group_names = store.group_name_map()
-    links = select_resource_links(store)
+    links = select_resource_links(store, mode=link_judge_mode)
     link_sections: list[str] = []
     link_count = len(links)
     if links:

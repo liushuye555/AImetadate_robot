@@ -152,6 +152,13 @@ CREATE TABLE IF NOT EXISTS image_hashes (
   phash TEXT,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS link_judges (
+  url_key TEXT PRIMARY KEY,
+  purpose TEXT,
+  tokens INTEGER,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 '''
 
 
@@ -304,6 +311,28 @@ class Store:
     def backfill_prompt_key(self, image_id: int, prompt_key: str) -> None:
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute('UPDATE images SET prompt_key=? WHERE id=?', (prompt_key, int(image_id)))
+            conn.commit()
+
+    def get_link_judge(self, url_key: str) -> str | None:
+        if not url_key:
+            return None
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                'SELECT purpose FROM link_judges WHERE url_key = ?',
+                (url_key,),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def set_link_judge(self, url_key: str, purpose: str, tokens: int = 0) -> None:
+        if not url_key:
+            return
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO link_judges (url_key, purpose, tokens) VALUES (?, ?, ?) '
+                'ON CONFLICT(url_key) DO UPDATE SET purpose = excluded.purpose, '
+                'tokens = excluded.tokens, updated_at = CURRENT_TIMESTAMP',
+                (url_key, purpose, int(tokens)),
+            )
             conn.commit()
 
     def group_name_map(self) -> dict[str, str]:

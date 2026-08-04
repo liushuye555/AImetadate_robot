@@ -125,7 +125,7 @@ def link_score(item: dict) -> int:
     parsed = urlparse(url)
     host = parsed.netloc.lower()
     score = 0
-    purpose = link_purpose(item)
+    purpose = str(item.get('purpose') or '') or link_purpose(item)
     if purpose == '核心AI资源':
         score += 3
     elif purpose == '值得一看':

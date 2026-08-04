@@ -60,6 +60,7 @@ class AppConfig:
     load_aware_check_seconds: int = 60
     feature_link_analysis: bool = True
     feature_link_metadata: bool = True
+    links_link_judge: str = 'rule'
     feature_image_processing: bool = True
     feature_ai_context: bool = False
     feature_daily_report: bool = True
@@ -152,6 +153,7 @@ def load_config(path: str | Path) -> AppConfig:
         load_aware_check_seconds=int(load_aware.get('check_seconds') or 60),
         feature_link_analysis=bool(features.get('link_analysis', True)),
         feature_link_metadata=bool(features.get('link_metadata', daily_report.get('enrich_links', True))),
+        links_link_judge=str((raw.get('links') or {}).get('link_judge') or 'rule').lower(),
         feature_image_processing=bool(features.get('image_processing', True)),
         feature_ai_context=bool(features.get('ai_context', ai_context.get('enabled', True))),
         feature_daily_report=bool(features.get('daily_report', daily_report.get('enabled', True))),
