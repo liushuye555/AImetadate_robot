@@ -341,6 +341,41 @@ def backfill_prompt_keys(project_dir: str | Path) -> int:
     return changed
 
 
+def rekey_prompt_signatures(project_dir: str | Path) -> int:
+    """为存量 ComfyUI 01 图按"完整工作流"重算 prompt_key（修复仅文本节点分组的过度聚合）。"""
+    from .image_meta import extract_prompt_signature
+    from .build_image_view import source_path
+
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, kept_path FROM images "
+            "WHERE retention_reason='ai_metadata' AND ai_source='ComfyUI'"
+        ).fetchall()
+        for row_id, kept_path in rows:
+            if not kept_path:
+                continue
+            src = source_path(project_dir, kept_path)
+            if not src.exists():
+                continue
+            pk = extract_prompt_signature(src)
+            if not pk:
+                continue
+            cur = conn.execute('SELECT prompt_key FROM images WHERE id=?', (row_id,)).fetchone()
+            if cur and cur[0] == pk:
+                continue
+            conn.execute('UPDATE images SET prompt_key=? WHERE id=?', (pk, row_id))
+            changed += 1
+            if changed % 200 == 0:
+                conn.commit()  # 分批提交，避免长时间锁库阻塞采集
+        conn.commit()
+    return changed
+
+
 def reclassify_prompt_judge(project_dir: str | Path, *, mode: str = 'rule') -> int:
     """对存量 prompt_bound 行做 LLM 复核（mode=llm/both 时）；不通过的降级。"""
     if mode == 'rule':

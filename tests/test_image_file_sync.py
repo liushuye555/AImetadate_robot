@@ -140,3 +140,32 @@ def test_backfill_prompt_keys(tmp_path):
     pk = conn.execute("SELECT prompt_key FROM images").fetchone()[0]
     conn.close()
     assert pk == hashlib.sha1(b"1girl, solo").hexdigest()[:16]
+
+
+def test_rekey_prompt_signatures_updates_stale_keys(tmp_path):
+    import json
+    import sqlite3
+
+    from PIL import Image, PngImagePlugin
+
+    from qq_onebot_whitelist.maintenance import rekey_prompt_signatures
+    from qq_onebot_whitelist.store import Store
+
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    img = data / "a.png"
+    img.parent.mkdir(parents=True, exist_ok=True)
+    info = PngImagePlugin.PngInfo()
+    info.add_text("prompt", json.dumps({"3": {"inputs": {"text": "1girl"}, "class_type": "CLIPTextEncode"}}))
+    Image.new("RGB", (8, 8)).save(img, pnginfo=info)
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "a", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(img), "retention_reason": "ai_metadata",
+        "text_excerpt": "1girl", "ai_source": "ComfyUI", "prompt_key": "stalekey",
+    }, raw={})
+
+    assert rekey_prompt_signatures(tmp_path) == 1
+    conn = sqlite3.connect(data / "bot.db")
+    pk = conn.execute("SELECT prompt_key FROM images").fetchone()[0]
+    conn.close()
+    assert pk != "stalekey"

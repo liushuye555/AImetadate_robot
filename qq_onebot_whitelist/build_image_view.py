@@ -110,7 +110,7 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
     )
     collapse_html = (
         '<label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 14px 18px;cursor:pointer">'
-        '<input type="checkbox" id="collapseBatches" checked> 01 同批折叠（同一提示词的图合并）</label>'
+        '<input type="checkbox" id="collapseBatches" checked> 01 同批折叠（同一工作流的图合并）</label>'
         '<script>'
         'const cb=document.getElementById("collapseBatches");'
         'try{cb.checked=localStorage.getItem("collapseBatches")!=="0";}catch(e){}'
@@ -182,7 +182,7 @@ h1{{font-size:18px;margin:0 0 4px}}
 #back{{color:#8ab4ff;text-decoration:none;font-size:13px;margin-right:14px}}
 .toolbar{{display:flex;align-items:center;gap:12px;padding:6px 22px 8px;font-size:13px}}
 #jumpTo{{width:90px;padding:4px 8px;border-radius:6px;border:1px solid #343a46;background:#171a21;color:#fff}}
-#topBtn{{padding:4px 12px;border-radius:6px;border:1px solid #343a46;background:#171a21;color:#9fc2ff;cursor:pointer}}
+#topBtn,#expandAll,#collapseAll{{padding:4px 12px;border-radius:6px;border:1px solid #343a46;background:#171a21;color:#9fc2ff;cursor:pointer}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;padding:16px 22px}}
 .cell{{display:block;border-radius:8px;overflow:hidden;background:#171b23}}
 .cell img{{width:100%;height:180px;object-fit:cover;display:block}}
@@ -194,6 +194,8 @@ h1{{font-size:18px;margin:0 0 4px}}
   <span class="muted">共 {count} 张</span>
   <input id="jumpTo" type="number" min="1" max="{count}" placeholder="跳转">
   <button id="topBtn">回顶部</button>
+  <button id="expandAll">展开全部同批</button>
+  <button id="collapseAll">恢复折叠</button>
   <span id="collapseInfo" class="muted"></span>
 </div>
 </header>
@@ -204,9 +206,11 @@ const cells=[...document.querySelectorAll('.cell')];const overlay=document.getEl
 let masked=true;try{{masked=localStorage.getItem("maskRestored")!=="0";}}catch(e){{}}
 cells.forEach(a=>{{if(masked&&a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='blur(14px)';}}}});
 const collapse=localStorage.getItem("collapseBatches")!=="0";
-if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});let folded=0;Object.values(groups).forEach(g=>{{if(g.length>1&&g.length<=10){{folded++;g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});const b=document.createElement('span');b.textContent='同批 '+g.length+' 张';b.style.cssText='position:absolute;top:6px;left:6px;background:#000c;color:#ffd98a;font-size:12px;padding:2px 8px;border-radius:999px;cursor:pointer;z-index:2';g[0].style.position='relative';g[0].appendChild(b);b.addEventListener('click',e=>{{e.preventDefault();e.stopPropagation();g.forEach(a=>{{a.style.display='';}});b.remove();}});}}}});const ci=document.getElementById('collapseInfo');if(ci&&folded){{ci.textContent='已折叠 '+folded+' 组同批（≤10 张），点角标展开';}}}}
+if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});let folded=0;Object.values(groups).forEach(g=>{{if(g.length>1&&g.length<=30){{folded++;g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});const b=document.createElement('span');b.textContent='同批 '+g.length+' 张';b.style.cssText='position:absolute;top:6px;left:6px;background:#000c;color:#ffd98a;font-size:12px;padding:2px 8px;border-radius:999px;cursor:pointer;z-index:2';g[0].style.position='relative';g[0].appendChild(b);b.addEventListener('click',e=>{{e.preventDefault();e.stopPropagation();g.forEach(a=>{{a.style.display='';}});b.remove();}});}}}});const ci=document.getElementById('collapseInfo');if(ci&&folded){{ci.textContent='已折叠 '+folded+' 组同批（≤30 张），点角标展开';}}}}
 const jump=document.getElementById('jumpTo');jump.addEventListener('keydown',e=>{{if(e.key==='Enter'){{const n=parseInt(jump.value,10);if(n>0&&n<=cells.length){{cells[n-1].scrollIntoView({{block:'center'}});}}}}}});
 document.getElementById('topBtn').addEventListener('click',()=>window.scrollTo({{top:0,behavior:'smooth'}}));
+document.getElementById('expandAll').addEventListener('click',()=>{{try{{localStorage.setItem('collapseBatches','0');}}catch(e){{}}location.reload();}});
+document.getElementById('collapseAll').addEventListener('click',()=>{{try{{localStorage.setItem('collapseBatches','1');}}catch(e){{}}location.reload();}});
 function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
 cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();if(a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='none';delete a.dataset.masked;return;}}show(i);}}));
 overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.display='none';}});
@@ -288,7 +292,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     prompt_bound_items: list[dict[str, object]] = []
     params_items: list[dict[str, object]] = []
     dedup_seen: dict[str, set[str]] = {}
-    # 同批判定：同一提示词签名 且 组大小 2..10 且 时间跨度 ≤ 2 小时
+    # 同批判定：同一完整工作流签名 且 组大小 2..30 且 时间跨度 ≤ 24 小时
     batch_keys: set[str] = set()
     if 'prompt_key' in image_cols:
         from datetime import datetime as _dt
@@ -297,7 +301,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 "SELECT prompt_key, COUNT(*), MIN(seen_at), MAX(seen_at) FROM images "
                 "WHERE retention_reason='ai_metadata' AND prompt_key IS NOT NULL GROUP BY prompt_key"
             ).fetchall():
-                if not (2 <= int(cnt) <= 10):
+                if not (2 <= int(cnt) <= 30):
                     continue
                 def _ts(v: object):
                     try:
@@ -305,7 +309,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                     except Exception:
                         return None
                 t1, t2 = _ts(mn), _ts(mx)
-                if t1 and t2 and (t2 - t1).total_seconds() <= 2 * 3600:
+                if t1 and t2 and (t2 - t1).total_seconds() <= 24 * 3600:
                     batch_keys.add(str(pk))
         except Exception:
             batch_keys = set()

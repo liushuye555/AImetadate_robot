@@ -159,9 +159,10 @@ def _classify_ai(meta: ImageMetadata, text: str) -> None:
 
 
 def extract_prompt_signature(path: str | Path) -> str | None:
-    """从图片元数据的 prompt 图谱中提取全部文本节点（正/负面提示词等），返回 sha1 前 16 位。
+    """从图片元数据的 prompt 图谱提取"完整工作流签名"，返回 sha1 前 16 位。
 
-    用于"同批"分组：同一提示词（seed 不同）→ 相同签名；不同提示词 → 不同签名。
+    用于"同批"分组：完整工作流（模型/采样器/提示词等全部输入）一致 → 同一批；
+    仅提示词相同但模型/配置不同的不同批次 → 不同签名（避免误并成一组）。
     无元数据/无文本节点返回 None。
     """
     import hashlib
@@ -185,17 +186,6 @@ def extract_prompt_signature(path: str | Path) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    texts: list[str] = []
-    for node in data.values():
-        if not isinstance(node, dict):
-            continue
-        inputs = node.get('inputs')
-        if not isinstance(inputs, dict):
-            continue
-        for field in ('text', 'value', 'string'):
-            value = inputs.get(field)
-            if isinstance(value, str) and value.strip():
-                texts.append(value.strip())
-    if not texts:
-        return None
-    return hashlib.sha1('\n'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:16]
+    return hashlib.sha1(
+        json.dumps(data, sort_keys=True, ensure_ascii=False).encode('utf-8', errors='replace')
+    ).hexdigest()[:16]

@@ -58,11 +58,53 @@ def test_build_view_single_file_with_mask_marker_and_toggle(tmp_path):
     assert "解混淆" not in files[0]
     index = (tmp_path / "data" / "view" / "index.html").read_text(encoding="utf-8")
     assert "遮罩混淆还原图" in index
-    assert "maskRestored" in index
     gallery = (cat / "index.html").read_text(encoding="utf-8")
     assert "maskRestored" in gallery
     assert "blur" in gallery
     assert 'data-masked="1"' in gallery
+
+
+def test_build_view_batch_folds_12_but_not_31(tmp_path):
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        sha256 TEXT, ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, bound_prompt TEXT, prompt_key TEXT,
+        context_reason TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    for i in range(12):
+        conn.execute(
+            "INSERT INTO images (scope, user_id, seen_at, format, width, height, ai_source, retention_reason, kept_path, prompt_key) "
+            "VALUES ('group:1','u',?,'PNG',64,64,'ComfyUI','ai_metadata',?,'11111111')",
+            (f"2026-08-01 {10 + i // 60:02d}:{i % 60:02d}:00", str(img)),
+        )
+    for i in range(31):
+        conn.execute(
+            "INSERT INTO images (scope, user_id, seen_at, format, width, height, ai_source, retention_reason, kept_path, prompt_key) "
+            "VALUES ('group:1','u',?,'PNG',64,64,'ComfyUI','ai_metadata',?,'22222222')",
+            (f"2026-08-02 {10 + i // 60:02d}:{i % 60:02d}:00", str(img)),
+        )
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+    files = [p.name for p in (tmp_path / "data" / "view" / "01_AI元数据_ComfyUI").rglob("*.png")]
+    assert any("_pk11111111" in f for f in files)   # 12 张同一工作流 → 折叠
+    assert not any("_pk22222222" in f for f in files)  # 31 张超上限 → 不折
 
 
 def test_view_prompt_bound_card_and_batch_collapse(tmp_path):
