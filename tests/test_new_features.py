@@ -487,7 +487,7 @@ def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
 
     def fake_process(url, **kw):
         return {
-            "sha256": "abc", "format": "GIF", "size": 1000, "width": 100, "height": 100,
+            "sha256": "abc", "format": "JPEG", "size": 1000, "width": 100, "height": 100,
             "retention_reason": "candidate", "kept_path": None,
         }
 
@@ -501,7 +501,7 @@ def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
     assert rows and rows[0].get("retention_reason") != "sticker_filtered"
     for _ in range(2):  # 再插入 2 次，累计 3 次达到阈值
         store.record_image(scope="group:1", user_id="u", result={
-            "sha256": "abc", "format": "GIF", "size": 1000, "width": 100, "height": 100,
+            "sha256": "abc", "format": "JPEG", "size": 1000, "width": 100, "height": 100,
             "kept_path": None, "retention_reason": "candidate",
         }, raw={})
     collection.collect_event(store, event, config)  # 第 4 次：达阈值 → 表情包

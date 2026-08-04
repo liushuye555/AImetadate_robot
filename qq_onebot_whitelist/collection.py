@@ -300,6 +300,8 @@ def process_event_image(
     event: dict[str, Any] | None = None,
 ) -> None:
     """处理单张图片：下载 → 归档 → 小番茄混淆检测/还原 → 表情包过滤 → 入库。"""
+    if str(user_id or '') in config.images_ignore_bot_user_ids:
+        return  # 机器人账号发送的图片直接忽略
     try:
         result = process_image_url(
             image['url'],
@@ -350,6 +352,11 @@ def process_event_image(
                 result['retention_reason'] = 'params_discussion'
             else:
                 result['retention_reason'] = 'candidate'
+            # 参数讨论：记录相关讨论文本（供报告展示"讨论了什么参数"）
+            if result.get('retention_reason') == 'params_discussion' and not result.get('bound_prompt'):
+                result['bound_prompt'] = '\n'.join(
+                    str(r.get('text') or '') for r in records[-6:] if str(r.get('text') or '').strip()
+                )[:2000]
             # 绑定成功的图若在候选目录，晋升到 ai 归档（候选目录会被定期清理）
             if kind in ('prompt', 'params') and result.get('kept_path') \
                     and 'candidates' in str(result.get('kept_path') or ''):
@@ -416,11 +423,15 @@ def process_event_image(
                             print(f'restore failed: {type(exc).__name__}: {exc}')
         if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
             store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
-        # 减少误存：表情包（重复 >= 阈值）或超宽/超高条状（截图条等）→ 不入库
+        # 减少误存：GIF 全忽略；表情包需重复 >= 阈值；超宽/超高条状（截图条等）直接拒
         occurrences = store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1
-        repeat_sticker = is_sticker_format(result) and occurrences >= max(1, config.sticker_repeat_threshold)
-        extreme_junk = is_junk_image(result) and not is_sticker_format(result)
-        if (repeat_sticker or extreme_junk) and result.get('retention_reason') in {
+        if str(result.get('format') or '').upper() == 'GIF':
+            is_junk = True
+        elif is_sticker_format(result):
+            is_junk = occurrences >= max(1, config.sticker_repeat_threshold)
+        else:
+            is_junk = is_junk_image(result)
+        if is_junk and result.get('retention_reason') in {
                 'positive_feedback', 'prompt_bound', 'params_discussion', 'candidate'}:
             kept = result.get('kept_path')
             if kept:

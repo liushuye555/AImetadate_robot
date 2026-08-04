@@ -105,9 +105,11 @@ def is_sticker_format(result: dict) -> bool:
 
 
 def is_junk_image(result: dict) -> bool:
-    """明显非 AI 内容：表情包 / 超宽超高条状（截图条、长条 banner）。"""
+    """明显非 AI 内容：GIF / 表情包 / 超宽超高条状（截图条、长条 banner）。"""
     if result.get('has_ai_metadata'):
         return False
+    if str(result.get('format') or '').upper() == 'GIF':
+        return True
     if is_sticker_format(result):
         return True
     width = result.get('width')

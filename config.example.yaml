@@ -60,6 +60,8 @@ images:
   ai_discussion_judge: rule
   # 提示词绑定复核模式：rule（规则，零成本）| llm（DeepSeek 复核提示词文本）| both
   prompt_judge: rule
+  # 机器人账号（QQ 号）：这些账号发的图片直接无视，例如 [2215149479]
+  ignore_bot_user_ids: []
 
 storage:
   data_dir: "data"

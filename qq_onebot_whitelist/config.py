@@ -25,6 +25,7 @@ class AppConfig:
     reencode_threshold: float = 6.5
     ai_discussion_judge: str = 'rule'
     prompt_judge_mode: str = 'rule'
+    images_ignore_bot_user_ids: set[str] = field(default_factory=set)
     startup_history_enabled: bool = True
     startup_history_mode: str = 'whitelist'
     startup_history_groups: set[str] = field(default_factory=set)
@@ -115,6 +116,7 @@ def load_config(path: str | Path) -> AppConfig:
         reencode_threshold=float(images.get('reencode_threshold') or 6.5),
     ai_discussion_judge=str(images.get('ai_discussion_judge') or 'rule').lower(),
     prompt_judge_mode=str(images.get('prompt_judge') or 'rule').lower(),
+    images_ignore_bot_user_ids={str(x) for x in (images.get('ignore_bot_user_ids') or [])},
         startup_history_enabled=bool(startup_history.get('enabled', True)),
         startup_history_mode=str(startup_history.get('mode') or 'whitelist').lower(),
         startup_history_groups={str(x) for x in (startup_history.get('groups') or [])},

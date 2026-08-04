@@ -219,16 +219,16 @@ document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(
     ), encoding='utf-8')
 
 
-def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) -> None:
-    """03 提示词绑定分类：图片 + 提示词成对卡片（单页全部）。"""
+def _write_context_gallery(cat_dir: Path, items: list[dict[str, object]], title: str) -> None:
+    """03 上下文分类：图片 + 绑定文本（提示词/参数讨论）成对卡片（单页全部）。"""
     template = ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-                '<title>03 提示词绑定</title><style>'
+                '<title>{title}</title><style>'
                 'body{{font-family:system-ui,sans-serif;margin:22px;background:#0d0f13;color:#eef1f6}}'
                 '.cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}}'
                 '.card{{background:#171a21;border:1px solid #2b313d;border-radius:12px;padding:10px}}'
                 '.card img{{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:8px}}'
                 'a{{color:#9fc2ff}}.muted{{color:#aab2c0}}</style></head><body>'
-                '<h1>03 提示词绑定</h1><div class="cards">{cards}</div></body></html>')
+                '<h1>{title}</h1><div class="cards">{cards}</div></body></html>')
     cat_dir.mkdir(parents=True, exist_ok=True)
     cards = []
     for item in items:
@@ -238,8 +238,8 @@ def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) ->
             '<article class="card">'
             f'<a href="{url}"{mask_attr}><img src="{url}" loading="lazy"></a>'
             f'<p class="muted">#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
-            f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
-            f'{html.escape(str(item.get("prompt") or ""))}</pre>'
+                f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
+                f'{html.escape(str(item.get("text") or ""))}</pre>'
             '</article>'
         )
     mask_script = (
@@ -252,7 +252,18 @@ def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) ->
         '}catch(e){}'
         '</script>'
     )
-    (cat_dir / 'index.html').write_text(template.format(cards=''.join(cards)) + mask_script, encoding='utf-8')
+    (cat_dir / 'index.html').write_text(
+        template.format(title=html.escape(title), cards=''.join(cards)) + mask_script,
+        encoding='utf-8',
+    )
+
+
+def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) -> None:
+    _write_context_gallery(cat_dir, items, '03 提示词绑定')
+
+
+def write_params_gallery(cat_dir: Path, items: list[dict[str, object]]) -> None:
+    _write_context_gallery(cat_dir, items, '03 参数讨论')
 
 
 def build_view(project_dir: Path) -> dict[str, int]:
@@ -275,6 +286,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     group_names = group_name_map_from_conn(conn)
     counts: dict[str, int] = {}
     prompt_bound_items: list[dict[str, object]] = []
+    params_items: list[dict[str, object]] = []
     dedup_seen: dict[str, set[str]] = {}
     # 同批判定：同一提示词签名 且 组大小 2..10 且 时间跨度 ≤ 2 小时
     batch_keys: set[str] = set()
@@ -332,13 +344,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
         dst = view / cat / size_class / filename
         mode = make_link_or_copy(src, dst)
         counts[cat] = counts.get(cat, 0) + 1
-        if reason == 'prompt_bound':
+        if reason in ('prompt_bound', 'params_discussion'):
             image_rel = os.path.relpath(dst, view / cat).replace(os.sep, '/')
-            prompt_bound_items.append({
+            target_items = prompt_bound_items if reason == 'prompt_bound' else params_items
+            target_items.append({
                 'id': str(row['id']),
                 'image_rel': image_rel,
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                'prompt': str(row['bound_prompt'] or ''),
+                'text': str(row['bound_prompt'] or ''),
                 'deobfuscated': is_deobfuscated,
             })
         # 05 的确认混淆图按 context_reason 交叉显示到 02/03（遮罩标记）
@@ -359,11 +372,22 @@ def build_view(project_dir: Path) -> dict[str, int]:
                         'id': str(row['id']),
                         'image_rel': ctx_rel,
                         'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                        'prompt': str(row['bound_prompt'] or ''),
+                        'text': str(row['bound_prompt'] or ''),
+                        'deobfuscated': True,
+                    })
+                elif context_reason == 'params_discussion':
+                    ctx_rel = os.path.relpath(ctx_dst, view / context_cat).replace(os.sep, '/')
+                    params_items.append({
+                        'id': str(row['id']),
+                        'image_rel': ctx_rel,
+                        'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
+                        'text': str(row['bound_prompt'] or ''),
                         'deobfuscated': True,
                     })
     if prompt_bound_items:
         write_prompt_bound_gallery(view / CATEGORY_NAMES['prompt_bound'], prompt_bound_items)
+    if params_items:
+        write_params_gallery(view / CATEGORY_NAMES['params_discussion'], params_items)
     conn.close()
     # 为每个分类生成图库页（已存在专门页面的分类跳过）
     for cat_dir in sorted((p for p in view.iterdir() if p.is_dir()), key=lambda p: p.name):
