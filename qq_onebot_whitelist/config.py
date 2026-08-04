@@ -61,7 +61,7 @@ class AppConfig:
     feature_link_analysis: bool = True
     feature_link_metadata: bool = True
     feature_image_processing: bool = True
-    feature_ai_context: bool = True
+    feature_ai_context: bool = False
     feature_daily_report: bool = True
     feature_startup_history: bool = True
     feature_auto_restart: bool = True

@@ -33,3 +33,8 @@ def test_ai_retry_delay_grows_but_is_capped():
     assert ai_retry_delay_seconds(2) == 1800
     assert ai_retry_delay_seconds(3) == 3600
     assert ai_retry_delay_seconds(10) == 3600
+
+
+def test_ai_context_default_disabled():
+    from qq_onebot_whitelist.config import AppConfig
+    assert AppConfig().feature_ai_context is False

@@ -545,7 +545,9 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             print(f"get_login_info failed at startup: {type(exc).__name__}: {exc}")
         startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
         report_task = asyncio.create_task(daily_report_loop(ws, config, store))
-        ai_task = asyncio.create_task(ai_context_loop(config_path, store))
+        ai_task = None
+        if config.feature_ai_context:
+            ai_task = asyncio.create_task(ai_context_loop(config_path, store))
         keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
         status_task = asyncio.create_task(status_writer_loop(ws, config, login_info))
         try:
@@ -561,7 +563,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         finally:
             startup_task.cancel()
             report_task.cancel()
-            ai_task.cancel()
+            if ai_task is not None:
+                ai_task.cancel()
             keepalive_task.cancel()
             status_task.cancel()
             sync_task.cancel()
