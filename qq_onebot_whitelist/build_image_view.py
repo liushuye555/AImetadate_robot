@@ -102,12 +102,22 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
         )
     if not cards:
         cards.append('<article class="card"><h2>暂无图片分类</h2><p class="muted">等待维护脚本生成。</p></article>')
+    mask_html = (
+        '<label style="display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;cursor:pointer">'
+        '<input type="checkbox" id="maskRestored" checked> 遮罩混淆还原图（02/03 分组默认模糊，点击图片显示）</label>'
+        '<script>'
+        'const maskBox=document.getElementById("maskRestored");'
+        'try{maskBox.checked=localStorage.getItem("maskRestored")!=="0";}catch(e){}'
+        'maskBox.addEventListener("change",()=>{try{localStorage.setItem("maskRestored",maskBox.checked?"1":"0");}catch(e){}});'
+        '</script>'
+    )
     doc = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <title>QQ AI 图片视图</title>
 <style>
 body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:24px;background:#101114;color:#eee}
 a{color:#8ab4ff;text-decoration:none}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.card{padding:18px;background:#181a20;border:1px solid #2b2f3a;border-radius:14px}.muted{color:#aaa}
 </style><body><h1>QQ AI 图片视图</h1>
+''' + mask_html + '''
 <p class="muted">分类视图入口；03_AI上下文 有专门 HTML 页面，其它分类可直接浏览目录图片。</p>
 <div class="grid">''' + '\n'.join(cards) + '</div></body></html>'
     view.mkdir(parents=True, exist_ok=True)
@@ -166,8 +176,10 @@ h1{{font-size:18px;margin:0 0 4px}}
 <div id="overlay"><img id="lightbox" src=""></div>
 <script>
 const cells=[...document.querySelectorAll('.cell')];const overlay=document.getElementById('overlay');const img=document.getElementById('lightbox');let cur=0;
+const masked=localStorage.getItem("maskRestored")!=="0";
+cells.forEach(a=>{{if(masked&&/还原/.test(a.getAttribute('href')||'')){{const im=a.querySelector('img');im.style.filter='blur(14px)';a.dataset.masked='1';}}}});
 function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
-cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();show(i);}}));
+cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();if(a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='none';delete a.dataset.masked;return;}}show(i);}}));
 overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.display='none';}});
 document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(e.key==='Escape')overlay.style.display='none';if(e.key==='ArrowLeft')show(cur-1);if(e.key==='ArrowRight')show(cur+1);}}}});
 </script></body></html>'''.format(
@@ -188,8 +200,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
     conn.row_factory = sqlite3.Row
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
     restored_col = 'restored_path, ' if 'restored_path' in image_cols else ''
+    deobfuscated_col = 'deobfuscated, ' if 'deobfuscated' in image_cols else ''
     rows = conn.execute(
-        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + '''text_excerpt, raw_json
+        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
@@ -213,21 +226,13 @@ def build_view(project_dir: Path) -> dict[str, int]:
             else:
                 size_class = '方图'
         ext = src.suffix or '.img'
-        filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_{row['ai_source'] or ''}") + ext
+        is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
+        # 遮罩标记只加在 02/03（05 小番茄混淆不遮罩）
+        mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'nearby_ai_context')) else ''
+        filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}") + ext
         dst = view / cat / size_class / filename
         mode = make_link_or_copy(src, dst)
         counts[cat] = counts.get(cat, 0) + 1
-        # 已自动解混淆的图片：把还原图一并放进分类，方便直接查看原内容
-        restored_path = row['restored_path'] if 'restored_path' in row.keys() else None
-        if restored_path:
-            restored_src = source_path(project_dir, restored_path)
-            if restored_src.exists():
-                restored_name = safe_name(
-                    f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_解混淆"
-                ) + restored_src.suffix
-                restored_dst = view / cat / size_class / restored_name
-                make_link_or_copy(restored_src, restored_dst)
-                counts[cat] = counts.get(cat, 0) + 1
         if reason == 'nearby_ai_context':
             try:
                 raw = json.loads(row['raw_json'] or '{}')
