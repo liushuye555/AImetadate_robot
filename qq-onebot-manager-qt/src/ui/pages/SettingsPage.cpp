@@ -201,6 +201,10 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             || key == "features.link_metadata") {
             continue;
         }
+        // 群采集/群搬运/聊天已有独立一级页面，设置页不再重复展示
+        if (section == "collection" || section == "relay" || section == "chat") {
+            continue;
+        }
 
         if (kind == "provider-list") {
             const QJsonObject providers = obj.value("default").toObject();

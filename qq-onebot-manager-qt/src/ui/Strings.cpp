@@ -103,6 +103,7 @@ QString Strings::zh(const QString &key) {
     if (key == "aiMatch") return "AI 语义匹配";
     if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
     if (key == "aiPromptPlaceholder") return "描述要收集的内容，如：收集关于 Midjourney 技巧的分享";
+    if (key == "scanToCheck") return "确定后群会全部加入列表并默认勾选；取消勾选即不应用，然后点保存。";
     if (key == "relay") return "群搬运";
     if (key == "chat") return "聊天";
     if (key == "relayEnabled") return "启用群搬运（转发到输出群）";
@@ -229,6 +230,7 @@ QString Strings::en(const QString &key) {
     if (key == "aiMatch") return "AI semantic matching";
     if (key == "aiPrompt") return "AI matching description (what to collect)";
     if (key == "aiPromptPlaceholder") return "Describe what to collect, e.g.: share tips about Midjourney";
+    if (key == "scanToCheck") return "Groups will be added checked; uncheck to exclude, then save.";
     if (key == "relay") return "Relay";
     if (key == "chat") return "Chat";
     if (key == "relayEnabled") return "Enable group relay";

@@ -90,6 +90,9 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
         rebuildCollectionList();
         markDirty();
     });
+    connect(m_collectionList, &QListWidget::itemChanged, this, [this] {
+        if (!m_suppressGroupChange) markDirty();
+    });
     connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
     connect(m_expandForwards, &QCheckBox::toggled, this, [this] { markDirty(); });
 
@@ -220,8 +223,13 @@ QJsonObject CollectionPage::buildPatch() const {
         patch.insert(it.key(), it.value()->isChecked());
     patch.insert("collection.expand_forwards", m_expandForwards->isChecked());
     QJsonObject groups;
-    for (auto it = m_collectionMap.constBegin(); it != m_collectionMap.constEnd(); ++it)
-        groups.insert(it.key(), it.value());
+    for (int i = 0; i < m_collectionList->count(); ++i) {
+        QListWidgetItem *item = m_collectionList->item(i);
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty() || item->checkState() != Qt::Checked) continue;
+        const QJsonObject rule = m_collectionMap.value(id);
+        if (!rule.isEmpty()) groups.insert(id, rule);
+    }
     patch.insert("collection.groups", groups);
     patch.insert("collection.rules", m_customRules);
     return patch;
@@ -238,6 +246,9 @@ void CollectionPage::setGroups(const QVariantList &groups) {
     QDialog dialog(this);
     dialog.setWindowTitle(Strings::zh("scanGroups"));
     auto *layout = new QVBoxLayout(&dialog);
+    auto *hint = new QLabel(Strings::zh("scanToCheck"), &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
     auto *list = new QListWidget(&dialog);
     for (const QVariant &group : groups) {
         const QJsonObject obj = group.toJsonObject();
@@ -245,8 +256,6 @@ void CollectionPage::setGroups(const QVariantList &groups) {
         const QString name = obj.value("name").toString();
         auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
         item->setData(Qt::UserRole, id);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Unchecked);
         list->addItem(item);
     }
     layout->addWidget(list);
@@ -258,7 +267,6 @@ void CollectionPage::setGroups(const QVariantList &groups) {
     int added = 0;
     for (int i = 0; i < list->count(); ++i) {
         QListWidgetItem *item = list->item(i);
-        if (item->checkState() != Qt::Checked) continue;
         const QString id = item->data(Qt::UserRole).toString();
         if (id.isEmpty() || m_collectionMap.contains(id)) continue;
         QJsonObject rule;
@@ -289,6 +297,7 @@ void CollectionPage::setSavedMessage(const QString &text) {
 
 void CollectionPage::rebuildCollectionList() {
     if (!m_collectionList) return;
+    m_suppressGroupChange = true;
     m_collectionList->clear();
     for (auto it = m_collectionMap.constBegin(); it != m_collectionMap.constEnd(); ++it) {
         const QJsonObject p = it.value();
@@ -299,10 +308,13 @@ void CollectionPage::rebuildCollectionList() {
             + (p.value("forwards").toBool() ? " · 转发" : "");
         auto *item = new QListWidgetItem(summary, m_collectionList);
         item->setData(Qt::UserRole, it.key());
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
         m_collectionList->addItem(item);
     }
     if (m_collectionList->count() == 0)
         m_collectionList->addItem(Strings::zh("collectionEmpty"));
+    m_suppressGroupChange = false;
 }
 
 void CollectionPage::rebuildCustomRuleList() {

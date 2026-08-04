@@ -42,5 +42,6 @@ private:
     QJsonArray m_customRules;
     bool m_suppressRuleChange = false;
     QMap<QString, QCheckBox *> m_templateBoxes;
+    bool m_suppressGroupChange = false;
     bool m_dirty = false;
 };
