@@ -25,3 +25,72 @@ def test_clear_missing_image_paths(tmp_path):
     conn.close()
     assert rows['sha1'] == str(existing)
     assert rows['sha2'] is None
+
+
+def test_restore_confirmed_obfuscation_replaces_and_marks(tmp_path, monkeypatch):
+    import sqlite3
+    from pathlib import Path
+    from qq_onebot_whitelist.maintenance import restore_confirmed_obfuscation
+    from qq_onebot_whitelist.store import Store
+
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    archive = data / "images" / "ai" / "ab"
+    archive.mkdir(parents=True)
+    original = archive / "abc.png"
+    original.write_bytes(b"obfuscated")
+    restored_file = tmp_path / "restored" / "abc.png"
+    restored_file.parent.mkdir(parents=True)
+    restored_file.write_bytes(b"restored-content")
+
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "abc", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(original), "retention_reason": "xiaofanqie_obfuscated",
+    }, raw={})
+    store.save_obfuscation_score("abc", ratio=0.5, layers=1, obfuscated=True, confidence="confirmed")
+
+    def fake_restore(src, out, layers=None):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"restored-content")
+        return out, 1
+
+    import qq_onebot_whitelist.maintenance as m
+    monkeypatch.setattr(m, "restore_image", fake_restore)
+
+    changed = restore_confirmed_obfuscation(tmp_path)
+    assert changed == 1
+    conn = sqlite3.connect(data / "bot.db")
+    row = conn.execute("SELECT kept_path, restored_path, deobfuscated FROM images WHERE sha256='abc'").fetchone()
+    conn.close()
+    assert row[2] == 1
+    assert row[1] == row[0]
+    assert Path(row[0]).read_bytes() == b"restored-content"
+
+
+def test_restore_confirmed_obfuscation_skips_missing_restored(tmp_path, monkeypatch):
+    import sqlite3
+    from pathlib import Path
+    from qq_onebot_whitelist.maintenance import restore_confirmed_obfuscation
+    from qq_onebot_whitelist.store import Store
+
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    archive = data / "images" / "ai" / "ab"
+    archive.mkdir(parents=True)
+    original = archive / "abc.png"
+    original.write_bytes(b"obfuscated")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "abc", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(original), "retention_reason": "xiaofanqie_obfuscated",
+    }, raw={})
+    store.save_obfuscation_score("abc", ratio=0.5, layers=1, obfuscated=True, confidence="confirmed")
+
+    def fake_restore(src, out, layers=None):
+        raise FileNotFoundError("restore failed")
+
+    import qq_onebot_whitelist.maintenance as m
+    monkeypatch.setattr(m, "restore_image", fake_restore)
+
+    changed = restore_confirmed_obfuscation(tmp_path)
+    assert changed == 0
+    assert original.exists()

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .build_image_view import build_view
+from .gilbert_obfuscation import promote_restored, restore_image
 from .resource_view import write_resource_pages
 from .store import Store
 
@@ -126,7 +127,6 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
     from .gilbert_obfuscation import analyze_image
-    from .gilbert_obfuscation import restore_image
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -197,20 +197,18 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
 
 
 def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
-    """为已确认的小番茄混淆图补齐自动还原图（images/restored/ + DB restored_path）。"""
-    from .gilbert_obfuscation import restore_image
-    from .store import Store
+    """为已确认的小番茄混淆图补齐自动还原并替换为唯一存档（删原图）。"""
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
     if not db.exists():
         return 0
     store = Store(db)
-    restored_root = project_dir / 'data' / 'images' / 'restored'
+    archive_root = project_dir / 'data' / 'images' / 'ai'
     changed = 0
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
             "SELECT id, sha256, kept_path FROM images "
-            "WHERE retention_reason='xiaofanqie_obfuscated' AND restored_path IS NULL "
+            "WHERE retention_reason='xiaofanqie_obfuscated' AND deobfuscated=0 "
             "AND kept_path IS NOT NULL"
         ).fetchall()
         for row_id, sha256, kept_path in rows:
@@ -220,14 +218,18 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
             cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
             layers = cached[1] if cached else None
             try:
+                tmp_dir = project_dir / 'data' / 'tmp'
+                tmp_dir.mkdir(parents=True, exist_ok=True)
                 restored, _ = restore_image(
                     path,
-                    restored_root / f'{sha256}.png',
+                    tmp_dir / f'{sha256}.restore.png',
                     layers=layers,
                 )
-                conn.execute(
-                    'UPDATE images SET restored_path=? WHERE id=?',
-                    (str(restored), row_id),
+                final = promote_restored(path, restored, archive_root, str(sha256 or ''))
+                store.mark_image_deobfuscated(
+                    row_id,
+                    kept_path=str(final),
+                    restored_path=str(final),
                 )
                 changed += 1
             except Exception:
