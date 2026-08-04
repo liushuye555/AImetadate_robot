@@ -78,5 +78,26 @@ def classify_link(url: str, context: str = '') -> str:
     return 'link'
 
 
+def is_local_link(url: str) -> bool:
+    """本地/内网链接：localhost、127.x、10.x、172.16-31.x、192.168.x、file:// —— 他人无法访问。"""
+    host = urlparse(url).netloc.lower().split(':')[0]
+    if not host:
+        return False
+    if host in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}:
+        return True
+    if url.lower().startswith('file://'):
+        return True
+    parts = host.split('.')
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        a, b, c, d = (int(p) for p in parts)
+        if a == 10:
+            return True
+        if a == 172 and 16 <= b <= 31:
+            return True
+        if a == 192 and b == 168:
+            return True
+    return False
+
+
 def extract_resource_links(text: str) -> list[dict[str, str]]:
     return [{'url': url, 'kind': classify_link(url, text)} for url in extract_links(text)]

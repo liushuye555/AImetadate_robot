@@ -8,6 +8,7 @@ from .content_utils import fallback_link_description, file_description, redact_s
 from .daily_report import canonical_url, dedupe_url_key, format_size, is_low_value_link, link_purpose, link_score
 from .scope_names import display_scope
 from .llm_link_judge import cost_log, llm_judge_link
+from .resources import is_local_link
 
 
 def _html_page(title: str, intro: str, sections: list[str]) -> str:
@@ -33,6 +34,8 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
         context = str(item.get('message_text') or item.get('quoted_text') or '')
         if not url:
             continue
+        if is_local_link(url):
+            continue  # 本地/内网链接他人无法访问，不作为资源展示
         key = dedupe_url_key(url)
         purpose = link_purpose(item) or ''
         low_value = is_low_value_link(url, context)
@@ -81,22 +84,53 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
     links = select_resource_links(store, mode=link_judge_mode)
     link_sections: list[str] = []
     link_count = len(links)
-    if links:
-        link_sections.append(f'<section class="card"><h2>链接 <span class="muted">{len(links)} 条</span></h2><ul class="resource-list">')
+    grouped: dict[str, list[dict]] = {}
     for item in links:
-        url = str(item.get('url') or '')
-        purpose_text = str(item.get('purpose') or '链接')
-        description = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url) or fallback_link_description(url, purpose_text)
-        host = urlparse(url).netloc.lower()
+        grouped.setdefault(str(item.get('scope') or '未知群'), []).append(item)
+    link_sections.append(
+        '<div class="toolbar"><style>.pf{padding:6px 14px;border-radius:8px;border:1px solid #343a46;background:#171a21;color:#9fc2ff;cursor:pointer;margin-right:8px}.pf.active{background:#27344d;color:#fff}</style>'
+        '<span class="muted">共 ' + str(link_count) + ' 条</span>'
+        '<button class="pf" data-pf="">全部</button>'
+        '<button class="pf" data-pf="核心AI资源">核心AI资源</button>'
+        '<button class="pf" data-pf="值得一看">值得一看</button>'
+        '</div>'
+    )
+    for scope, items in grouped.items():
+        scope_name = display_scope(scope, group_names)
+        if scope.startswith('group:') and scope_name == scope:
+            scope_name = '未知群'
         link_sections.append(
-            '<li><article class="resource-item">'
-            f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
-            f'<p class="desc">{html.escape(description)}</p>'
-            f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
-            '</article></li>'
+            f'<section class="card"><h2>{html.escape(scope_name)} '
+            f'<span class="muted">{len(items)} 条</span></h2><ul class="resource-list">'
         )
-    if links:
+        for item in items:
+            url = str(item.get('url') or '')
+            purpose_text = str(item.get('purpose') or '链接')
+            description = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url) \
+                or fallback_link_description(url, purpose_text)
+            host = urlparse(url).netloc.lower()
+            seen = str(item.get('seen_at') or '')[:10]
+            link_sections.append(
+                '<li><article class="resource-item" data-purpose="' + html.escape(purpose_text) + '">'
+                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
+                f'<p class="desc">{html.escape(description)}</p>'
+                f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
+                f'<div class="meta">{html.escape(scope_name)} · {html.escape(seen)}</div>'
+                '</article></li>'
+            )
         link_sections.append('</ul></section>')
+    link_sections.append(
+        '<script>'
+        'const pfs=[...document.querySelectorAll("button.pf")];'
+        'const items=[...document.querySelectorAll(".resource-item")];'
+        'pfs.forEach(b=>b.addEventListener("click",()=>{'
+        'pfs.forEach(x=>x.classList.remove("active"));b.classList.add("active");'
+        'const p=b.dataset.pf;'
+        'items.forEach(x=>x.hidden=!!(p&&x.dataset.purpose!==p));'
+        'document.querySelectorAll("section.card").forEach(s=>s.hidden=!s.querySelector(".resource-item:not([hidden])"));'
+        '}));'
+        '</script>'
+    )
     if not link_sections:
         link_sections.append('<section class="card"><p class="muted">暂无高价值链接。</p></section>')
     (view / 'resources.html').write_text(
