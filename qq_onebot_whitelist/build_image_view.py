@@ -10,17 +10,18 @@ import shutil
 import sqlite3
 from urllib.parse import quote
 
-from .context_view import build_context_view
-
 CATEGORY_NAMES = {
     'ai_metadata': '01_AI元数据',
     'positive_feedback': '02_群友好评',
-    'nearby_ai_context': '03_AI上下文',
+    'prompt_bound': '03_提示词绑定',
+    'params_discussion': '03_参数讨论',
     'candidate': '04_候选待观察',
     'xiaofanqie_obfuscated': '05_小番茄混淆',
     'xiaofanqie_compressed': '05_小番茄混淆_压缩',
     'no_ai_metadata': '99_普通无元数据',
 }
+
+NEWEST_PER_CATEGORY = 200
 
 
 def stale_view_counts(view: Path) -> dict[str, int]:
@@ -111,14 +112,23 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
         'maskBox.addEventListener("change",()=>{try{localStorage.setItem("maskRestored",maskBox.checked?"1":"0");}catch(e){}});'
         '</script>'
     )
+    collapse_html = (
+        '<label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 14px 18px;cursor:pointer">'
+        '<input type="checkbox" id="collapseBatches" checked> 01 同批折叠（同一提示词的图合并）</label>'
+        '<script>'
+        'const cb=document.getElementById("collapseBatches");'
+        'try{cb.checked=localStorage.getItem("collapseBatches")!=="0";}catch(e){}'
+        'cb.addEventListener("change",()=>{try{localStorage.setItem("collapseBatches",cb.checked?"1":"0");}catch(e){}});'
+        '</script>'
+    )
     doc = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <title>QQ AI 图片视图</title>
 <style>
 body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:24px;background:#101114;color:#eee}
 a{color:#8ab4ff;text-decoration:none}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.card{padding:18px;background:#181a20;border:1px solid #2b2f3a;border-radius:14px}.muted{color:#aaa}
 </style><body><h1>QQ AI 图片视图</h1>
-''' + mask_html + '''
-<p class="muted">分类视图入口；03_AI上下文 有专门 HTML 页面，其它分类可直接浏览目录图片。</p>
+''' + mask_html + collapse_html + '''
+<p class="muted">分类视图入口；03_提示词绑定 有专门 HTML 页面，其它分类可直接浏览目录图片。</p>
 <div class="grid">''' + '\n'.join(cards) + '</div></body></html>'
     view.mkdir(parents=True, exist_ok=True)
     (view / 'index.html').write_text(doc, encoding='utf-8')
@@ -144,7 +154,7 @@ def make_link_or_copy(src: Path, dst: Path) -> str:
 def write_category_gallery(cat_dir: Path) -> None:
     """为图片分类目录生成图库页（缩略图网格 + 灯箱预览）。"""
     if (cat_dir / 'index.html').exists():
-        return  # 已有专门页面（如 03_AI上下文）则不覆盖
+        return  # 已有专门页面（如 03_提示词绑定）则不覆盖
     image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
     images = sorted(
         (p for p in cat_dir.rglob('*') if p.is_file() and p.suffix.lower() in image_exts),
@@ -178,6 +188,8 @@ h1{{font-size:18px;margin:0 0 4px}}
 const cells=[...document.querySelectorAll('.cell')];const overlay=document.getElementById('overlay');const img=document.getElementById('lightbox');let cur=0;
 const masked=localStorage.getItem("maskRestored")!=="0";
 cells.forEach(a=>{{if(masked&&/还原/.test(a.getAttribute('href')||'')){{const im=a.querySelector('img');im.style.filter='blur(14px)';a.dataset.masked='1';}}}});
+const collapse=localStorage.getItem("collapseBatches")!=="0";
+if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});Object.values(groups).forEach(g=>{{if(g.length>1){{g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});}}}});}}
 function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;overlay.style.display='flex';}}
 cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();if(a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='none';delete a.dataset.masked;return;}}show(i);}}));
 overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.display='none';}});
@@ -187,6 +199,31 @@ document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(
         count=len(images),
         cells=cells,
     )
+    (cat_dir / 'index.html').write_text(doc, encoding='utf-8')
+
+
+def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) -> None:
+    """03 提示词绑定分类：图片 + 提示词成对卡片。"""
+    cards = []
+    for item in items:
+        url = url_path(str(item['image_rel']))
+        cards.append(
+            '<article class="card">'
+            f'<a href="{url}"><img src="{url}" loading="lazy"></a>'
+            f'<p class="muted">#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
+            f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
+            f'{html.escape(str(item.get("prompt") or ""))}</pre>'
+            '</article>'
+        )
+    doc = ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+           '<title>03 提示词绑定</title><style>'
+           'body{font-family:system-ui,sans-serif;margin:22px;background:#0d0f13;color:#eef1f6}'
+           '.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}'
+           '.card{background:#171a21;border:1px solid #2b313d;border-radius:12px;padding:10px}'
+           '.card img{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:8px}'
+           'a{color:#9fc2ff}.muted{color:#aab2c0}</style></head><body>'
+           f'<h1>03 提示词绑定</h1><div class="cards">{"".join(cards)}</div></body></html>')
+    cat_dir.mkdir(parents=True, exist_ok=True)
     (cat_dir / 'index.html').write_text(doc, encoding='utf-8')
 
 
@@ -201,13 +238,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
     restored_col = 'restored_path, ' if 'restored_path' in image_cols else ''
     deobfuscated_col = 'deobfuscated, ' if 'deobfuscated' in image_cols else ''
+    binding_cols = 'bound_prompt, prompt_key, ' if 'bound_prompt' in image_cols else ''
     rows = conn.execute(
-        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + '''text_excerpt, raw_json
+        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
     counts: dict[str, int] = {}
-    context_items: list[dict[str, object]] = []
+    prompt_bound_items: list[dict[str, object]] = []
     for row in rows:
         src = source_path(project_dir, row['kept_path'])
         if not src.exists():
@@ -216,6 +254,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
             cat = cat + '_' + safe_name(str(row['ai_source']))
+        if counts.get(cat, 0) >= NEWEST_PER_CATEGORY:
+            continue
         size_class = 'unknown_size'
         w, h = row['width'], row['height']
         if w and h:
@@ -228,44 +268,22 @@ def build_view(project_dir: Path) -> dict[str, int]:
         ext = src.suffix or '.img'
         is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
         # 遮罩标记只加在 02/03（05 小番茄混淆不遮罩）
-        mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'nearby_ai_context')) else ''
-        filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}") + ext
+        mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'prompt_bound', 'params_discussion')) else ''
+        pk = str(row['prompt_key'] or '')[:8] if 'prompt_key' in row.keys() and row['prompt_key'] else ''
+        filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}") + ext
         dst = view / cat / size_class / filename
         mode = make_link_or_copy(src, dst)
         counts[cat] = counts.get(cat, 0) + 1
-        if reason == 'nearby_ai_context':
-            try:
-                raw = json.loads(row['raw_json'] or '{}')
-                message_db_id = int(raw['message_db_id']) if raw.get('message_db_id') is not None else None
-            except Exception:
-                message_db_id = None
-            # 图片行只存了元数据 excerpt（无元数据图为空）；真正的"附近上下文"
-            # 是聊天消息，通过 message_db_id 从 messages 表取回（含图片消息本身+前 7 条）
-            nearby_context = ''
-            if message_db_id is not None:
-                try:
-                    ctx_rows = conn.execute(
-                        'SELECT text FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT 8',
-                        (str(row['scope'] or ''), int(message_db_id)),
-                    ).fetchall()
-                    nearby_context = '\n'.join(
-                        str(r[0]) for r in ctx_rows if str(r[0] or '').strip()
-                    )
-                except Exception:
-                    nearby_context = ''
+        if reason == 'prompt_bound':
             image_rel = os.path.relpath(dst, view / cat).replace(os.sep, '/')
-            context_items.append({
+            prompt_bound_items.append({
                 'id': str(row['id']),
-                'scope': str(row['scope'] or ''),
                 'image_rel': image_rel,
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                'seen_at': str(row['seen_at'] or ''),
-                'text_excerpt': str(row['text_excerpt'] or ''),
-                'context_text': nearby_context,
-                'message_db_id': message_db_id,
-                'deobfuscated': bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False,
+                'prompt': str(row['bound_prompt'] or ''),
             })
-    build_context_view(conn, view / CATEGORY_NAMES['nearby_ai_context'], context_items, group_names)
+    if prompt_bound_items:
+        write_prompt_bound_gallery(view / CATEGORY_NAMES['prompt_bound'], prompt_bound_items)
     conn.close()
     # 为每个分类生成图库页（已存在专门页面的分类跳过）
     for cat_dir in sorted((p for p in view.iterdir() if p.is_dir()), key=lambda p: p.name):
@@ -288,7 +306,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '分类：\n'
         '01_AI元数据_*：图片本身带 ComfyUI/NovelAI 等元数据，可信度最高。\n'
         '02_群友好评：被引用/附近好评、求提示词等晋升。\n'
-        '03_AI上下文：图片附近有提示词/模型/工作流/参数讨论。\n'
+        '03_提示词绑定：图片与明确提示词成对绑定（时序/引用）。\n'
+        '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'

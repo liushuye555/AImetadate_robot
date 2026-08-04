@@ -62,3 +62,36 @@ def test_build_view_single_file_with_mask_marker_and_toggle(tmp_path):
     gallery = (cat / "index.html").read_text(encoding="utf-8")
     assert "maskRestored" in gallery
     assert "blur" in gallery
+
+
+def test_view_prompt_bound_card_and_batch_collapse(tmp_path):
+    import sqlite3
+    from pathlib import Path
+    from qq_onebot_whitelist.build_image_view import build_view
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    store = __import__("qq_onebot_whitelist.store", fromlist=["Store"]).Store(data / "bot.db")
+    img = data / "images" / "ai" / "ab" / "a.png"
+    img.parent.mkdir(parents=True)
+    img.write_bytes(b"x" * 10)
+    img2 = data / "images" / "ai" / "ab" / "b.png"
+    img2.write_bytes(b"y" * 10)
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "a", "format": "PNG", "size": 10, "width": 64, "height": 64,
+        "kept_path": str(img), "retention_reason": "prompt_bound", "bound_prompt": "1girl, solo",
+    }, raw={})
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "b", "format": "PNG", "size": 10, "width": 64, "height": 64,
+        "kept_path": str(img2), "retention_reason": "ai_metadata", "ai_source": "ComfyUI",
+        "text_excerpt": "1girl, solo", "prompt_key": "samekey",
+    }, raw={})
+    counts = build_view(tmp_path)
+    bind_dir = tmp_path / "data" / "view" / "03_提示词绑定"
+    page = next(bind_dir.rglob("index.html"))
+    html = page.read_text(encoding="utf-8")
+    assert "1girl, solo" in html
+    ai_dir = tmp_path / "data" / "view" / "01_AI元数据_ComfyUI"
+    html2 = next(ai_dir.rglob("index.html")).read_text(encoding="utf-8")
+    assert "_pk" in html2 or "samekey" in html2
+    index = (tmp_path / "data" / "view" / "index.html").read_text(encoding="utf-8")
+    assert "同批折叠" in index
