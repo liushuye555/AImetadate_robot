@@ -39,6 +39,9 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
         key = dedupe_url_key(url)
         purpose = link_purpose(item) or ''
         low_value = is_low_value_link(url, context)
+        metadata = store.get_link_metadata(key) or {}
+        title = str(metadata.get('title') or '')
+        desc = str(metadata.get('description') or '')
         if mode != 'rule' and (low_value or not purpose):
             cached = store.get_link_judge(key)
             if cached is None:
@@ -52,8 +55,8 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
                 low_value = False
         if low_value:
             continue
-        item = {**item, 'purpose': purpose}
-        item['category'] = link_category(url, context)
+        item = {**item, 'purpose': purpose, 'title': title}
+        item['category'] = link_category(url, f"{context} {title} {desc}".strip())
         if purpose == '核心AI资源' and item['category'] == '其他':
             item['category'] = 'AI资源'  # 核心AI资源兜底，绝不落"其他"
         score = link_score(item)
@@ -116,14 +119,16 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
             description = resource_context(str(item.get('message_text') or item.get('quoted_text') or ''), url) \
                 or fallback_link_description(url, purpose_text)
             host = urlparse(url).netloc.lower()
+            title = str(item.get('title') or '').strip()
             seen = str(item.get('seen_at') or '')[:10]
             scope = str(item.get('scope') or '')
             scope_name = display_scope(scope, group_names)
             if scope.startswith('group:') and scope_name == scope:
                 scope_name = '未知群'
+            headline = f'{html.escape(title)}<div class="muted">{html.escape(host or url)}</div>' if title else html.escape(host or url)
             link_sections.append(
                 '<li><article class="resource-item" data-purpose="' + html.escape(category) + '">'
-                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{html.escape(host or url)}</div>'
+                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{headline}</div>'
                 f'<p class="desc">{html.escape(description)}</p>'
                 f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
                 f'<div class="meta">{html.escape(scope_name)} · {html.escape(seen)}</div>'
