@@ -280,11 +280,12 @@ def build_view(project_dir: Path) -> dict[str, int]:
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
+    sha256_col = 'sha256, ' if 'sha256' in image_cols else ''
     restored_col = 'restored_path, ' if 'restored_path' in image_cols else ''
     deobfuscated_col = 'deobfuscated, ' if 'deobfuscated' in image_cols else ''
     binding_cols = 'bound_prompt, prompt_key, context_reason, ' if 'bound_prompt' in image_cols else ''
     rows = conn.execute(
-        '''SELECT id, sha256, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
+        '''SELECT id, ''' + sha256_col + '''scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
