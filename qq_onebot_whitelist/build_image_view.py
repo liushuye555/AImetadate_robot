@@ -284,20 +284,28 @@ def build_view(project_dir: Path) -> dict[str, int]:
     deobfuscated_col = 'deobfuscated, ' if 'deobfuscated' in image_cols else ''
     binding_cols = 'bound_prompt, prompt_key, context_reason, ' if 'bound_prompt' in image_cols else ''
     rows = conn.execute(
-        '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
+        '''SELECT id, sha256, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     group_names = group_name_map_from_conn(conn)
     counts: dict[str, int] = {}
     prompt_bound_items: list[dict[str, object]] = []
+    dedup_seen: dict[str, set[str]] = {}
     for row in rows:
         src = source_path(project_dir, row['kept_path'])
         if not src.exists():
             continue
+        sha256 = str(row['sha256'] or '') if 'sha256' in row.keys() else ''
         reason = row['retention_reason'] or 'unknown'
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
             cat = cat + '_' + safe_name(str(row['ai_source']))
+        # 03 分类按 sha 去重：同一张图（同 sha）只显示最新一条
+        if reason in ('prompt_bound', 'params_discussion'):
+            seen = dedup_seen.setdefault(cat, set())
+            if sha256 and sha256 in seen:
+                continue
+            seen.add(sha256)
         size_class = 'unknown_size'
         w, h = row['width'], row['height']
         if w and h:
@@ -329,19 +337,23 @@ def build_view(project_dir: Path) -> dict[str, int]:
         context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
         if context_reason and context_reason in CATEGORY_NAMES:
             context_cat = CATEGORY_NAMES[context_reason]
-            ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
-            ctx_dst = view / context_cat / size_class / ctx_filename
-            make_link_or_copy(src, ctx_dst)
-            counts[context_cat] = counts.get(context_cat, 0) + 1
-            if context_reason == 'prompt_bound':
-                ctx_rel = os.path.relpath(ctx_dst, view / context_cat).replace(os.sep, '/')
-                prompt_bound_items.append({
-                    'id': str(row['id']),
-                    'image_rel': ctx_rel,
-                    'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                    'prompt': str(row['bound_prompt'] or ''),
-                    'deobfuscated': True,
-                })
+            seen_ctx = dedup_seen.setdefault(context_cat, set())
+            if not (sha256 and sha256 in seen_ctx):
+                if sha256:
+                    seen_ctx.add(sha256)
+                ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
+                ctx_dst = view / context_cat / size_class / ctx_filename
+                make_link_or_copy(src, ctx_dst)
+                counts[context_cat] = counts.get(context_cat, 0) + 1
+                if context_reason == 'prompt_bound':
+                    ctx_rel = os.path.relpath(ctx_dst, view / context_cat).replace(os.sep, '/')
+                    prompt_bound_items.append({
+                        'id': str(row['id']),
+                        'image_rel': ctx_rel,
+                        'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
+                        'prompt': str(row['bound_prompt'] or ''),
+                        'deobfuscated': True,
+                    })
     if prompt_bound_items:
         write_prompt_bound_gallery(view / CATEGORY_NAMES['prompt_bound'], prompt_bound_items)
     conn.close()
