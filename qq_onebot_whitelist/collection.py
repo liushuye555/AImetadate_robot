@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Any
 
 from .config import AppConfig
-from .store import Store, canonical_message_key
+from .store import Store, canonical_message_key, reply_to_message_id
 from .commands import scope_for_event
 from .policy import extract_text
 from .resources import extract_file_segments
@@ -19,6 +19,7 @@ from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, promote_restored, restore_image
 from .load_aware import load_aware_ok
+from .prompt_binding import bind_prompt_for_image
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -307,6 +308,22 @@ def process_event_image(
             filename_hint=image.get('file'),
             nearby_text=nearby_text,
         )
+        # 03 提示词/参数绑定（无 AI 元数据图）
+        if not result.get('has_ai_metadata'):
+            try:
+                records = store.recent_records(scope, limit=6)
+            except Exception:
+                records = []
+            kind, prompt = bind_prompt_for_image(
+                records,
+                reply_to=reply_to_message_id(event or {}),
+                own_message_id=str((event or {}).get('message_id') or '') or None,
+            )
+            if kind == 'prompt':
+                result['retention_reason'] = 'prompt_bound'
+                result['bound_prompt'] = prompt[:2000]
+            elif kind == 'params':
+                result['retention_reason'] = 'params_discussion'
         # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
         # 结果缓存到 image_hashes，避免重分类时重复分析。
         if not result.get('has_ai_metadata') and result.get('kept_path'):

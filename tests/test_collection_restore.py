@@ -53,3 +53,37 @@ def test_process_event_image_replaces_with_restored(tmp_path, monkeypatch):
     assert row[2] == 1
     assert row[3] == row[1]
     assert (archive / "ab" / "abc.png").read_bytes() == b"restored-content"
+
+
+def test_process_event_image_prompt_bound(tmp_path, monkeypatch):
+    import sqlite3
+    import qq_onebot_whitelist.collection as collection
+    from qq_onebot_whitelist.config import AppConfig
+    from qq_onebot_whitelist.store import Store
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    config = AppConfig(data_dir=data)
+    img = data / "images" / "ai" / "ab" / "abc.png"
+    img.parent.mkdir(parents=True)
+    img.write_bytes(b"x")
+
+    def fake_process_image_url(url, **kwargs):
+        return {"url": url, "sha256": "abc", "phash": None, "blockiness": 0.0, "size": 1,
+                "format": "PNG", "width": 4, "height": 4, "metadata_keys": [],
+                "has_ai_metadata": False, "ai_source": None, "text_excerpt": "",
+                "kept_path": str(img), "retention_reason": "candidate"}
+
+    def fake_bind(records, reply_to=None, own_message_id=None):
+        return "prompt", "1girl, solo"
+
+    monkeypatch.setattr(collection, "process_image_url", fake_process_image_url)
+    monkeypatch.setattr(collection, "bind_prompt_for_image", fake_bind)
+    monkeypatch.setattr(collection, "analyze_image", lambda p: None)
+
+    collection.process_event_image(store, scope="group:1", user_id="u",
+        image={"url": "http://x/i.png"}, nearby_text="", message_db_id=1, config=config)
+
+    conn = sqlite3.connect(data / "bot.db")
+    row = conn.execute("SELECT retention_reason, bound_prompt FROM images").fetchone()
+    conn.close()
+    assert row == ("prompt_bound", "1girl, solo")
