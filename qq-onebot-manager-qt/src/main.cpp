@@ -18,6 +18,8 @@
 #include "ui/MainWindow.h"
 #include "ui/Strings.h"
 #include "ui/pages/CollectionPage.h"
+#include "ui/pages/RelayPage.h"
+#include "ui/pages/ChatPage.h"
 #include "ui/pages/LogsPage.h"
 #include "ui/pages/OverviewPage.h"
 #include "ui/pages/ReportsPage.h"
@@ -32,6 +34,8 @@ static QWidget *makePlaceholder(const char *key, QWidget *parent) {
 
 static QWidget *makeOverview(QWidget *parent) { return new OverviewPage(parent); }
 static QWidget *makeCollection(QWidget *parent) { return new CollectionPage(parent); }
+static QWidget *makeRelay(QWidget *parent) { return new RelayPage(parent); }
+static QWidget *makeChat(QWidget *parent) { return new ChatPage(parent); }
 static QWidget *makeSettings(QWidget *parent) { return new SettingsPage(parent); }
 static QWidget *makeLogs(QWidget *parent) { return new LogsPage(parent); }
 static QWidget *makeReports(QWidget *parent) { return new ReportsPage(parent); }
@@ -52,6 +56,8 @@ int main(int argc, char *argv[]) {
     const QVector<PageDef> pages = {
         {"overview", "overview", makeOverview},
         {"collection", "collection", makeCollection},
+        {"relay", "relay", makeRelay},
+        {"chat", "chat", makeChat},
         {"settings", "settings", makeSettings},
         {"logs", "logs", makeLogs},
         {"reports", "reports", makeReports},
@@ -173,6 +179,31 @@ int main(int argc, char *argv[]) {
         const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
         if (doc.isArray())
             collectionPage->setGroups(doc.array().toVariantList());
+    });
+    auto *relayPage = qobject_cast<RelayPage *>(window.pageWidget("relay"));
+    auto *chatPage = qobject_cast<ChatPage *>(window.pageWidget("chat"));
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, relayPage, &RelayPage::setSchema);
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, chatPage, &ChatPage::setSchema);
+    QObject::connect(relayPage, &RelayPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(chatPage, &ChatPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(configBridge, &ConfigBridge::saved, relayPage, [relayPage](bool ok, const QString &msg) {
+        relayPage->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
+    });
+    QObject::connect(configBridge, &ConfigBridge::saved, chatPage, [chatPage](bool ok, const QString &msg) {
+        chatPage->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
+    });
+    QObject::connect(relayPage, &RelayPage::groupsScanRequested, scanControl, [scanControl] {
+        scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
+    });
+    QObject::connect(scanControl, &ServiceControl::finished, relayPage, [relayPage](bool ok, QString out) {
+        if (!ok) return;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isArray())
+            relayPage->setGroups(doc.array().toVariantList());
+    });
+    // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效
+    QObject::connect(configBridge, &ConfigBridge::saved, [serviceControl](bool ok, const QString &) {
+        if (ok) serviceControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
     });
     QObject::connect(collectionPage, &CollectionPage::collectionToggle, collectionPage, [collectionControl, collectionPage] {
         collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",

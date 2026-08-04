@@ -121,6 +121,18 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return cmd_start(args)
 
 
+def cmd_bot_restart(args: argparse.Namespace) -> int:
+    """只重启 bot（不动 NapCat，避免重新扫码）；面板保存配置后调用。"""
+    pid_path = RUN_DIR / 'bot.pid'
+    if pid_path.exists():
+        pid = pid_path.read_text(encoding='ascii').strip()
+        if pid.isdigit():
+            subprocess.run(['taskkill', '/PID', pid, '/T', '/F'], capture_output=True)
+        pid_path.unlink(missing_ok=True)
+    start_services()
+    return 0
+
+
 def build_stats(store) -> dict:
     try:
         import sqlite3
@@ -363,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
+    sub.add_parser("bot-restart")
     sub.add_parser("groups", help="list groups the bot has joined")
     sub.add_parser("stats")
     sub.add_parser("report-preview")
@@ -388,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,
+        "bot-restart": cmd_bot_restart,
         "stats": cmd_stats,
         "report-preview": cmd_report_preview,
         "report-send": cmd_report_send,

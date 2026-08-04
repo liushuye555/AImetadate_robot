@@ -103,6 +103,30 @@ QString Strings::zh(const QString &key) {
     if (key == "aiMatch") return "AI 语义匹配";
     if (key == "aiPrompt") return "AI 匹配说明（收集什么）";
     if (key == "aiPromptPlaceholder") return "描述要收集的内容，如：收集关于 Midjourney 技巧的分享";
+    if (key == "relay") return "群搬运";
+    if (key == "chat") return "聊天";
+    if (key == "relayEnabled") return "启用群搬运（转发到输出群）";
+    if (key == "relayMode") return "群模式";
+    if (key == "relayWhitelist") return "白名单（仅列表内）";
+    if (key == "relayBlacklist") return "黑名单（排除列表内）";
+    if (key == "relayGroups") return "参与群（按模式生效）";
+    if (key == "relayInputGroups") return "输入群（留空=按模式列表）";
+    if (key == "relayOutputGroups") return "输出群（留空=按模式列表）";
+    if (key == "relayGroupsHint") return "留空时按“参与群”+模式双向转发（自动排除来源群，避免回环）；填了输入/输出群则以列表为准。";
+    if (key == "relayOrdinary") return "转发含链接/图片/文件的普通消息";
+    if (key == "relayText") return "纯文本转发条件";
+    if (key == "relayKeywords") return "关键词（任一命中即转）";
+    if (key == "relayRegex") return "正则表达式（可选）";
+    if (key == "relayAiFilter") return "转发前 AI 过滤（需要 LLM 配置）";
+    if (key == "relayDedupeHours") return "去重时长（小时）";
+    if (key == "groupIdPlaceholder") return "QQ 群号";
+    if (key == "chatEnabled") return "启用聊天（人设回复）";
+    if (key == "chatPersona") return "人设（系统提示词）";
+    if (key == "chatPersonaPlaceholder") return "如：你是一只活泼的猫娘，说话简短可爱";
+    if (key == "chatMemoryTurns") return "普通用户记忆条数";
+    if (key == "chatAdminMemoryTurns") return "管理员记忆条数";
+    if (key == "chatCooldownSeconds") return "回复冷却（秒）";
+    if (key == "chatHint") return "群聊需 @ 机器人，私聊仅白名单用户；管理员=用户白名单。记忆以最近一次交流为准。";
     return key;
 }
 
@@ -205,6 +229,30 @@ QString Strings::en(const QString &key) {
     if (key == "aiMatch") return "AI semantic matching";
     if (key == "aiPrompt") return "AI matching description (what to collect)";
     if (key == "aiPromptPlaceholder") return "Describe what to collect, e.g.: share tips about Midjourney";
+    if (key == "relay") return "Relay";
+    if (key == "chat") return "Chat";
+    if (key == "relayEnabled") return "Enable group relay";
+    if (key == "relayMode") return "Group mode";
+    if (key == "relayWhitelist") return "Whitelist (listed only)";
+    if (key == "relayBlacklist") return "Blacklist (exclude listed)";
+    if (key == "relayGroups") return "Participating groups";
+    if (key == "relayInputGroups") return "Input groups (blank = mode list)";
+    if (key == "relayOutputGroups") return "Output groups (blank = mode list)";
+    if (key == "relayGroupsHint") return "Blank = bidirectional by mode list (source excluded). Filled lists take precedence.";
+    if (key == "relayOrdinary") return "Relay messages with links/images/files";
+    if (key == "relayText") return "Plain text relay rules";
+    if (key == "relayKeywords") return "Keywords (any hit relays)";
+    if (key == "relayRegex") return "Regex (optional)";
+    if (key == "relayAiFilter") return "AI filter before relay (requires LLM)";
+    if (key == "relayDedupeHours") return "Dedupe window (hours)";
+    if (key == "groupIdPlaceholder") return "QQ group id";
+    if (key == "chatEnabled") return "Enable persona chat";
+    if (key == "chatPersona") return "Persona (system prompt)";
+    if (key == "chatPersonaPlaceholder") return "e.g. you are a lively catgirl, reply briefly";
+    if (key == "chatMemoryTurns") return "Memory turns (normal users)";
+    if (key == "chatAdminMemoryTurns") return "Memory turns (admins)";
+    if (key == "chatCooldownSeconds") return "Reply cooldown (s)";
+    if (key == "chatHint") return "Group: @bot required. Private: whitelisted users only. Admin = whitelist users.";
     return key;
 }
 
@@ -219,5 +267,7 @@ QString Strings::section(const QString &section) {
     if (section == "advanced") return "高级";
     if (section == "features") return "功能开关";
     if (section == "load") return "负载调度";
+    if (section == "relay") return "群搬运";
+    if (section == "chat") return "聊天";
     return section;
 }
