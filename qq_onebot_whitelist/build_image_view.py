@@ -102,7 +102,7 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
         cards.append('<article class="card"><h2>暂无图片分类</h2><p class="muted">等待维护脚本生成。</p></article>')
     mask_html = (
         '<label style="display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;cursor:pointer">'
-        '<input type="checkbox" id="maskRestored" checked> 遮罩混淆还原图（02/03 分组默认模糊，点击图片显示）</label>'
+        '<input type="checkbox" id="maskRestored" checked> 遮罩混淆还原图（默认模糊，点击图片显示）</label>'
         '<script>'
         'const maskBox=document.getElementById("maskRestored");'
         'try{maskBox.checked=localStorage.getItem("maskRestored")!=="0";}catch(e){}'
@@ -310,8 +310,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 size_class = '方图'
         ext = src.suffix or '.img'
         is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
-        # 遮罩标记只加在 02/03（05 小番茄混淆不遮罩）
-        mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'prompt_bound', 'params_discussion')) else ''
+        # 所有还原图统一加遮罩标记（05 小番茄混淆同样默认遮罩，开关可关）
+        mask_marker = '_还原' if is_deobfuscated else ''
         pk = str(row['prompt_key'] or '')[:8] if 'prompt_key' in row.keys() and row['prompt_key'] else ''
         filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}") + ext
         dst = view / cat / size_class / filename
