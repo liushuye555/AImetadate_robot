@@ -201,9 +201,11 @@ int main(int argc, char *argv[]) {
         if (doc.isArray())
             relayPage->setGroups(doc.array().toVariantList());
     });
-    // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效
-    QObject::connect(configBridge, &ConfigBridge::saved, [serviceControl](bool ok, const QString &) {
-        if (ok) serviceControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
+    // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效；
+    // 使用独立控制通道，避免被其他按钮任务占用而静默丢弃
+    auto *restartControl = new ServiceControl(&window);
+    QObject::connect(configBridge, &ConfigBridge::saved, [restartControl](bool ok, const QString &) {
+        if (ok) restartControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
     });
     QObject::connect(collectionPage, &CollectionPage::collectionToggle, collectionPage, [collectionControl, collectionPage] {
         collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",

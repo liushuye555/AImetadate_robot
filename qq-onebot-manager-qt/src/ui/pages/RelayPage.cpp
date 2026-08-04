@@ -144,6 +144,7 @@ QWidget *RelayPage::buildGroupBox(const QString &title, QListWidget *&list, bool
         delete list->takeItem(list->row(list->currentItem()));
         markDirty();
     });
+    connect(list, &QListWidget::itemChanged, this, [this] { markDirty(); });
     return box;
 }
 
@@ -164,6 +165,8 @@ void RelayPage::openGroupDialog(QListWidget *list, const QString &editId) {
     if (editId.isEmpty()) {
         auto *item = new QListWidgetItem(id, list);
         item->setData(Qt::UserRole, id);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
         list->addItem(item);
     } else {
         for (int i = 0; i < list->count(); ++i) {
@@ -180,8 +183,11 @@ void RelayPage::openGroupDialog(QListWidget *list, const QString &editId) {
 QStringList RelayPage::groupIds(QListWidget *list) const {
     QStringList ids;
     if (!list) return ids;
-    for (int i = 0; i < list->count(); ++i)
-        ids << list->item(i)->data(Qt::UserRole).toString();
+    for (int i = 0; i < list->count(); ++i) {
+        QListWidgetItem *item = list->item(i);
+        if (item->checkState() == Qt::Checked)
+            ids << item->data(Qt::UserRole).toString();
+    }
     return ids;
 }
 
@@ -235,9 +241,7 @@ void RelayPage::setGroups(const QVariantList &groups) {
     if (dialog.exec() != QDialog::Accepted) return;
     int added = 0;
     for (int i = 0; i < list->count(); ++i) {
-        QListWidgetItem *item = list->item(i);
-        if (item->checkState() != Qt::Checked) continue;
-        const QString id = item->data(Qt::UserRole).toString();
+        const QString id = list->item(i)->data(Qt::UserRole).toString();
         if (id.isEmpty()) continue;
         bool exists = false;
         for (int j = 0; j < m_groups->count(); ++j)
@@ -245,6 +249,8 @@ void RelayPage::setGroups(const QVariantList &groups) {
         if (exists) continue;
         auto *newItem = new QListWidgetItem(id, m_groups);
         newItem->setData(Qt::UserRole, id);
+        newItem->setFlags(newItem->flags() | Qt::ItemIsUserCheckable);
+        newItem->setCheckState(list->item(i)->checkState());
         m_groups->addItem(newItem);
         added++;
     }
@@ -259,6 +265,8 @@ void RelayPage::fillGroupList(QListWidget *list, const QJsonArray &ids) {
         if (id.isEmpty()) continue;
         auto *item = new QListWidgetItem(id, list);
         item->setData(Qt::UserRole, id);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
         list->addItem(item);
     }
 }
