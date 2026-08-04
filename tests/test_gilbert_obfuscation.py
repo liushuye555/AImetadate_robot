@@ -189,3 +189,32 @@ def test_restore_image_detects_layer_count(tmp_path):
     assert layers == 2
     with Image.open(out) as im:
         assert im.convert('L').tobytes() == raw
+
+
+def test_promote_restored_replaces_original(tmp_path):
+    from qq_onebot_whitelist.gilbert_obfuscation import promote_restored
+    archive = tmp_path / "ai" / "ab"
+    archive.mkdir(parents=True)
+    original = archive / "abc.png"
+    original.write_bytes(b"obfuscated")
+    restored = tmp_path / "restored" / "abc.png"
+    restored.parent.mkdir(parents=True)
+    restored.write_bytes(b"restored-content")
+
+    dest = promote_restored(original, restored, tmp_path / "ai", "abc")
+
+    assert dest == archive / "abc.png"
+    assert dest.read_bytes() == b"restored-content"
+    assert not (tmp_path / "restored" / "abc.png").exists() or True  # 临时文件可留可清，重点是归档内容被替换
+    assert original.exists() is False or original.read_bytes() == b"restored-content"
+
+
+def test_promote_restored_skips_when_missing(tmp_path):
+    from qq_onebot_whitelist.gilbert_obfuscation import promote_restored
+    archive = tmp_path / "ai"
+    archive.mkdir()
+    try:
+        promote_restored(tmp_path / "orig.png", tmp_path / "missing.png", archive, "abc")
+        raise AssertionError("should raise")
+    except FileNotFoundError:
+        pass

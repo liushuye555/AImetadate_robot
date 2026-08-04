@@ -296,3 +296,30 @@ def restore_image(
     merged = _Image.merge('RGB', [_Image.frombytes('L', (width, height), c) for c in restored_channels])
     merged.save(out_path, format='PNG')
     return out_path, used_layers
+
+
+def promote_restored(
+    original_path: str | Path,
+    restored_path: str | Path,
+    archive_root: str | Path,
+    digest: str,
+) -> Path:
+    """把还原图提升为唯一存档：原子覆盖归档区原文件，随后删除混淆原图。
+
+    返回最终归档路径。还原图缺失或为空时抛 FileNotFoundError（调用方必须保留原图）。
+    """
+    import shutil
+
+    original = Path(original_path)
+    restored = Path(restored_path)
+    if not restored.exists() or restored.stat().st_size <= 0:
+        raise FileNotFoundError(f'restored image missing or empty: {restored}')
+    archive_root = Path(archive_root)
+    dest = archive_root / digest[:2] / f'{digest}{restored.suffix}'
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = restored.with_suffix(restored.suffix + '.tmp')
+    shutil.copy2(str(restored), str(tmp))
+    tmp.replace(dest)
+    if original.exists() and original.resolve() != dest.resolve():
+        original.unlink(missing_ok=True)
+    return dest
