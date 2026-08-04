@@ -104,6 +104,21 @@ def is_sticker_format(result: dict) -> bool:
     return False
 
 
+def is_junk_image(result: dict) -> bool:
+    """明显非 AI 内容：表情包 / 超宽超高条状（截图条、长条 banner）。"""
+    if result.get('has_ai_metadata'):
+        return False
+    if is_sticker_format(result):
+        return True
+    width = result.get('width')
+    height = result.get('height')
+    if width and height:
+        ratio = max(width, height) / max(1, min(width, height))
+        if ratio >= 2.6 or ratio <= 0.39:
+            return True
+    return False
+
+
 def process_image_url(
     url: str,
     *,

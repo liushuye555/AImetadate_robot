@@ -13,7 +13,7 @@ from .store import Store, canonical_message_key, reply_to_message_id
 from .commands import scope_for_event
 from .policy import extract_text
 from .resources import extract_file_segments
-from .images import extract_image_segments, is_probable_sticker_result, is_sticker_format, process_image_url
+from .images import extract_image_segments, is_junk_image, is_probable_sticker_result, is_sticker_format, process_image_url
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
@@ -416,9 +416,12 @@ def process_event_image(
                             print(f'restore failed: {type(exc).__name__}: {exc}')
         if result.get('retention_reason') == 'ai_metadata' and result.get('phash') is not None:
             store.save_image_hash(str(result.get('sha256') or ''), result['phash'])
-        # 表情包规则：群内大量重复（>= 阈值）且符合表情包格式
-        is_sticker = is_sticker_format(result) and (store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1) >= max(1, config.sticker_repeat_threshold)
-        if is_sticker and result.get('retention_reason') in {'positive_feedback', 'nearby_ai_context', 'candidate'}:
+        # 减少误存：表情包（重复 >= 阈值）或超宽/超高条状（截图条等）→ 不入库
+        occurrences = store.count_image_occurrences(scope, str(result.get('sha256') or '')) + 1
+        repeat_sticker = is_sticker_format(result) and occurrences >= max(1, config.sticker_repeat_threshold)
+        extreme_junk = is_junk_image(result) and not is_sticker_format(result)
+        if (repeat_sticker or extreme_junk) and result.get('retention_reason') in {
+                'positive_feedback', 'prompt_bound', 'params_discussion', 'candidate'}:
             kept = result.get('kept_path')
             if kept:
                 Path(kept).unlink(missing_ok=True)
