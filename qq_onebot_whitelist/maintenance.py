@@ -273,6 +273,30 @@ def reclassify_historical_03(project_dir: str | Path) -> int:
     return changed
 
 
+def backfill_prompt_keys(project_dir: str | Path) -> int:
+    """为存量 01 图按 text_excerpt 回填 prompt_key（sha1 前 16 位）。"""
+    import hashlib
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, text_excerpt FROM images "
+            "WHERE retention_reason='ai_metadata' AND prompt_key IS NULL AND text_excerpt IS NOT NULL"
+        ).fetchall()
+        for row_id, excerpt in rows:
+            text = str(excerpt or '')
+            if not text.strip():
+                continue
+            pk = hashlib.sha1(text.encode('utf-8', errors='replace')).hexdigest()[:16]
+            conn.execute('UPDATE images SET prompt_key=? WHERE id=?', (pk, row_id))
+            changed += 1
+        conn.commit()
+    return changed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
@@ -297,10 +321,11 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     obfuscation_reclassified = reclassify_possible_obfuscation(project_dir)
     obfuscation_restored = restore_confirmed_obfuscation(project_dir)
     historical_03 = reclassify_historical_03(project_dir)
+    prompt_keys_backfilled = backfill_prompt_keys(project_dir)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

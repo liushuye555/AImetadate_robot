@@ -119,3 +119,24 @@ def test_reclassify_historical_03(tmp_path):
     row = conn.execute("SELECT retention_reason, bound_prompt FROM images").fetchone()
     conn.close()
     assert row[0] == "prompt_bound"
+
+
+def test_backfill_prompt_keys(tmp_path):
+    import sqlite3, hashlib
+    from qq_onebot_whitelist.maintenance import backfill_prompt_keys
+    from qq_onebot_whitelist.store import Store
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    img = data / "a.png"
+    img.write_bytes(b"x")
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "a", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(img), "retention_reason": "ai_metadata",
+        "text_excerpt": "1girl, solo", "ai_source": "ComfyUI",
+    }, raw={})
+    changed = backfill_prompt_keys(tmp_path)
+    assert changed == 1
+    conn = sqlite3.connect(data / "bot.db")
+    pk = conn.execute("SELECT prompt_key FROM images").fetchone()[0]
+    conn.close()
+    assert pk == hashlib.sha1(b"1girl, solo").hexdigest()[:16]
