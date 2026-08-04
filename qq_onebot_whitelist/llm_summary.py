@@ -10,6 +10,7 @@ import urllib.request
 from typing import Any
 
 from .content_utils import redact_secrets
+from . import netutil
 
 def normalize_base_url(base_url: str) -> str:
     base_url = (base_url or '').rstrip('/')
@@ -192,7 +193,7 @@ def summarize_records_with_llm(
         method='POST',
     )
     try:
-        with urllib.request.urlopen(req, timeout=config.timeout_seconds) as resp:
+        with netutil.open_url(req, timeout=config.timeout_seconds) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         body = read_http_error_body(exc)

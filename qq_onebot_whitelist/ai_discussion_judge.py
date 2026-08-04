@@ -23,6 +23,7 @@ def _llm_judge_batch(texts: list[str]) -> tuple[list[bool], int, int]:
     import json
     import urllib.request
     from .llm_summary import LLMConfig
+    from . import netutil
 
     cfg = LLMConfig.ds_fallback_from_env_file()
     if cfg is None or not cfg.api_key:
@@ -48,7 +49,7 @@ def _llm_judge_batch(texts: list[str]) -> tuple[list[bool], int, int]:
         method='POST',
     )
     try:
-        with urllib.request.urlopen(req, timeout=cfg.timeout_seconds or 60) as resp:
+        with netutil.open_url(req, timeout=cfg.timeout_seconds or 60) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         content = (data.get('choices') or [{}])[0].get('message', {}).get('content', '')
         usage = data.get('usage') or {}

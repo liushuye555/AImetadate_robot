@@ -69,6 +69,7 @@ def _llm_config():
 def ai_match_message(text: str, prompt: str, llm_config) -> bool:
     """调用 LLM 判断消息是否符合收集条件，只输出是/否。"""
     import urllib.request
+    from . import netutil
     payload = {
         "model": llm_config.model,
         "messages": [
@@ -83,7 +84,7 @@ def ai_match_message(text: str, prompt: str, llm_config) -> bool:
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {llm_config.api_key}"},
         method='POST',
     )
-    with urllib.request.urlopen(req, timeout=llm_config.timeout_seconds) as resp:
+    with netutil.open_url(req, timeout=llm_config.timeout_seconds) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     answer = str(data['choices'][0]['message']['content'] or '').strip()
     return '是' in answer[:4] or answer.lower().startswith('yes')

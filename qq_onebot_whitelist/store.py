@@ -562,6 +562,25 @@ class Store:
                 ).fetchall()
         return [dict(seen_at=r[0], scope=r[1], user_id=r[2], url=r[3], message_text=r[4] or '', quoted_text=r[5] or '', kind=r[6] or 'link') for r in rows]
 
+    def recent_link_rows(self, limit: int = 10000) -> list[dict[str, Any]]:
+        """轻量链接行（站点画像用）：只取 url 与上下文。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                'SELECT url, message_text, quoted_text FROM links ORDER BY id DESC LIMIT ?',
+                (int(limit),),
+            ).fetchall()
+        return [dict(url=r[0], message_text=r[1] or '', quoted_text=r[2] or '') for r in rows]
+
+    def link_metadata_map(self, limit: int = 20000) -> dict[str, tuple[str, str]]:
+        """url_key → (title, description)，一次查询避免逐条连接。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                "SELECT url_key, title, description FROM link_metadata "
+                "WHERE title IS NOT NULL AND title != '' LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return {r[0]: (r[1] or '', r[2] or '') for r in rows}
+
     def get_link_metadata(self, url_key: str) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(

@@ -7,6 +7,8 @@ import socket
 from urllib.parse import urljoin, urlparse
 import urllib.request
 
+from . import netutil
+
 MAX_RESPONSE_BYTES = 256 * 1024
 FETCH_TIMEOUT_SECONDS = 3
 SUCCESS_CACHE_SECONDS = 7 * 24 * 60 * 60
@@ -90,8 +92,7 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 def fetch_link_metadata(url: str) -> dict[str, str]:
     validate_fetch_url(url)
     request = urllib.request.Request(url, headers={'User-Agent': 'qq-onebot-whitelist/1.0'}, method='GET')
-    opener = urllib.request.build_opener(_SafeRedirectHandler)
-    with opener.open(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+    with netutil.open_url(request, timeout=FETCH_TIMEOUT_SECONDS, handlers=(_SafeRedirectHandler,)) as response:
         content_type = str(response.headers.get('Content-Type') or '').lower()
         if content_type and 'html' not in content_type and 'xhtml' not in content_type:
             return {}

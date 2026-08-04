@@ -152,5 +152,47 @@ def link_category(url: str, context: str = '') -> str:
     return '其他'
 
 
+def site_key(host: str) -> str:
+    """站点记忆的域名键：小写并去掉 www. 前缀。"""
+    return str(host or '').lower().removeprefix('www.')
+
+
+def domain_profiles(store, *, limit: int = 10000) -> dict[str, dict[str, int]]:
+    """域名多功能画像：{域名: {功能分类: 次数}}，来自历史链接分类（含标题/描述上下文）。"""
+    from .daily_report import dedupe_url_key
+
+    metadata = store.link_metadata_map()
+    profiles: dict[str, dict[str, int]] = {}
+    for row in store.recent_link_rows(limit=limit):
+        url = str(row.get('url') or '')
+        host = site_key(urlparse(url).netloc)
+        if not host or is_local_link(url):
+            continue
+        context = str(row.get('message_text') or row.get('quoted_text') or '')
+        title, desc = metadata.get(dedupe_url_key(url), ('', ''))
+        category = link_category(url, f'{context} {title} {desc}'.strip())
+        profile = profiles.setdefault(host, {})
+        profile[category] = profile.get(category, 0) + 1
+    return profiles
+
+
+def deterministic_category(
+    profile: dict[str, int] | None,
+    *,
+    min_count: int = 2,
+    min_share: float = 0.67,
+) -> str | None:
+    """站点记忆：主功能占比足够高且不是"其他/娱乐视频" → 判定站点功能确定；否则混合站点。"""
+    if not profile:
+        return None
+    total = sum(profile.values())
+    if total < int(min_count):
+        return None
+    top, count = max(profile.items(), key=lambda kv: kv[1])
+    if top in {'其他', '娱乐视频'} or count / total < min_share:
+        return None
+    return top
+
+
 def extract_resource_links(text: str) -> list[dict[str, str]]:
     return [{'url': url, 'kind': classify_link(url, text)} for url in extract_links(text)]

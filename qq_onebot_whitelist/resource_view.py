@@ -8,7 +8,7 @@ from .content_utils import fallback_link_description, file_description, redact_s
 from .daily_report import canonical_url, dedupe_url_key, format_size, is_low_value_link, link_purpose, link_score
 from .scope_names import display_scope
 from .llm_link_judge import cost_log, llm_judge_link
-from .resources import is_local_link, link_category
+from .resources import deterministic_category, domain_profiles, is_local_link, link_category, site_key
 
 
 def _html_page(title: str, intro: str, sections: list[str]) -> str:
@@ -26,9 +26,10 @@ def _html_page(title: str, intro: str, sections: list[str]) -> str:
 
 
 def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> list[dict]:
-    """筛选高价值链接。mode=llm/both 时，规则判不出/判为低价值的链接交给 LLM 复核（按 URL 缓存）。"""
+    """筛选高价值链接。mode=llm/both 时，规则/站点记忆判不出的链接交给 LLM 复核（按 URL 缓存）。"""
     from .daily_report import canonical_url, link_purpose
     selected: dict[str, dict] = {}
+    profiles = domain_profiles(store, limit=limit)
     for item in store.recent_link_records(limit=limit):
         url = str(item.get('url') or '')
         context = str(item.get('message_text') or item.get('quoted_text') or '')
@@ -37,12 +38,14 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
         if is_local_link(url):
             continue  # 本地/内网链接他人无法访问，不作为资源展示
         key = dedupe_url_key(url)
+        det = deterministic_category(profiles.get(site_key(urlparse(url).netloc)))
         purpose = link_purpose(item) or ''
         low_value = is_low_value_link(url, context)
         metadata = store.get_link_metadata(key) or {}
         title = str(metadata.get('title') or '')
         desc = str(metadata.get('description') or '')
-        if mode != 'rule' and (low_value or not purpose):
+        # 站点记忆：确定站点不调 LLM；多功能站点规则判不出时先交给 LLM 挽救
+        if mode != 'rule' and (low_value or not purpose) and not det:
             cached = store.get_link_judge(key)
             if cached is None:
                 judge_purpose, tokens = llm_judge_link(url, context)
@@ -53,10 +56,18 @@ def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> l
             if cached:
                 purpose = cached
                 low_value = False
+        # 站点记忆：确定站点低价值挽救 + 用途兜底
+        if low_value and not (det and det not in ('娱乐视频', '其他')):
+            continue
+        if not purpose and det:
+            purpose = '值得一看'
         if low_value:
             continue
-        item = {**item, 'purpose': purpose, 'title': title}
+        item = {**item, 'purpose': purpose, 'title': title,
+                'profile': profiles.get(site_key(urlparse(url).netloc)) or {}, 'det': det or ''}
         item['category'] = link_category(url, f"{context} {title} {desc}".strip())
+        if item['category'] == '其他' and det:
+            item['category'] = det  # 站点记忆兜底，避免落入"其他"
         if purpose == '核心AI资源' and item['category'] == '其他':
             item['category'] = 'AI资源'  # 核心AI资源兜底，绝不落"其他"
         score = link_score(item)
@@ -126,12 +137,22 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
             if scope.startswith('group:') and scope_name == scope:
                 scope_name = '未知群'
             headline = f'{html.escape(title)}<div class="muted">{html.escape(host or url)}</div>' if title else html.escape(host or url)
+            det = str(item.get('det') or '')
+            profile = item.get('profile') or {}
+            memory_badge = '<span class="badge">站点记忆</span>' if det else ''
+            profile_line = ''
+            if profile:
+                funcs = ' · '.join(
+                    f'{html.escape(k)}×{v}' for k, v in sorted(profile.items(), key=lambda kv: -kv[1])[:5]
+                )
+                profile_line = f'<div class="meta">该站历史功能：{funcs}</div>'
             link_sections.append(
                 '<li><article class="resource-item" data-purpose="' + html.escape(category) + '">'
-                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{headline}</div>'
+                f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{memory_badge}{headline}</div>'
                 f'<p class="desc">{html.escape(description)}</p>'
                 f'<a class="url" href="{html.escape(url)}">{html.escape(url)}</a>'
                 f'<div class="meta">{html.escape(scope_name)} · {html.escape(seen)}</div>'
+                + profile_line +
                 '</article></li>'
             )
         link_sections.append('</ul></section>')

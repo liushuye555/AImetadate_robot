@@ -252,6 +252,12 @@ class FakeStore:
     def recent_link_records(self, **kw):
         return [{"url": "https://x", "scope": "g", "message_text": ""}]
 
+    def recent_link_rows(self, **kw):
+        return []
+
+    def link_metadata_map(self, **kw):
+        return {}
+
     def group_name_map(self):
         return {}
 
@@ -389,7 +395,8 @@ def test_ai_match_message_parses_answer(monkeypatch):
         def read(self):
             return json_mod.dumps({"choices": [{"message": {"content": "是"}}]}).encode("utf-8")
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: FakeResp())
+    from qq_onebot_whitelist import netutil
+    monkeypatch.setattr(netutil, "open_url", lambda req, timeout: FakeResp())
     llm = type("C", (), {"model": "m", "base_url": "https://x", "api_key": "k", "timeout_seconds": 10})()
     assert collection.ai_match_message("abc", "收集 abc", llm) is True
 

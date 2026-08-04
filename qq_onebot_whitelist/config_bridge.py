@@ -24,6 +24,8 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
     echo = data.get('echo') or {}
     collection = data.get('collection') or {}
     load_aware = data.get('load_aware') or {}
+    network = data.get('network') or {}
+    proxy = network.get('proxy') or {}
 
     def field(key: str, kind: str, default: Any, en: str, zh: str, **extra: Any) -> dict[str, Any]:
         item = {'key': key, 'kind': kind, 'default': default, 'label': {'en-US': en, 'zh-CN': zh}}
@@ -67,6 +69,9 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('load_aware.enabled', 'bool', load_aware.get('enabled', True), 'Load-aware scheduling', '负载感知调度', section='load'),
         field('load_aware.cpu_threshold', 'number', load_aware.get('cpu_threshold', 80), 'CPU threshold (%)', 'CPU 阈值（%）', section='load', min=10, max=100),
         field('load_aware.check_seconds', 'number', load_aware.get('check_seconds', 60), 'Recheck interval (s)', '重试间隔（秒）', section='load', min=10, max=3600),
+        field('network.proxy.enabled', 'bool', proxy.get('enabled', True), 'Use HTTP proxy', '启用代理', section='network'),
+        field('network.proxy.host', 'text', proxy.get('host', '127.0.0.1'), 'Proxy host', '代理主机', section='network'),
+        field('network.proxy.port', 'number', proxy.get('port', 7897), 'Proxy port', '代理端口', section='network', min=1, max=65535),
         field('reply.whitelist_groups', 'list', reply.get('whitelist_groups', []), 'Whitelisted groups', '群白名单', section='access'),
         field('reply.whitelist_users', 'list', reply.get('whitelist_users', []), 'Whitelisted users', '用户白名单', section='access'),
         field('reply.require_at_in_group', 'bool', reply.get('require_at_in_group', True), 'Require @ in groups', '群聊必须 @ 机器人', section='access'),
@@ -91,7 +96,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('startup_history.max_pages', 'number', startup.get('max_pages', 200), 'Maximum history pages', '最大历史页数', section='advanced', min=1),
         field('features.link_analysis', 'bool', features.get('link_analysis', True), 'Analyze and classify links', '分析和分类链接', section='features'),
         field('features.link_metadata', 'bool', features.get('link_metadata', daily.get('enrich_links', True)), 'Fetch link titles and metadata', '抓取链接标题和元数据', section='features'),
-        field('links.link_judge', 'select', str((data.get('links') or {}).get('link_judge') or 'rule'),
+        field('links.link_judge', 'select', str((data.get('links') or {}).get('link_judge') or 'both'),
               'Link purpose judge mode', '链接用途判定模式', section='features',
               options=['rule', 'llm', 'both']),
         field('features.image_processing', 'bool', features.get('image_processing', True), 'Process incoming images', '处理收到的图片', section='features'),

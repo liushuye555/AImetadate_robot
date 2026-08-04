@@ -40,7 +40,8 @@ def test_summarize_records_with_llm_posts_openai_compatible_payload(monkeypatch)
         captured['timeout'] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr('urllib.request.urlopen', fake_urlopen)
+    from qq_onebot_whitelist import netutil
+    monkeypatch.setattr(netutil, 'open_url', fake_urlopen)
     cfg = LLMConfig(base_url='https://api.example.com/v1', api_key='sk-test', model='ds-v4-flash')
     records = [{'text': '图在上面，prompt: 1girl, white hair，CFG 4', 'links': []}]
 

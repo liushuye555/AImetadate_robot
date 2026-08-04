@@ -10,6 +10,7 @@ import json
 import urllib.request
 
 from .llm_summary import LLMConfig
+from . import netutil
 
 cost_log = {"calls": 0, "total_tokens": 0}
 
@@ -49,7 +50,7 @@ def llm_judge_link(url: str, context: str) -> tuple[str, int]:
         method='POST',
     )
     try:
-        with urllib.request.urlopen(req, timeout=cfg.timeout_seconds or 60) as resp:
+        with netutil.open_url(req, timeout=cfg.timeout_seconds or 60) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         content = (data.get('choices') or [{}])[0].get('message', {}).get('content', '')
         usage = data.get('usage') or {}

@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from .scope_names import display_scope
 from .content_utils import fallback_link_description, file_description, redact_secrets, resource_context
 from .link_metadata import get_or_fetch_link_metadata
+from .resources import deterministic_category, domain_profiles, site_key
 from .i18n import text as tr
 
 
@@ -187,6 +188,7 @@ def build_daily_resource_report(
     files = store.recent_files(limit=limit, since=since)
     links = store.recent_link_records(limit=limit, since=since)
     group_names = store.group_name_map() if hasattr(store, 'group_name_map') else {}
+    profiles = domain_profiles(store) if include_links else {}
 
     deduped_files: dict[tuple[str, int | None, str], dict] = {}
     for item in files:
@@ -197,7 +199,10 @@ def build_daily_resource_report(
     for item in links:
         context = str(item.get('message_text') or item.get('quoted_text') or '')
         url = str(item.get('url') or '')
-        if not url or is_low_value_link(url, context):
+        if not url:
+            continue
+        det = deterministic_category(profiles.get(site_key(urlparse(url).netloc)))
+        if is_low_value_link(url, context) and not (det and det not in ('娱乐视频', '其他')):
             continue
         score = link_score(item) if analyze_links else 0
         key = dedupe_url_key(url)
@@ -205,7 +210,7 @@ def build_daily_resource_report(
         if old is None or score > int(old.get('_score') or 0):
             new_item = dict(item)
             new_item['_score'] = score
-            new_item['purpose'] = link_purpose(new_item) if analyze_links else ''
+            new_item['purpose'] = (link_purpose(new_item) if analyze_links else '') or ('值得一看' if det else '')
             new_item['canonical_url'] = canonical_url(url)
             deduped_links[key] = new_item
 

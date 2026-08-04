@@ -60,9 +60,12 @@ class AppConfig:
     load_aware_enabled: bool = True
     load_aware_cpu_threshold: int = 80
     load_aware_check_seconds: int = 60
+    network_proxy_enabled: bool = True
+    network_proxy_host: str = '127.0.0.1'
+    network_proxy_port: int = 7897
     feature_link_analysis: bool = True
     feature_link_metadata: bool = True
-    links_link_judge: str = 'rule'
+    links_link_judge: str = 'both'
     feature_image_processing: bool = True
     feature_ai_context: bool = False
     feature_daily_report: bool = True
@@ -96,6 +99,8 @@ def load_config(path: str | Path) -> AppConfig:
     echo = raw.get('echo') or {}
     collection = raw.get('collection') or {}
     load_aware = raw.get('load_aware') or {}
+    network = raw.get('network') or {}
+    proxy = network.get('proxy') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
@@ -155,9 +160,12 @@ def load_config(path: str | Path) -> AppConfig:
         load_aware_enabled=bool(load_aware.get('enabled', True)),
         load_aware_cpu_threshold=int(load_aware.get('cpu_threshold') or 80),
         load_aware_check_seconds=int(load_aware.get('check_seconds') or 60),
+        network_proxy_enabled=bool(proxy.get('enabled', True)),
+        network_proxy_host=str(proxy.get('host') or '127.0.0.1'),
+        network_proxy_port=int(proxy.get('port') or 7897),
         feature_link_analysis=bool(features.get('link_analysis', True)),
         feature_link_metadata=bool(features.get('link_metadata', daily_report.get('enrich_links', True))),
-        links_link_judge=str((raw.get('links') or {}).get('link_judge') or 'rule').lower(),
+        links_link_judge=str((raw.get('links') or {}).get('link_judge') or 'both').lower(),
         feature_image_processing=bool(features.get('image_processing', True)),
         feature_ai_context=bool(features.get('ai_context', ai_context.get('enabled', True))),
         feature_daily_report=bool(features.get('daily_report', daily_report.get('enabled', True))),

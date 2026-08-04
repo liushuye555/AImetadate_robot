@@ -527,54 +527,70 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
 async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
-    # 启动不再阻塞在完整同步上：交给后台负载感知循环（CPU 忙时自动推迟）
-    sync_task = asyncio.create_task(background_sync_loop(config))
-    image_task = asyncio.create_task(image_worker_loop(config, store))
-    async with websockets.connect(config.onebot_ws_url) as ws:
-        login_info = {}
+    from . import control
+    retry_delay = 5
+    while True:
+        # 启动不再阻塞在完整同步上：交给后台负载感知循环（CPU 忙时自动推迟）
+        sync_task = asyncio.create_task(background_sync_loop(config))
+        image_task = asyncio.create_task(image_worker_loop(config, store))
         try:
-            resp = await call_action(ws, "get_login_info", {})
-            data = resp.get("data") or {}
-            qq_number = str(data.get("user_id") or "")
-            login_info = {
-                "qqLoggedIn": bool(qq_number),
-                "qqNumber": qq_number,
-                "qqNickname": str(data.get("nickname") or ""),
-            }
-        except Exception as exc:
-            print(f"get_login_info failed at startup: {type(exc).__name__}: {exc}")
-        startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
-        report_task = asyncio.create_task(daily_report_loop(ws, config, store))
-        ai_task = None
-        if config.feature_ai_context:
-            ai_task = asyncio.create_task(ai_context_loop(config_path, store))
-        keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
-        status_task = asyncio.create_task(status_writer_loop(ws, config, login_info))
-        try:
-            async for raw in ws:
+            async with websockets.connect(config.onebot_ws_url) as ws:
+                login_info = {}
                 try:
-                    event = json.loads(raw)
-                except Exception:
-                    continue
-                try:
-                    await handle_event(ws, event, config, store, config_path)
+                    resp = await call_action(ws, "get_login_info", {})
+                    data = resp.get("data") or {}
+                    qq_number = str(data.get("user_id") or "")
+                    login_info = {
+                        "qqLoggedIn": bool(qq_number),
+                        "qqNumber": qq_number,
+                        "qqNickname": str(data.get("nickname") or ""),
+                    }
                 except Exception as exc:
-                    print(f'handle_event failed: {type(exc).__name__}: {exc}')
+                    print(f"get_login_info failed at startup: {type(exc).__name__}: {exc}")
+                startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
+                report_task = asyncio.create_task(daily_report_loop(ws, config, store))
+                ai_task = None
+                if config.feature_ai_context:
+                    ai_task = asyncio.create_task(ai_context_loop(config_path, store))
+                keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
+                status_task = asyncio.create_task(status_writer_loop(ws, config, login_info))
+                try:
+                    async for raw in ws:
+                        try:
+                            event = json.loads(raw)
+                        except Exception:
+                            continue
+                        try:
+                            await handle_event(ws, event, config, store, config_path)
+                        except Exception as exc:
+                            print(f'handle_event failed: {type(exc).__name__}: {exc}')
+                finally:
+                    for task in (startup_task, report_task, ai_task, keepalive_task, status_task):
+                        if task is not None:
+                            task.cancel()
+                    await asyncio.gather(
+                        *(t for t in (startup_task, report_task, ai_task, keepalive_task, status_task)
+                          if t is not None and not t.done()),
+                        return_exceptions=True,
+                    )
+        except Exception as exc:
+            # NapCat 未登录/未就绪时连接会被拒，重试等待而不是直接退出
+            print(f'OneBot connect failed: {type(exc).__name__}: {exc}')
         finally:
-            startup_task.cancel()
-            report_task.cancel()
-            if ai_task is not None:
-                ai_task.cancel()
-            keepalive_task.cancel()
-            status_task.cancel()
-            sync_task.cancel()
-            image_task.cancel()
-            from . import control
+            for task in (sync_task, image_task):
+                task.cancel()
+            await asyncio.gather(
+                *(t for t in (sync_task, image_task) if not t.done()),
+                return_exceptions=True,
+            )
             control.write_status(
                 {"napcat": control.port_open(control.NAPCAT_PORT),
-                 "onebot": False, "bot": True,
+                 "onebot": False, "bot": False,
                  "qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
             )
+        print(f'OneBot disconnected; reconnecting in {retry_delay}s')
+        await asyncio.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, 60)
 
 
 def main() -> int:
