@@ -135,7 +135,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     if not db.exists():
         return 0
     store = Store(db)
-    decisions: list[tuple[int, str, str | None]] = []
+    decisions: list[tuple[int, str, str | None, str | None]] = []
     context_reasons = ('positive_feedback', 'prompt_bound', 'params_discussion')
     with sqlite3.connect(db) as conn:
         confirmed_shas = {
@@ -145,8 +145,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
         }
         rows = conn.execute(
             "SELECT id, kept_path, format, sha256, retention_reason FROM images "
-            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode', "
-            "'positive_feedback', 'prompt_bound', 'params_discussion') "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
             "AND kept_path IS NOT NULL"
         ).fetchall()
     # 两阶段：先全部判定（独立连接，避免外层写事务内再开连接导致 SQLite 锁）
@@ -184,8 +183,11 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                     pass
         if xfq_result and xfq_result.get('obfuscated'):
             confirmed = xfq_result.get('confidence') == 'confirmed'
-            if reason in context_reasons:
-                new_reason = reason  # 保留上下文分类（报告里遮罩显示）
+            context_reason = None
+            if confirmed and reason in context_reasons:
+                # 交叉分类：05 为主分类，上下文分类单独记录（02/03 遮罩显示）
+                new_reason = 'xiaofanqie_obfuscated'
+                context_reason = reason
             else:
                 new_reason = 'xiaofanqie_obfuscated' if confirmed else 'xiaofanqie_compressed'
             restored_final = None
@@ -208,20 +210,23 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                         restored_final = str(path)
                 except Exception:
                     pass
-            decisions.append((row_id, new_reason, restored_final))
+            decisions.append((row_id, new_reason, restored_final, context_reason))
         elif reason in ('possible_obfuscation', 'possible_reencode'):
-            # 旧启发式临时分类退役：非混淆图退回普通无元数据
-            decisions.append((row_id, 'no_ai_metadata', None))
+            # 旧启发式临时分类退役：非混淆图退回 04 候选（TTL 自动清理）
+            decisions.append((row_id, 'candidate', None, None))
     if decisions:
         with sqlite3.connect(db) as conn:
-            for row_id, new_reason, restored_final in decisions:
+            for row_id, new_reason, restored_final, context_reason in decisions:
                 if restored_final:
                     conn.execute(
-                        "UPDATE images SET retention_reason=?, kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?",
-                        (new_reason, restored_final, restored_final, row_id),
+                        "UPDATE images SET retention_reason=?, kept_path=?, restored_path=?, deobfuscated=1, context_reason=? WHERE id=?",
+                        (new_reason, restored_final, restored_final, context_reason, row_id),
                     )
                 else:
-                    conn.execute("UPDATE images SET retention_reason=? WHERE id=?", (new_reason, row_id))
+                    conn.execute(
+                        "UPDATE images SET retention_reason=?, context_reason=? WHERE id=?",
+                        (new_reason, context_reason, row_id),
+                    )
             conn.commit()
     return len(decisions)
 

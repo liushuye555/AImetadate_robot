@@ -18,7 +18,6 @@ CATEGORY_NAMES = {
     'candidate': '04_候选待观察',
     'xiaofanqie_obfuscated': '05_小番茄混淆',
     'xiaofanqie_compressed': '05_小番茄混淆_压缩',
-    'no_ai_metadata': '99_普通无元数据',
 }
 
 def stale_view_counts(view: Path) -> dict[str, int]:
@@ -283,7 +282,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
     restored_col = 'restored_path, ' if 'restored_path' in image_cols else ''
     deobfuscated_col = 'deobfuscated, ' if 'deobfuscated' in image_cols else ''
-    binding_cols = 'bound_prompt, prompt_key, ' if 'bound_prompt' in image_cols else ''
+    binding_cols = 'bound_prompt, prompt_key, context_reason, ' if 'bound_prompt' in image_cols else ''
     rows = conn.execute(
         '''SELECT id, scope, user_id, seen_at, format, width, height, size, has_ai_metadata, ai_source, retention_reason, kept_path, ''' + restored_col + deobfuscated_col + binding_cols + '''text_excerpt, raw_json
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
@@ -326,6 +325,23 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'prompt': str(row['bound_prompt'] or ''),
                 'deobfuscated': is_deobfuscated,
             })
+        # 05 的确认混淆图按 context_reason 交叉显示到 02/03（遮罩标记）
+        context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
+        if context_reason and context_reason in CATEGORY_NAMES:
+            context_cat = CATEGORY_NAMES[context_reason]
+            ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
+            ctx_dst = view / context_cat / size_class / ctx_filename
+            make_link_or_copy(src, ctx_dst)
+            counts[context_cat] = counts.get(context_cat, 0) + 1
+            if context_reason == 'prompt_bound':
+                ctx_rel = os.path.relpath(ctx_dst, view / context_cat).replace(os.sep, '/')
+                prompt_bound_items.append({
+                    'id': str(row['id']),
+                    'image_rel': ctx_rel,
+                    'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
+                    'prompt': str(row['bound_prompt'] or ''),
+                    'deobfuscated': True,
+                })
     if prompt_bound_items:
         write_prompt_bound_gallery(view / CATEGORY_NAMES['prompt_bound'], prompt_bound_items)
     conn.close()
@@ -354,8 +370,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
-        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
-        '99_普通无元数据：正常图片但无 AI 元数据。\n',
+        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n',
         encoding='utf-8',
     )
     write_view_index(view, counts)

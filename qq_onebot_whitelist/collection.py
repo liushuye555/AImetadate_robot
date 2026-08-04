@@ -348,14 +348,13 @@ def process_event_image(
                 if xfq_result.get('obfuscated'):
                     confidence = xfq_result.get('confidence')
                     current = result.get('retention_reason')
-                    if current in {'prompt_bound', 'params_discussion', 'positive_feedback'}:
-                        # 命中上下文分类（02/03）：保留分类，报告里以还原图遮罩显示
-                        result['retention_reason'] = current
-                    else:
-                        result['retention_reason'] = (
-                            'xiaofanqie_obfuscated' if confidence == 'confirmed'
-                            else 'xiaofanqie_compressed'
-                        )
+                    if current in {'prompt_bound', 'params_discussion', 'positive_feedback'} and confidence == 'confirmed':
+                        # 交叉分类：05 为主分类，同时记录上下文分类（报告里 02/03 遮罩显示）
+                        result['context_reason'] = current
+                    result['retention_reason'] = (
+                        'xiaofanqie_obfuscated' if confidence == 'confirmed'
+                        else 'xiaofanqie_compressed'
+                    )
                     # 确认档自动解混淆：还原到临时文件后提升为唯一存档（删原图）
                     if confidence == 'confirmed' and result.get('kept_path'):
                         try:

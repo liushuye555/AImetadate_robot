@@ -196,6 +196,8 @@ class Store:
             conn.execute('ALTER TABLE images ADD COLUMN bound_prompt TEXT')
         if 'prompt_key' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN prompt_key TEXT')
+        if 'context_reason' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN context_reason TEXT')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_images_prompt_key ON images(prompt_key)')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
@@ -256,8 +258,8 @@ class Store:
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
                   has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path,
-                  deobfuscated, bound_prompt, prompt_key, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  deobfuscated, bound_prompt, prompt_key, context_reason, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -277,6 +279,7 @@ class Store:
                     1 if result.get('deobfuscated') else 0,
                     result.get('bound_prompt'),
                     result.get('prompt_key'),
+                    result.get('context_reason'),
                     json.dumps(raw, ensure_ascii=False),
                 ),
             )

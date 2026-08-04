@@ -25,11 +25,20 @@ RESOURCE_DOMAINS = {
     'github.com',
     'www.modelscope.cn',
     'modelscope.cn',
-    'www.bilibili.com',
-    'bilibili.com',
     'pan.baidu.com',
     'www.123pan.com',
     '123pan.com',
+}
+
+STRONG_AI_TOKENS = [
+    'lora', 'checkpoint', 'comfyui', 'workflow', '工作流', '提示词',
+    'seedance', 'minimax', 'sora', 'kling', '可灵', 'sampler', 'denoise',
+    '模型下载', '模型分享', '模型链接', 'civitai', 'huggingface',
+]
+
+MEDIA_HOSTS_WITH_AI_EXCEPTION = {
+    'www.bilibili.com', 'bilibili.com',
+    'www.youtube.com', 'youtube.com', 'youtu.be',
 }
 
 TRACKING_QUERY_KEYS = {
@@ -87,6 +96,9 @@ def is_low_value_link(url: str, context: str = '') -> bool:
     text = f'{url} {context}'.lower()
     if host in LOW_VALUE_DOMAINS:
         return True
+    if host in MEDIA_HOSTS_WITH_AI_EXCEPTION and not any(t in text for t in STRONG_AI_TOKENS):
+        # 视频/泛分享平台：没有强 AI 信号（模型名/工作流等）一律视为低价值
+        return True
     if '快手极速版' in context or '点击链接，打开' in context:
         return True
     if '番茄酱' in context and '快手' in context:
@@ -100,7 +112,7 @@ def link_purpose(item: dict) -> str:
     parsed = urlparse(url)
     host = parsed.netloc.lower()
     text = f'{url} {context}'.lower()
-    if host in RESOURCE_DOMAINS or any(token in text for token in ['lora', 'checkpoint', 'comfyui', 'workflow', '工作流', '模型', '提示词', 'civitai', 'huggingface', 'github', '网盘']):
+    if host in RESOURCE_DOMAINS or any(token in text for token in STRONG_AI_TOKENS):
         return '核心AI资源'
     if any(token in text for token in ['工具', '小网站', '网站', 'demo', '在线', '教程', '文档', '试试', '反推', '转换', '下载']):
         return '值得一看'
@@ -119,7 +131,7 @@ def link_score(item: dict) -> int:
     elif purpose == '值得一看':
         score += 1
     lowered = f'{url} {context}'.lower()
-    for token in ['lora', 'checkpoint', 'comfyui', 'workflow', '工作流', '模型', '提示词', 'civitai', 'huggingface', 'github', '网盘']:
+    for token in STRONG_AI_TOKENS:
         if token in lowered:
             score += 1
     return score

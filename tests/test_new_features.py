@@ -175,7 +175,7 @@ def test_reclassify_retires_possible_obfuscation(tmp_path):
     assert changed >= 1
     conn = sqlite3.connect(db_dir / "bot.db")
     # 旧启发式临时分类退役：非混淆图退回普通无元数据
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='obf1'").fetchone()[0] == "no_ai_metadata"
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='obf1'").fetchone()[0] == "candidate"
     conn.close()
 
 
@@ -215,7 +215,7 @@ def test_reclassify_retires_possible_reencode(tmp_path):
     changed = reclassify_possible_obfuscation(tmp_path, reencode_threshold=1.0)
     assert changed >= 1
     conn = sqlite3.connect(db_dir / "bot.db")
-    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='l1'").fetchone()[0] == "no_ai_metadata"
+    assert conn.execute("SELECT retention_reason FROM images WHERE sha256='l1'").fetchone()[0] == "candidate"
     conn.close()
 
 
