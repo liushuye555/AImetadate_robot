@@ -14,8 +14,9 @@ AI_KEYWORDS = [
 PROMPT_LIKE_RE = re.compile(r'\b(1girl|1boy|masterpiece|best quality|highres|solo|looking at viewer|white hair|blue eyes)\b', re.I)
 
 POSITIVE_WORDS = [
-    '好看', '太神', '神图', '牛逼', '牛的', '绝了', '质量很高', '出图质量', '求提示词', '求tag',
-    '求工作流', '怎么做的', '怎么出的', '细节很好', '构图很好', '很强', '厉害', '顶级',
+    '求提示词', '求tag', '求工作流', '求模型', '怎么做的', '怎么出的',
+    '神图', '太神', '绝了', '无敌', '卧槽', '质量很高', '出图质量',
+    '细节很好', '构图很好', '求配方', '求参数',
 ]
 
 GENERIC_ACKS = {'好的', '收到', 'ok', 'OK', '嗯', '对', '是', '哈哈', '哈哈哈'}

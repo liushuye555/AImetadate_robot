@@ -348,6 +348,23 @@ def process_event_image(
                     result['retention_reason'] = 'params_discussion'
             elif kind == 'params':
                 result['retention_reason'] = 'params_discussion'
+            else:
+                result['retention_reason'] = 'candidate'
+            # 绑定成功的图若在候选目录，晋升到 ai 归档（候选目录会被定期清理）
+            if kind in ('prompt', 'params') and result.get('kept_path') \
+                    and 'candidates' in str(result.get('kept_path') or ''):
+                try:
+                    from .image_lifecycle import CandidateImage, promote_candidate
+                    source = CandidateImage(
+                        scope=scope,
+                        sha256=str(result.get('sha256') or ''),
+                        path=Path(result['kept_path']),
+                        created_at=0,
+                    )
+                    dest = promote_candidate(source, config.data_dir / 'images' / 'ai')
+                    result['kept_path'] = str(dest)
+                except Exception as exc:
+                    print(f'promote bound image failed: {type(exc).__name__}: {exc}')
         # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
         # 结果缓存到 image_hashes，避免重分类时重复分析。
         if not result.get('has_ai_metadata') and result.get('kept_path'):
