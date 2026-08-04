@@ -221,7 +221,8 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
             "SELECT id, sha256, kept_path FROM images "
-            "WHERE retention_reason='xiaofanqie_obfuscated' AND deobfuscated=0 "
+            "WHERE retention_reason IN ('xiaofanqie_obfuscated', 'prompt_bound', 'params_discussion', 'positive_feedback') "
+            "AND deobfuscated=0 "
             "AND kept_path IS NOT NULL"
         ).fetchall()
         for row_id, sha256, kept_path in rows:
@@ -229,7 +230,9 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
             if not path.exists():
                 continue
             cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-            layers = cached[1] if cached else None
+            if not (cached and cached[2] and cached[3] == 'confirmed'):
+                continue
+            layers = cached[1]
             try:
                 tmp_dir = project_dir / 'data' / 'tmp'
                 tmp_dir.mkdir(parents=True, exist_ok=True)

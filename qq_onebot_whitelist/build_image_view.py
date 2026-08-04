@@ -21,9 +21,6 @@ CATEGORY_NAMES = {
     'no_ai_metadata': '99_普通无元数据',
 }
 
-NEWEST_PER_CATEGORY = 200
-
-
 def stale_view_counts(view: Path) -> dict[str, int]:
     """不重建视图，直接从现有视图目录统计各分类图片数（低开销，供负载忙时兜底）。"""
     image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
@@ -151,22 +148,36 @@ def make_link_or_copy(src: Path, dst: Path) -> str:
             return 'url'
 
 
+GALLERY_PAGE_SIZE = 200
+
+
+def _gallery_pager(page: int, total_pages: int, count: int) -> str:
+    prev = (f'<a href="page-{page - 1}.html">‹ 上一页</a>' if page > 1
+            else '<span class="muted">‹ 上一页</span>')
+    nxt = (f'<a href="page-{page + 1}.html">下一页 ›</a>' if page < total_pages
+           else '<span class="muted">下一页 ›</span>')
+    return f'<div class="pager">{prev} <span class="muted">第 {page}/{total_pages} 页 · 共 {count} 张</span> {nxt}</div>'
+
+
 def write_category_gallery(cat_dir: Path) -> None:
-    """为图片分类目录生成图库页（缩略图网格 + 灯箱预览）。"""
+    """为图片分类目录生成分页图库页（每页 200 张，缩略图网格 + 灯箱预览）。"""
     if (cat_dir / 'index.html').exists():
         return  # 已有专门页面（如 03_提示词绑定）则不覆盖
     image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
+    def image_id(p: Path) -> int:
+        try:
+            return int(p.stem.split('_')[0].lstrip('#'))
+        except (ValueError, IndexError):
+            return 0
     images = sorted(
         (p for p in cat_dir.rglob('*') if p.is_file() and p.suffix.lower() in image_exts),
-        key=lambda p: str(p).lower(),
+        key=lambda p: image_id(p),
+        reverse=True,
     )
     if not images:
         return
-    rels = [os.path.relpath(p, cat_dir).replace(os.sep, '/') for p in images]
-    cells = ''.join(
-        f'<a class="cell" href="{url_path(r)}"><img loading="lazy" src="{url_path(r)}" alt=""></a>'
-        for r in rels
-    )
+    pages = [images[i:i + GALLERY_PAGE_SIZE] for i in range(0, len(images), GALLERY_PAGE_SIZE)]
+    total_pages = len(pages)
     doc = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <title>{title}</title>
 <style>
@@ -175,6 +186,7 @@ header{{padding:18px 22px;position:sticky;top:0;background:#0d0f13ee;backdrop-fi
 h1{{font-size:18px;margin:0 0 4px}}
 .muted{{color:#8b96a8;font-size:13px}}
 #back{{color:#8ab4ff;text-decoration:none;font-size:13px;margin-right:14px}}
+.pager{{display:flex;align-items:center;gap:14px;padding:0 22px 8px;font-size:13px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;padding:16px 22px}}
 .cell{{display:block;border-radius:8px;overflow:hidden;background:#171b23}}
 .cell img{{width:100%;height:180px;object-fit:cover;display:block}}
@@ -182,11 +194,12 @@ h1{{font-size:18px;margin:0 0 4px}}
 #overlay img{{max-width:92vw;max-height:92vh;border-radius:6px}}
 </style></head><body>
 <header><a id="back" href="../index.html">← 返回</a><h1>{title}</h1><div class="muted">{count} 张</div></header>
+{pager}
 <div class="grid">{cells}</div>
 <div id="overlay"><img id="lightbox" src=""></div>
 <script>
 const cells=[...document.querySelectorAll('.cell')];const overlay=document.getElementById('overlay');const img=document.getElementById('lightbox');let cur=0;
-const masked=localStorage.getItem("maskRestored")!=="0";
+let masked=true;try{{masked=localStorage.getItem("maskRestored")!=="0";}}catch(e){{}}
 cells.forEach(a=>{{if(masked&&/还原/.test(a.getAttribute('href')||'')){{const im=a.querySelector('img');im.style.filter='blur(14px)';a.dataset.masked='1';}}}});
 const collapse=localStorage.getItem("collapseBatches")!=="0";
 if(collapse){{const groups={{}};cells.forEach(a=>{{const m=(a.getAttribute('href')||'').match(/_pk([0-9a-f]{{8}})/);if(m){{const k=m[1];(groups[k]=groups[k]||[]).push(a);}}}});Object.values(groups).forEach(g=>{{if(g.length>1){{g.forEach((a,i)=>{{if(i>0){{a.style.display='none';}}}});}}}});}}
@@ -194,37 +207,55 @@ function show(i){{cur=(i+cells.length)%cells.length;img.src=cells[cur].href;over
 cells.forEach((a,i)=>a.addEventListener('click',e=>{{e.preventDefault();if(a.dataset.masked==='1'){{const im=a.querySelector('img');im.style.filter='none';delete a.dataset.masked;return;}}show(i);}}));
 overlay.addEventListener('click',e=>{{if(e.target===overlay)overlay.style.display='none';}});
 document.addEventListener('keydown',e=>{{if(overlay.style.display==='flex'){{if(e.key==='Escape')overlay.style.display='none';if(e.key==='ArrowLeft')show(cur-1);if(e.key==='ArrowRight')show(cur+1);}}}});
-</script></body></html>'''.format(
-        title=html.escape(cat_dir.name),
-        count=len(images),
-        cells=cells,
-    )
-    (cat_dir / 'index.html').write_text(doc, encoding='utf-8')
+</script></body></html>'''
+    for page_idx, page_images in enumerate(pages, start=1):
+        rels = [os.path.relpath(p, cat_dir).replace(os.sep, '/') for p in page_images]
+        cells = ''.join(
+            f'<a class="cell" href="{url_path(r)}"><img loading="lazy" src="{url_path(r)}" alt=""></a>'
+            for r in rels
+        )
+        page_doc = doc.format(
+            title=html.escape(cat_dir.name),
+            count=len(images),
+            cells=cells,
+            pager=_gallery_pager(page_idx, total_pages, len(images)),
+        )
+        name = 'index.html' if page_idx == 1 else f'page-{page_idx}.html'
+        (cat_dir / name).write_text(page_doc, encoding='utf-8')
 
 
 def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]]) -> None:
-    """03 提示词绑定分类：图片 + 提示词成对卡片。"""
-    cards = []
-    for item in items:
-        url = url_path(str(item['image_rel']))
-        cards.append(
-            '<article class="card">'
-            f'<a href="{url}"><img src="{url}" loading="lazy"></a>'
-            f'<p class="muted">#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
-            f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
-            f'{html.escape(str(item.get("prompt") or ""))}</pre>'
-            '</article>'
-        )
-    doc = ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-           '<title>03 提示词绑定</title><style>'
-           'body{font-family:system-ui,sans-serif;margin:22px;background:#0d0f13;color:#eef1f6}'
-           '.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}'
-           '.card{background:#171a21;border:1px solid #2b313d;border-radius:12px;padding:10px}'
-           '.card img{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:8px}'
-           'a{color:#9fc2ff}.muted{color:#aab2c0}</style></head><body>'
-           f'<h1>03 提示词绑定</h1><div class="cards">{"".join(cards)}</div></body></html>')
+    """03 提示词绑定分类：图片 + 提示词成对卡片（分页，每页 200 张）。"""
+    pages = [items[i:i + GALLERY_PAGE_SIZE] for i in range(0, len(items), GALLERY_PAGE_SIZE)]
+    total_pages = len(pages)
+    template = ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                '<title>03 提示词绑定</title><style>'
+                'body{{font-family:system-ui,sans-serif;margin:22px;background:#0d0f13;color:#eef1f6}}'
+                '.pager{{display:flex;align-items:center;gap:14px;margin:6px 0 14px;font-size:13px}}'
+                '.cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}}'
+                '.card{{background:#171a21;border:1px solid #2b313d;border-radius:12px;padding:10px}}'
+                '.card img{{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:8px}}'
+                'a{{color:#9fc2ff}}.muted{{color:#aab2c0}}</style></head><body>'
+                '<h1>03 提示词绑定</h1>{pager}<div class="cards">{cards}</div></body></html>')
     cat_dir.mkdir(parents=True, exist_ok=True)
-    (cat_dir / 'index.html').write_text(doc, encoding='utf-8')
+    for page_idx, page_items in enumerate(pages, start=1):
+        cards = []
+        for item in page_items:
+            url = url_path(str(item['image_rel']))
+            cards.append(
+                '<article class="card">'
+                f'<a href="{url}"><img src="{url}" loading="lazy"></a>'
+                f'<p class="muted">#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
+                f'<pre style="white-space:pre-wrap;background:#151922;padding:10px;border-radius:8px">'
+                f'{html.escape(str(item.get("prompt") or ""))}</pre>'
+                '</article>'
+            )
+        page_doc = template.format(
+            pager=_gallery_pager(page_idx, total_pages, len(items)),
+            cards=''.join(cards),
+        )
+        name = 'index.html' if page_idx == 1 else f'page-{page_idx}.html'
+        (cat_dir / name).write_text(page_doc, encoding='utf-8')
 
 
 def build_view(project_dir: Path) -> dict[str, int]:
@@ -254,8 +285,6 @@ def build_view(project_dir: Path) -> dict[str, int]:
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
             cat = cat + '_' + safe_name(str(row['ai_source']))
-        if counts.get(cat, 0) >= NEWEST_PER_CATEGORY:
-            continue
         size_class = 'unknown_size'
         w, h = row['width'], row['height']
         if w and h:
