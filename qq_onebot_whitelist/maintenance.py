@@ -389,6 +389,40 @@ def reclassify_prompt_judge(project_dir: str | Path, *, mode: str = 'rule') -> i
     return changed
 
 
+def reclassify_params_judge(project_dir: str | Path, *, mode: str = 'rule') -> int:
+    """存量参数讨论 LLM 复核（mode=llm/both）：只问没答/闲聊 → 降级候选。"""
+    if mode == 'rule':
+        return 0
+    from .ai_discussion_judge import should_keep_params
+    from .store import Store
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    store = Store(db)
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, bound_prompt FROM images "
+            "WHERE retention_reason='params_discussion' AND bound_prompt IS NOT NULL"
+        ).fetchall()
+        downgrade_ids = []
+        for row_id, bound in rows:
+            text = str(bound or '')
+            if not text.strip():
+                continue
+            try:
+                if not should_keep_params(text, mode=mode):
+                    downgrade_ids.append(row_id)
+            except Exception:
+                continue
+        for row_id in downgrade_ids:
+            conn.execute("UPDATE images SET retention_reason='candidate', bound_prompt=NULL WHERE id=?", (row_id,))
+            changed += 1
+        conn.commit()
+    return changed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
@@ -415,10 +449,11 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     historical_03 = reclassify_historical_03(project_dir)
     prompt_keys_backfilled = backfill_prompt_keys(project_dir)
     prompt_judge_reclassified = reclassify_prompt_judge(project_dir, mode=config.prompt_judge_mode)
+    params_judge_reclassified = reclassify_params_judge(project_dir, mode=config.ai_discussion_judge)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

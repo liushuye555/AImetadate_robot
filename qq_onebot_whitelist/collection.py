@@ -357,6 +357,16 @@ def process_event_image(
                 result['bound_prompt'] = '\n'.join(
                     str(r.get('text') or '') for r in records[-6:] if str(r.get('text') or '').strip()
                 )[:2000]
+            # 参数讨论 LLM 复核（rule/llm/both）：只问没答/闲聊 → 降级候选
+            if result.get('retention_reason') == 'params_discussion' \
+                    and config.ai_discussion_judge != 'rule' and result.get('bound_prompt'):
+                from .ai_discussion_judge import should_keep_params
+                try:
+                    if not should_keep_params(result['bound_prompt'], mode=config.ai_discussion_judge):
+                        result['retention_reason'] = 'candidate'
+                        result['bound_prompt'] = None
+                except Exception:
+                    pass
             # 绑定成功的图若在候选目录，晋升到 ai 归档（候选目录会被定期清理）
             if kind in ('prompt', 'params') and result.get('kept_path') \
                     and 'candidates' in str(result.get('kept_path') or ''):

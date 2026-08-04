@@ -27,7 +27,12 @@ def _llm_judge_batch(texts: list[str]) -> tuple[list[bool], int, int]:
     cfg = LLMConfig.ds_fallback_from_env_file()
     if cfg is None or not cfg.api_key:
         return [True] * len(texts), 0, 0
-    system = '你是判断助手：判断给出的聊天文本是否在讨论 AI 图像生成（模型/提示词/出图/画质等）。只回答每段: 是/否'
+    system = (
+        '你是判断助手：判断给出的聊天文本是否在有效讨论某张 AI 图的生成参数'
+        '（模型/采样器/步骤/seed/lora 等，需有具体内容、回答或结论）。'
+        '只有提问没有回答、或只是闲聊提到 AI 词但无参数内容 → 否。'
+        '只回答每段: 是/否'
+    )
     payload = {
         'model': cfg.model,
         'messages': [
