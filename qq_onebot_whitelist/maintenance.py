@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -238,6 +239,40 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
     return changed
 
 
+def reclassify_historical_03(project_dir: str | Path) -> int:
+    """存量 03 重分类：按绑定规则重判 prompt_bound / params_discussion / candidate。"""
+    from .prompt_binding import bind_prompt_for_image
+    project_dir = Path(project_dir)
+    db = project_dir / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    store = Store(db)
+    changed = 0
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, scope, raw_json FROM images WHERE retention_reason='nearby_ai_context'"
+        ).fetchall()
+        for row_id, scope, raw_json in rows:
+            try:
+                message_db_id = int(json.loads(raw_json or '{}').get('message_db_id'))
+            except Exception:
+                message_db_id = None
+            records = store.recent_records(str(scope), limit=6) if scope else []
+            kind, prompt = bind_prompt_for_image(records)
+            if kind == 'prompt':
+                conn.execute("UPDATE images SET retention_reason='prompt_bound', bound_prompt=? WHERE id=?",
+                             (prompt[:2000], row_id))
+                changed += 1
+            elif kind == 'params':
+                conn.execute("UPDATE images SET retention_reason='params_discussion' WHERE id=?", (row_id,))
+                changed += 1
+            else:
+                conn.execute("UPDATE images SET retention_reason='candidate' WHERE id=?", (row_id,))
+                changed += 1
+        conn.commit()
+    return changed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
@@ -261,10 +296,11 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
     obfuscation_reclassified = reclassify_possible_obfuscation(project_dir)
     obfuscation_restored = restore_confirmed_obfuscation(project_dir)
+    historical_03 = reclassify_historical_03(project_dir)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
-    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:

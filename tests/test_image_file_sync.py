@@ -94,3 +94,28 @@ def test_restore_confirmed_obfuscation_skips_missing_restored(tmp_path, monkeypa
     changed = restore_confirmed_obfuscation(tmp_path)
     assert changed == 0
     assert original.exists()
+
+
+def test_reclassify_historical_03(tmp_path):
+    import sqlite3
+    from pathlib import Path
+    from qq_onebot_whitelist.maintenance import reclassify_historical_03
+    from qq_onebot_whitelist.store import Store
+    data = tmp_path / "data"
+    store = Store(data / "bot.db")
+    img = data / "images" / "ai" / "ab" / "abc.png"
+    img.parent.mkdir(parents=True)
+    img.write_bytes(b"x")
+    store.record_message(scope="group:1", user_id="u", text="/绘图 文生图 fox girl", raw={"message_id": "m1"})
+    msg_id = store.message_row_id("group:1", {"message_id": "m1"})
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "abc", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(img), "retention_reason": "nearby_ai_context",
+        "text_excerpt": "",
+    }, raw={"message_db_id": msg_id})
+    changed = reclassify_historical_03(tmp_path)
+    assert changed == 1
+    conn = sqlite3.connect(data / "bot.db")
+    row = conn.execute("SELECT retention_reason, bound_prompt FROM images").fetchone()
+    conn.close()
+    assert row[0] == "prompt_bound"
