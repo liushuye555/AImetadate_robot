@@ -360,9 +360,9 @@ def process_event_image(
             # 参数讨论 LLM 复核（rule/llm/both）：只问没答/闲聊 → 降级候选
             if result.get('retention_reason') == 'params_discussion' \
                     and config.ai_discussion_judge != 'rule' and result.get('bound_prompt'):
-                from .ai_discussion_judge import should_keep_params
+                from .ai_discussion_judge import judge_params_batch
                 try:
-                    if not should_keep_params(result['bound_prompt'], mode=config.ai_discussion_judge):
+                    if not judge_params_batch([result['bound_prompt']], store=store)[0]:
                         result['retention_reason'] = 'candidate'
                         result['bound_prompt'] = None
                 except Exception:

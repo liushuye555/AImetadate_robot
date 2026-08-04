@@ -393,7 +393,7 @@ def reclassify_params_judge(project_dir: str | Path, *, mode: str = 'rule') -> i
     """存量参数讨论 LLM 复核（mode=llm/both）：只问没答/闲聊 → 降级候选。"""
     if mode == 'rule':
         return 0
-    from .ai_discussion_judge import should_keep_params
+    from .ai_discussion_judge import judge_params_batch
     from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -406,16 +406,10 @@ def reclassify_params_judge(project_dir: str | Path, *, mode: str = 'rule') -> i
             "SELECT id, bound_prompt FROM images "
             "WHERE retention_reason='params_discussion' AND bound_prompt IS NOT NULL"
         ).fetchall()
-        downgrade_ids = []
-        for row_id, bound in rows:
-            text = str(bound or '')
-            if not text.strip():
-                continue
-            try:
-                if not should_keep_params(text, mode=mode):
-                    downgrade_ids.append(row_id)
-            except Exception:
-                continue
+    texts = [str(r[1] or '') for r in rows]
+    verdicts = judge_params_batch(texts, store=store)
+    downgrade_ids = [row_id for row_id, verdict in zip((r[0] for r in rows), verdicts) if not verdict]
+    with sqlite3.connect(db) as conn:
         for row_id in downgrade_ids:
             conn.execute("UPDATE images SET retention_reason='candidate', bound_prompt=NULL WHERE id=?", (row_id,))
             changed += 1

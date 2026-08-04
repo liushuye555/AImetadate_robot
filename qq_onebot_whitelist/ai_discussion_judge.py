@@ -76,3 +76,35 @@ def should_keep_params(text: str, mode: str = "rule") -> bool:
     cost_log["calls"] += 1
     cost_log["total_tokens"] += pt + ct
     return bool(verdicts[0])
+
+
+def judge_params_batch(texts: list[str], store=None, chunk: int = 10) -> list[bool]:
+    """批量判定参数讨论是否有效（带缓存，避免重复花费）。
+
+    未缓存的文本按 chunk 分批调 LLM，token 累计进 cost_log；判定结果按文本哈希缓存。
+    """
+    from .prompt_judge import prompt_hash
+
+    results: dict[int, bool] = {}
+    uncached: list[tuple[int, str]] = []
+    for idx, text in enumerate(texts):
+        text = (text or '').strip()
+        if not text:
+            results[idx] = False
+            continue
+        h = prompt_hash(text)
+        cached = store.get_discussion_judge(h) if store is not None else None
+        if cached is not None:
+            results[idx] = cached
+        else:
+            uncached.append((idx, text))
+    for start in range(0, len(uncached), chunk):
+        batch = uncached[start:start + chunk]
+        verdicts, pt, ct = _llm_judge_batch([t for _, t in batch])
+        cost_log["calls"] += 1
+        cost_log["total_tokens"] += pt + ct
+        for (idx, text), verdict in zip(batch, verdicts):
+            results[idx] = bool(verdict)
+            if store is not None:
+                store.set_discussion_judge(prompt_hash(text), bool(verdict))
+    return [results[i] for i in range(len(texts))]
