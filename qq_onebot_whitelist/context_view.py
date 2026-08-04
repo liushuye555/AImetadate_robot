@@ -54,7 +54,15 @@ def _scope_key(scope: str) -> str:
 def _document(title: str, body: str) -> str:
     return (
         '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-        f'<title>{html.escape(title)}</title><style>{PAGE_STYLE}</style><body>{body}</body></html>'
+        f'<title>{html.escape(title)}</title><style>{PAGE_STYLE}</style><body>{body}'
+        '<script>'
+        'try{const m=localStorage.getItem("maskRestored")!=="0";'
+        'if(m){document.querySelectorAll("a.img-link[data-masked]").forEach(a=>{'
+        'a.querySelector("img").style.filter="blur(14px)";'
+        'a.addEventListener("click",e=>{e.preventDefault();a.querySelector("img").style.filter="none";a.removeAttribute("data-masked");});});}'
+        '}catch(e){}'
+        '</script>'
+        '</body></html>'
     )
 
 
@@ -90,9 +98,10 @@ def _image_cards(items: list[dict[str, object]], prefix: str) -> str:
     for item in items:
         image_url = _url_path(prefix + str(item['image_rel']))
         context_text = str(item.get('context_text') or item.get('text_excerpt') or '无').strip() or '无'
+        masked = ' data-masked="1"' if item.get('deobfuscated') else ''
         cards.append(
             '<article class="card">'
-            f'<a href="{html.escape(image_url)}"><img src="{html.escape(image_url)}" loading="lazy"></a>'
+            f'<a class="img-link" href="{html.escape(image_url)}"{masked}><img src="{html.escape(image_url)}" loading="lazy"></a>'
             f'<p>#{html.escape(str(item["id"]))} · {html.escape(str(item["meta"]))}</p>'
             '<details><summary>查看图片附近原始上下文</summary>'
             f'<pre>{html.escape(redact_secrets(context_text))}</pre></details>'

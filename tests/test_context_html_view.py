@@ -83,3 +83,14 @@ def test_context_index_uses_directory_and_iframe_without_full_summaries(tmp_path
     assert '旧图片上下文' in history_text
     assert '%232_' in history_text
     assert '绝不能绑定给旧图片的最新摘要' not in history_text
+
+
+def test_context_image_cards_mask_deobfuscated():
+    from qq_onebot_whitelist.context_view import _image_cards
+    items = [
+        {"id": "1", "image_rel": "a.png", "meta": "m", "deobfuscated": True, "text_excerpt": ""},
+        {"id": "2", "image_rel": "b.png", "meta": "m", "deobfuscated": False, "text_excerpt": ""},
+    ]
+    html = _image_cards(items, "x/")
+    assert "masked" in html or "blur" in html
+    assert "x/a.png" in html and "x/b.png" in html

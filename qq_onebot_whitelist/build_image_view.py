@@ -263,6 +263,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'text_excerpt': str(row['text_excerpt'] or ''),
                 'context_text': nearby_context,
                 'message_db_id': message_db_id,
+                'deobfuscated': bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False,
             })
     build_context_view(conn, view / CATEGORY_NAMES['nearby_ai_context'], context_items, group_names)
     conn.close()
