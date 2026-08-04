@@ -310,8 +310,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 size_class = '方图'
         ext = src.suffix or '.img'
         is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
-        # 所有还原图统一加遮罩标记（05 小番茄混淆同样默认遮罩，开关可关）
-        mask_marker = '_还原' if is_deobfuscated else ''
+        # 遮罩标记只加在 02/03（05 小番茄混淆不遮罩）
+        mask_marker = '_还原' if (is_deobfuscated and reason in ('positive_feedback', 'prompt_bound', 'params_discussion')) else ''
         pk = str(row['prompt_key'] or '')[:8] if 'prompt_key' in row.keys() and row['prompt_key'] else ''
         filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}") + ext
         dst = view / cat / size_class / filename

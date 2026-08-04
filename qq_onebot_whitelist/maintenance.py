@@ -123,7 +123,8 @@ def remove_sticker_records(project_dir: str | Path) -> int:
 def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5) -> int:
     """重分类图片：小番茄混淆（Gilbert 曲线逆置换验证）。
 
-    - 算法级确认 → xiaofanqie_obfuscated（并自动还原）；
+    - 算法级确认且无上下文分类 → xiaofanqie_obfuscated（并自动还原）；
+    - 算法级确认但命中 02/03 上下文分类 → 保留原分类并标记 deobfuscated（报告遮罩）；
     - 重压/缩放弱信号 → xiaofanqie_compressed；
     - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
@@ -135,10 +136,17 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
         return 0
     store = Store(db)
     decisions: list[tuple[int, str, str | None]] = []
+    context_reasons = ('positive_feedback', 'prompt_bound', 'params_discussion')
     with sqlite3.connect(db) as conn:
+        confirmed_shas = {
+            str(r[0]) for r in conn.execute(
+                "SELECT DISTINCT sha256 FROM images WHERE deobfuscated=1 AND sha256 IS NOT NULL"
+            ).fetchall()
+        }
         rows = conn.execute(
             "SELECT id, kept_path, format, sha256, retention_reason FROM images "
-            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode', "
+            "'positive_feedback', 'prompt_bound', 'params_discussion') "
             "AND kept_path IS NOT NULL"
         ).fetchall()
     # 两阶段：先全部判定（独立连接，避免外层写事务内再开连接导致 SQLite 锁）
@@ -155,6 +163,9 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 'layers': cached[1],
                 'confidence': cached[3],
             }
+        elif sha256 and str(sha256) in confirmed_shas:
+            # 同 sha 已有确认标记（文件可能已是还原图，无法再分析）
+            xfq_result = {'obfuscated': True, 'ratio': 0.5, 'layers': None, 'confidence': 'confirmed'}
         else:
             try:
                 xfq_result = analyze_image(path)
@@ -172,23 +183,29 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                 except Exception:
                     pass
         if xfq_result and xfq_result.get('obfuscated'):
-            new_reason = (
-                'xiaofanqie_obfuscated' if xfq_result.get('confidence') == 'confirmed'
-                else 'xiaofanqie_compressed'
-            )
+            confirmed = xfq_result.get('confidence') == 'confirmed'
+            if reason in context_reasons:
+                new_reason = reason  # 保留上下文分类（报告里遮罩显示）
+            else:
+                new_reason = 'xiaofanqie_obfuscated' if confirmed else 'xiaofanqie_compressed'
             restored_final = None
             # 确认档：还原即替换（删混淆原图、归档指向还原图）
-            if new_reason == 'xiaofanqie_obfuscated' and xfq_result.get('layers') and sha256:
+            if confirmed and sha256:
                 try:
-                    tmp_dir = project_dir / 'data' / 'tmp'
-                    tmp_dir.mkdir(parents=True, exist_ok=True)
-                    restored, _ = restore_image(
-                        path,
-                        tmp_dir / f'{sha256}.restore.png',
-                        layers=xfq_result.get('layers'),
-                    )
-                    final = promote_restored(path, restored, archive_root, str(sha256))
-                    restored_final = str(final)
+                    current = analyze_image(path)
+                    if current and current.get('obfuscated'):
+                        tmp_dir = project_dir / 'data' / 'tmp'
+                        tmp_dir.mkdir(parents=True, exist_ok=True)
+                        restored, _ = restore_image(
+                            path,
+                            tmp_dir / f'{sha256}.restore.png',
+                            layers=xfq_result.get('layers'),
+                        )
+                        final = promote_restored(path, restored, archive_root, str(sha256))
+                        restored_final = str(final)
+                    else:
+                        # 文件已是还原内容：只标记，不重还原
+                        restored_final = str(path)
                 except Exception:
                     pass
             decisions.append((row_id, new_reason, restored_final))
