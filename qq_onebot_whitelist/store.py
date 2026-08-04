@@ -190,6 +190,8 @@ class Store:
         image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)').fetchall()}
         if 'restored_path' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN restored_path TEXT')
+        if 'deobfuscated' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN deobfuscated INTEGER DEFAULT 0')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
@@ -248,8 +250,8 @@ class Store:
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
-                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path, deobfuscated, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -266,6 +268,7 @@ class Store:
                     kept_path,
                     result.get('retention_reason'),
                     result.get('restored_path'),
+                    1 if result.get('deobfuscated') else 0,
                     json.dumps(raw, ensure_ascii=False),
                 ),
             )
@@ -276,6 +279,14 @@ class Store:
             conn.execute(
                 'UPDATE images SET restored_path = ? WHERE id = ?',
                 (restored_path, int(image_id)),
+            )
+            conn.commit()
+
+    def mark_image_deobfuscated(self, image_id: int, *, kept_path: str, restored_path: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'UPDATE images SET kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?',
+                (kept_path, restored_path, int(image_id)),
             )
             conn.commit()
 

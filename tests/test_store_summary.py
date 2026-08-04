@@ -32,3 +32,25 @@ def test_store_records_messages_links_and_summarizes(tmp_path):
     assert links == ['https://a.test']
     assert '最近 2 条消息摘要' in summary
     assert '白名单@回复' in summary
+
+
+def test_image_deobfuscated_flag_and_mark(tmp_path):
+    from qq_onebot_whitelist.store import Store
+    db = tmp_path / "data" / "bot.db"
+    store = Store(db)
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "d1", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(tmp_path / "a.png"), "retention_reason": "xiaofanqie_obfuscated",
+        "deobfuscated": True,
+    }, raw={})
+    import sqlite3
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT deobfuscated FROM images WHERE sha256='d1'").fetchone()
+    conn.close()
+    assert row[0] == 1
+
+    store.mark_image_deobfuscated(1, kept_path=str(tmp_path / "r.png"), restored_path=str(tmp_path / "r.png"))
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT kept_path, restored_path, deobfuscated FROM images WHERE id=1").fetchone()
+    conn.close()
+    assert row == (str(tmp_path / "r.png"), str(tmp_path / "r.png"), 1)
