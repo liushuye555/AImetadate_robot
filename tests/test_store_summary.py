@@ -54,3 +54,20 @@ def test_image_deobfuscated_flag_and_mark(tmp_path):
     row = conn.execute("SELECT kept_path, restored_path, deobfuscated FROM images WHERE id=1").fetchone()
     conn.close()
     assert row == (str(tmp_path / "r.png"), str(tmp_path / "r.png"), 1)
+
+
+def test_bound_prompt_and_prompt_key_columns(tmp_path):
+    import sqlite3
+    from qq_onebot_whitelist.store import Store
+    db = tmp_path / "data" / "bot.db"
+    store = Store(db)
+    store.record_image(scope="group:1", user_id="u", result={
+        "sha256": "p1", "format": "PNG", "size": 1, "width": 64, "height": 64,
+        "kept_path": str(tmp_path / "a.png"), "retention_reason": "prompt_bound",
+        "bound_prompt": "1girl, solo",
+        "prompt_key": "abc123",
+    }, raw={})
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT bound_prompt, prompt_key FROM images WHERE sha256='p1'").fetchone()
+    conn.close()
+    assert row == ("1girl, solo", "abc123")

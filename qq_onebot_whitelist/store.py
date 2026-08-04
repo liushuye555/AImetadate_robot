@@ -192,6 +192,11 @@ class Store:
             conn.execute('ALTER TABLE images ADD COLUMN restored_path TEXT')
         if 'deobfuscated' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN deobfuscated INTEGER DEFAULT 0')
+        if 'bound_prompt' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN bound_prompt TEXT')
+        if 'prompt_key' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN prompt_key TEXT')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_images_prompt_key ON images(prompt_key)')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
@@ -250,8 +255,9 @@ class Store:
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
-                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path, deobfuscated, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path,
+                  deobfuscated, bound_prompt, prompt_key, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -269,6 +275,8 @@ class Store:
                     result.get('retention_reason'),
                     result.get('restored_path'),
                     1 if result.get('deobfuscated') else 0,
+                    result.get('bound_prompt'),
+                    result.get('prompt_key'),
                     json.dumps(raw, ensure_ascii=False),
                 ),
             )
@@ -288,6 +296,11 @@ class Store:
                 'UPDATE images SET kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?',
                 (kept_path, restored_path, int(image_id)),
             )
+            conn.commit()
+
+    def backfill_prompt_key(self, image_id: int, prompt_key: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute('UPDATE images SET prompt_key=? WHERE id=?', (prompt_key, int(image_id)))
             conn.commit()
 
     def group_name_map(self) -> dict[str, str]:
