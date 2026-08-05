@@ -94,6 +94,7 @@ void ChatPage::setSchema(const QVariant &schemaVariant) {
         else if (key == "chat.admin_memory_turns") m_adminMemoryTurns->setValue(def.toInt(50));
         else if (key == "chat.cooldown_seconds") m_cooldown->setValue(def.toInt(5));
     }
+    m_schemaLoaded = true;
     m_save->setEnabled(false);
 }
 
@@ -103,5 +104,5 @@ void ChatPage::setSavedMessage(const QString &text) {
 }
 
 void ChatPage::markDirty() {
-    if (m_save) m_save->setEnabled(true);
+    if (m_schemaLoaded && m_save) m_save->setEnabled(true);
 }

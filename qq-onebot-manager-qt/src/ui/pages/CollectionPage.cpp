@@ -223,11 +223,13 @@ void CollectionPage::setSchema(const QVariant &schemaVariant) {
             rebuildCustomRuleList();
         }
     }
+    m_schemaLoaded = true;
     m_dirty = false;
     m_save->setEnabled(false);
 }
 
 void CollectionPage::markDirty() {
+    if (!m_schemaLoaded) return;
     m_dirty = true;
     m_save->setEnabled(true);
 }

@@ -42,9 +42,9 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
     form->addRow(Strings::zh("relayMode"), m_mode);
     layout->addWidget(modeForm);
 
-    layout->addWidget(buildGroupBox(Strings::zh("relayGroups"), m_groups, true));
-    layout->addWidget(buildGroupBox(Strings::zh("relayInputGroups"), m_inputGroups, false));
-    layout->addWidget(buildGroupBox(Strings::zh("relayOutputGroups"), m_outputGroups, false));
+    layout->addWidget(buildGroupBox(Strings::zh("relayGroups"), m_groups));
+    layout->addWidget(buildGroupBox(Strings::zh("relayInputGroups"), m_inputGroups));
+    layout->addWidget(buildGroupBox(Strings::zh("relayOutputGroups"), m_outputGroups));
     // 参与群勾选后自动同步到输入/输出群（可再单独调整）
     connect(m_groups, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
         const QString id = item->data(Qt::UserRole).toString();
@@ -142,69 +142,19 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
     });
 }
 
-QWidget *RelayPage::buildGroupBox(const QString &title, QListWidget *&list, bool withScan) {
+QWidget *RelayPage::buildGroupBox(const QString &title, QListWidget *&list) {
     auto *box = new QGroupBox(title, this);
     auto *v = new QVBoxLayout(box);
     list = new QListWidget(box);
     v->addWidget(list);
     auto *buttons = new QHBoxLayout;
-    auto *add = new QPushButton(Strings::zh("addGroup"), box);
-    auto *edit = new QPushButton(Strings::zh("editGroup"), box);
-    auto *remove = new QPushButton(Strings::zh("removeGroup"), box);
-    buttons->addWidget(add);
-    buttons->addWidget(edit);
-    buttons->addWidget(remove);
-    if (withScan) {
-        auto *scan = new QPushButton(Strings::zh("scanGroups"), box);
-        buttons->addWidget(scan);
-        connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
-    }
+    auto *scan = new QPushButton(Strings::zh("scanGroups"), box);
+    buttons->addWidget(scan);
     buttons->addStretch();
     v->addLayout(buttons);
-    connect(add, &QPushButton::clicked, this, [this, list] { openGroupDialog(list, QString()); });
-    connect(edit, &QPushButton::clicked, this, [this, list] {
-        if (list->currentItem())
-            openGroupDialog(list, list->currentItem()->data(Qt::UserRole).toString());
-    });
-    connect(remove, &QPushButton::clicked, this, [this, list] {
-        if (!list->currentItem()) return;
-        delete list->takeItem(list->row(list->currentItem()));
-        markDirty();
-    });
+    connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
     connect(list, &QListWidget::itemChanged, this, [this] { markDirty(); });
     return box;
-}
-
-void RelayPage::openGroupDialog(QListWidget *list, const QString &editId) {
-    QDialog dialog(this);
-    dialog.setWindowTitle(editId.isEmpty() ? Strings::zh("addGroup") : Strings::zh("editGroup"));
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *edit = new QLineEdit(editId, &dialog);
-    edit->setPlaceholderText(Strings::zh("groupIdPlaceholder"));
-    layout->addWidget(edit);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
-    const QString id = edit->text().trimmed();
-    if (id.isEmpty()) return;
-    if (editId.isEmpty()) {
-        auto *item = new QListWidgetItem(id, list);
-        item->setData(Qt::UserRole, id);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Checked);
-        list->addItem(item);
-    } else {
-        for (int i = 0; i < list->count(); ++i) {
-            if (list->item(i)->data(Qt::UserRole).toString() == editId) {
-                list->item(i)->setText(id);
-                list->item(i)->setData(Qt::UserRole, id);
-                break;
-            }
-        }
-    }
-    markDirty();
 }
 
 QStringList RelayPage::groupIds(QListWidget *list) const {
@@ -238,15 +188,16 @@ void RelayPage::setSchema(const QVariant &schemaVariant) {
             for (const QJsonValue &v : def.toArray())
                 lines << v.toString();
             m_keywords->setPlainText(lines.join('\n'));
-        } else if (key == "relay.text_regex") m_regex->setText(def.toString());
+    } else if (key == "relay.text_regex") m_regex->setText(def.toString());
         else if (key == "relay.ai_filter") m_aiFilter->setChecked(def.toBool());
         else if (key == "relay.dedupe_hours") m_dedupeHours->setValue(def.toInt(24));
     }
+    m_schemaLoaded = true;
     m_save->setEnabled(false);
 }
 
 void RelayPage::setGroups(const QVariantList &groups) {
-    if (!m_groups) return;
+    const QList<QListWidget *> lists = {m_groups, m_inputGroups, m_outputGroups};
     int added = 0;
     for (const QVariant &group : groups) {
         const QJsonObject obj = group.toJsonObject();
@@ -254,16 +205,19 @@ void RelayPage::setGroups(const QVariantList &groups) {
         const QString name = obj.value("name").toString();
         if (id.isEmpty()) continue;
         m_groupNames.insert(id, name);
-        bool exists = false;
-        for (int j = 0; j < m_groups->count(); ++j)
-            if (m_groups->item(j)->data(Qt::UserRole).toString() == id) { exists = true; break; }
-        if (exists) continue;
-        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", m_groups);
-        item->setData(Qt::UserRole, id);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Unchecked);
-        m_groups->addItem(item);
-        added++;
+        for (QListWidget *list : lists) {
+            if (!list) continue;
+            bool exists = false;
+            for (int j = 0; j < list->count(); ++j)
+                if (list->item(j)->data(Qt::UserRole).toString() == id) { exists = true; break; }
+            if (exists) continue;
+            auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
+            item->setData(Qt::UserRole, id);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(Qt::Unchecked);
+            list->addItem(item);
+            added++;
+        }
     }
     if (added > 0) markDirty();
 }
@@ -288,5 +242,5 @@ void RelayPage::setSavedMessage(const QString &text) {
 }
 
 void RelayPage::markDirty() {
-    if (m_save) m_save->setEnabled(true);
+    if (m_schemaLoaded && m_save) m_save->setEnabled(true);
 }

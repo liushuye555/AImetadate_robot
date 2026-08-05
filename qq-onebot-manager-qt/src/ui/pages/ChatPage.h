@@ -25,4 +25,5 @@ private:
     QSpinBox *m_cooldown = nullptr;
     QPushButton *m_save = nullptr;
     QLabel *m_message = nullptr;
+    bool m_schemaLoaded = false;
 };

@@ -24,11 +24,11 @@ signals:
     void saveRequested(QJsonObject patch);
     void groupsScanRequested();
 private:
-    QWidget *buildGroupBox(const QString &title, QListWidget *&list, bool withScan);
-    void openGroupDialog(QListWidget *list, const QString &editId);
+    QWidget *buildGroupBox(const QString &title, QListWidget *&list);
     QStringList groupIds(QListWidget *list) const;
     void fillGroupList(QListWidget *list, const QJsonArray &ids);
     void markDirty();
+    bool m_schemaLoaded = false;
     QCheckBox *m_enabled = nullptr;
     QComboBox *m_mode = nullptr;
     QListWidget *m_groups = nullptr;
