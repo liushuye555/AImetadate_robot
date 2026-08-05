@@ -163,7 +163,7 @@ async def send_reply(ws, event: dict[str, Any], text: str) -> None:
         action = 'send_private_msg'
         target = event.get('user_id')
         params = {'user_id': target, 'message': text}
-    print(f'reply_send action={action} target={target} chars={len(text)} text={text[:40]!r}')
+    print(f'reply_send action={action} target={target} chars={len(text)} text={ascii(text[:40])}')
     await ws.send(json.dumps({'action': action, 'params': params}, ensure_ascii=False))
 
 
@@ -611,6 +611,13 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
 
 def main() -> int:
     import argparse
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass  # 控制台非 UTF-8 时也绝不因打印 emoji 崩溃
     parser = argparse.ArgumentParser(description='OneBot whitelist @ bot')
     parser.add_argument('--config', default='config.yaml')
     args = parser.parse_args()
