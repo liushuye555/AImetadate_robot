@@ -222,10 +222,41 @@ def test_relay_event_forwards_and_dedups(tmp_path, monkeypatch):
     assert len(sends) == 1
     assert sends[0][1]['group_id'] == 222
     assert len(sends[0][1]['messages']) == 2
+    messages = [
+        {'user_id': 'u9', 'nickname': '小明', 'message': [{'type': 'text', 'data': {'text': '好东西'}}]},
+        {'user_id': 'u8', 'nickname': '小红', 'message': [{'type': 'image', 'data': {'url': 'x'}}]},
+    ]
+    assert store.forward_seen_in('group:222', relay.forward_content(messages)) is True  # 搬运后目标群记为已见
     # 再次转发同一内容 → 24h 去重
     actions.clear()
     asyncio.run(relay.relay_event(None, store, event, cfg))
     assert [a for a in actions if a[0] == 'send_forward_msg'] == []
+
+
+def test_forward_not_relayed_when_target_already_seen(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
+    store = Store(tmp_path / 'bot.db')
+    messages = [
+        {'user_id': 'u9', 'nickname': '小明', 'message': [{'type': 'text', 'data': {'text': '好东西'}}]},
+    ]
+    store.record_forward_seen('group:222', relay.forward_content(messages))  # 目标群已有人发过
+    actions = []
+
+    async def fake_call(ws, action, params):
+        actions.append(action)
+        if action == 'get_forward_msg':
+            return {'data': {'messages': messages}}
+        return {'status': 'ok'}
+
+    monkeypatch.setattr('qq_onebot_whitelist.onebot.call_action', fake_call)
+    cfg = make_config(relay_groups={'111', '222'})
+    event = {
+        'post_type': 'message', 'message_type': 'group', 'group_id': '111',
+        'user_id': 'u1', 'self_id': 'bot',
+        'message': [{'type': 'forward', 'data': {'id': 'f1'}}],
+    }
+    asyncio.run(relay.relay_event(None, store, event, cfg))
+    assert [a for a in actions if a.startswith('send_')] == []
 
 
 def test_relay_skips_own_messages(tmp_path):

@@ -168,6 +168,13 @@ CREATE TABLE IF NOT EXISTS relay_log (
   seen_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS relay_seen (
+  scope TEXT,
+  content_hash TEXT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (scope, content_hash)
+);
+
 CREATE TABLE IF NOT EXISTS chat_turns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scope TEXT,
@@ -404,6 +411,31 @@ class Store:
             )
             conn.execute("DELETE FROM relay_log WHERE seen_at < datetime('now', '-72 hours')")
             conn.commit()
+
+    def record_forward_seen(self, scope: str, content_hash: str) -> None:
+        """记录某群出现过该合并消息内容（用于"别人发过的不重复搬"）。"""
+        if not content_hash:
+            return
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'INSERT INTO relay_seen (scope, content_hash) VALUES (?, ?) '
+                'ON CONFLICT(scope, content_hash) DO UPDATE SET seen_at = CURRENT_TIMESTAMP',
+                (str(scope or ''), str(content_hash)),
+            )
+            conn.execute("DELETE FROM relay_seen WHERE seen_at < datetime('now', '-72 hours')")
+            conn.commit()
+
+    def forward_seen_in(self, scope: str, content_hash: str, *, hours: int = 24) -> bool:
+        """目标群在最近 hours 小时内是否已出现过该合并消息内容。"""
+        if not content_hash:
+            return False
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM relay_seen WHERE scope = ? AND content_hash = ? "
+                "AND seen_at >= datetime('now', ?)",
+                (str(scope or ''), str(content_hash), f'-{max(1, int(hours))} hours'),
+            ).fetchone()
+        return row is not None
 
     def record_chat_turn(self, scope: str, user_id: str, role: str, text: str) -> None:
         with closing(sqlite3.connect(self.path)) as conn:

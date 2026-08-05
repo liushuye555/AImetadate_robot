@@ -203,6 +203,7 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
         if not messages:
             return
         key = forward_content(messages)
+        store.record_forward_seen(scope_for_event(event), key)  # 源群出现该内容
         if store.relay_seen(key, hours=config.relay_dedupe_hours):
             return
         if config.relay_ai_filter and not _relay_judge_ok(forward_text(messages)):
@@ -210,14 +211,19 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
         nodes = build_forward_nodes(messages)
         sent = False
         for gid in targets:
+            target_scope = f'group:{gid}'
+            if store.forward_seen_in(target_scope, key, hours=config.relay_dedupe_hours):
+                continue  # 目标群已有人发过该内容，不重复搬
             try:
                 await call_action(action_ws, 'send_forward_msg', {'group_id': int(gid), 'messages': nodes})
                 sent = True
+                store.record_forward_seen(target_scope, key)
             except Exception as exc:
                 print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
                 try:
                     await call_action(action_ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
                     sent = True
+                    store.record_forward_seen(target_scope, key)
                 except Exception as exc2:
                     print(f'relay fallback failed to {gid}: {type(exc2).__name__}: {exc2}')
         if sent:
