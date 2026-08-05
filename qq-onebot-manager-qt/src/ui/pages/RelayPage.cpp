@@ -45,6 +45,33 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
     layout->addWidget(buildGroupBox(Strings::zh("relayGroups"), m_groups, true));
     layout->addWidget(buildGroupBox(Strings::zh("relayInputGroups"), m_inputGroups, false));
     layout->addWidget(buildGroupBox(Strings::zh("relayOutputGroups"), m_outputGroups, false));
+    // 参与群勾选后自动同步到输入/输出群（可再单独调整）
+    connect(m_groups, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+        const QString id = item->data(Qt::UserRole).toString();
+        if (id.isEmpty()) return;
+        const bool checked = item->checkState() == Qt::Checked;
+        for (QListWidget *list : {m_inputGroups, m_outputGroups}) {
+            if (!list) continue;
+            QListWidgetItem *found = nullptr;
+            for (int i = 0; i < list->count(); ++i) {
+                if (list->item(i)->data(Qt::UserRole).toString() == id) {
+                    found = list->item(i);
+                    break;
+                }
+            }
+            if (checked) {
+                if (!found) {
+                    found = new QListWidgetItem(id, list);
+                    found->setData(Qt::UserRole, id);
+                    found->setFlags(found->flags() | Qt::ItemIsUserCheckable);
+                    list->addItem(found);
+                }
+                found->setCheckState(Qt::Checked);
+            } else if (found) {
+                found->setCheckState(Qt::Unchecked);
+            }
+        }
+    });
 
     auto *hint = new QLabel(Strings::zh("relayGroupsHint"), container);
     hint->setObjectName("muted");

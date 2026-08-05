@@ -11,6 +11,37 @@ from .policy import extract_text
 from .resources import extract_file_segments
 from .summary import extract_links
 
+_GIF_MARK = '.gif'
+_STICKER_URL_MARKERS = ('/qqemoji/', '/face/', '/sticker/', '/emotion/')
+
+
+def is_sticker_like_image(image: dict) -> bool:
+    """轻量表情包判定（不下载图片）：GIF / 表情图床 URL。"""
+    url = str(image.get('url') or '').lower()
+    if _GIF_MARK in url:
+        return True
+    return any(marker in url for marker in _STICKER_URL_MARKERS)
+
+
+def _clean_segments(event: dict) -> list:
+    """去掉表情段/表情包图片段后的消息内容。"""
+    from .images import is_sticker_image_segment
+
+    cleaned = []
+    for seg in event.get('message') or []:
+        if not isinstance(seg, dict):
+            cleaned.append(seg)
+            continue
+        if seg.get('type') == 'face':
+            continue
+        if seg.get('type') == 'image':
+            data = seg.get('data') or {}
+            url = str(data.get('url') or data.get('file_url') or '')
+            if is_sticker_image_segment(data) or is_sticker_like_image({'url': url}):
+                continue
+        cleaned.append(seg)
+    return cleaned
+
 
 def relay_input_allows(scope: str, config) -> bool:
     """输入群范围：input_groups 优先；留空按 relay 黑白名单。"""
@@ -175,7 +206,7 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
     from .onebot import call_action
 
     text = extract_text(event)
-    images = extract_image_segments(event)
+    images = [img for img in extract_image_segments(event) if not is_sticker_like_image(img)]
     links = extract_links(text)
     files = [str(f.get('file_name') or '') for f in extract_file_segments(event)]
     if not ordinary_worth_relaying(text, images, links, files, config):
@@ -185,7 +216,7 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
         return
     if config.relay_ai_filter and not _relay_judge_ok(text):
         return
-    message = event.get('message') or (text or '[图片]')
+    message = _clean_segments(event) or (text or '[图片]')
     for gid in targets:
         try:
             await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': message})

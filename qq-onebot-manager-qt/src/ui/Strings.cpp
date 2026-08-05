@@ -113,7 +113,7 @@ QString Strings::zh(const QString &key) {
     if (key == "relayGroups") return "参与群（按模式生效）";
     if (key == "relayInputGroups") return "输入群（留空=按模式列表）";
     if (key == "relayOutputGroups") return "输出群（留空=按模式列表）";
-    if (key == "relayGroupsHint") return "扫描会把群加入列表，勾选即参与、不勾不保存。留空时按“参与群”+模式双向转发（自动排除来源群，避免回环）；填了输入/输出群则以列表为准。";
+    if (key == "relayGroupsHint") return "扫描会把群加入列表，勾选参与群会自动加入输入/输出群（可单独调整）。GIF/表情包图片不搬运。";
     if (key == "relayOrdinary") return "转发含链接/图片/文件的普通消息";
     if (key == "relayText") return "纯文本转发条件";
     if (key == "relayKeywords") return "关键词（任一命中即转）";
@@ -240,7 +240,7 @@ QString Strings::en(const QString &key) {
     if (key == "relayGroups") return "Participating groups";
     if (key == "relayInputGroups") return "Input groups (blank = mode list)";
     if (key == "relayOutputGroups") return "Output groups (blank = mode list)";
-    if (key == "relayGroupsHint") return "Scan fills lists; check to participate. Blank = bidirectional by mode list (source excluded). Filled lists take precedence.";
+    if (key == "relayGroupsHint") return "Scan fills lists; checking a participating group auto-adds it to input/output groups. GIFs and sticker images are never relayed.";
     if (key == "relayOrdinary") return "Relay messages with links/images/files";
     if (key == "relayText") return "Plain text relay rules";
     if (key == "relayKeywords") return "Keywords (any hit relays)";

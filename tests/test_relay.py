@@ -52,6 +52,50 @@ def test_ordinary_worth_relaying():
     assert relay.ordinary_worth_relaying('分享 lora', [], [], [], make_config(relay_text_regex='lora')) is True
 
 
+def test_sticker_like_image_detection():
+    assert relay.is_sticker_like_image({'url': 'https://gchat.qpic.cn/sticker/abc.gif'}) is True
+    assert relay.is_sticker_like_image({'url': 'https://p.qpic.cn/qqemoji/9.png'}) is True
+    assert relay.is_sticker_like_image({'url': 'https://gchat.qpic.cn/abc.png'}) is False
+
+
+def test_relay_skips_gif_sticker_only_message(tmp_path, monkeypatch):
+    store = Store(tmp_path / 'bot.db')
+    actions = []
+
+    async def fake_call(ws, action, params):
+        actions.append(action)
+        return {'status': 'ok'}
+
+    monkeypatch.setattr('qq_onebot_whitelist.onebot.call_action', fake_call)
+    cfg = make_config(relay_groups={'111', '222'})
+    event = {
+        'post_type': 'message', 'message_type': 'group', 'group_id': '111',
+        'user_id': 'u1', 'self_id': 'bot',
+        'message': [{'type': 'image', 'data': {'url': 'https://gchat.qpic.cn/sticker/abc.gif'}}],
+    }
+    asyncio.run(relay.relay_event(None, store, event, cfg))
+    assert [a for a in actions if a == 'send_group_msg'] == []
+
+
+def test_relay_sends_normal_image_message(tmp_path, monkeypatch):
+    store = Store(tmp_path / 'bot.db')
+    actions = []
+
+    async def fake_call(ws, action, params):
+        actions.append(action)
+        return {'status': 'ok'}
+
+    monkeypatch.setattr('qq_onebot_whitelist.onebot.call_action', fake_call)
+    cfg = make_config(relay_groups={'111', '222'})
+    event = {
+        'post_type': 'message', 'message_type': 'group', 'group_id': '111',
+        'user_id': 'u1', 'self_id': 'bot',
+        'message': [{'type': 'image', 'data': {'url': 'https://gchat.qpic.cn/abc.png'}}],
+    }
+    asyncio.run(relay.relay_event(None, store, event, cfg))
+    assert [a for a in actions if a == 'send_group_msg'] == ['send_group_msg']
+
+
 def test_relay_dedup_24h(tmp_path):
     store = Store(tmp_path / 'bot.db')
     assert store.relay_seen('abc') is False
