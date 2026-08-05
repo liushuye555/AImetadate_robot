@@ -93,6 +93,10 @@ def maybe_chat_reply(store, event: dict, config) -> str | None:
     text = extract_text(event)
     if not user_id or not text.strip():
         return None
+    if event.get('message_type') == 'group':
+        group_id = str(event.get('group_id') or '')
+        if config.chat_groups and group_id not in config.chat_groups:
+            return None  # 限定了聊天群，且当前群不在列表内
     if not _cooldown_ok(config, scope, user_id):
         return None
     memory = _memory_turns(store, scope, user_id, config)

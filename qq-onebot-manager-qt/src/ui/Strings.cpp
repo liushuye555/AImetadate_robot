@@ -122,6 +122,8 @@ QString Strings::zh(const QString &key) {
     if (key == "relayDedupeHours") return "去重时长（小时）";
     if (key == "groupIdPlaceholder") return "QQ 群号";
     if (key == "chatEnabled") return "启用聊天（人设回复）";
+    if (key == "chatGroups") return "聊天群列表（留空=全部群）";
+    if (key == "chatGroupsHint") return "扫描后勾选允许聊天的群；留空则在所有群都可聊（群聊仍需 @ 机器人）。";
     if (key == "chatPersona") return "人设（系统提示词）";
     if (key == "chatPersonaPlaceholder") return "如：你是一只活泼的猫娘，说话简短可爱";
     if (key == "chatMemoryTurns") return "普通用户记忆条数";
@@ -249,6 +251,8 @@ QString Strings::en(const QString &key) {
     if (key == "relayDedupeHours") return "Dedupe window (hours)";
     if (key == "groupIdPlaceholder") return "QQ group id";
     if (key == "chatEnabled") return "Enable persona chat";
+    if (key == "chatGroups") return "Chat groups (blank = all)";
+    if (key == "chatGroupsHint") return "Check groups where chat is allowed; blank = all groups (group chat still requires @bot).";
     if (key == "chatPersona") return "Persona (system prompt)";
     if (key == "chatPersonaPlaceholder") return "e.g. you are a lively catgirl, reply briefly";
     if (key == "chatMemoryTurns") return "Memory turns (normal users)";

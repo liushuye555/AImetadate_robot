@@ -86,6 +86,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('relay.dedupe_hours', 'number', relay.get('dedupe_hours', 24), 'Relay dedupe hours', '转发去重时长（小时）', section='relay', min=1, max=168),
         field('chat.enabled', 'bool', chat.get('enabled', False), 'Chat with persona', '聊天开关', section='chat'),
         field('chat.persona', 'text', chat.get('persona', ''), 'Persona (system prompt)', '人设（系统提示词）', section='chat'),
+        field('chat.groups', 'list', chat.get('groups', []), 'Chat groups (blank = all)', '聊天群列表（留空=全部群）', section='chat'),
         field('chat.memory_turns', 'number', chat.get('memory_turns', 10), 'Memory turns (normal users)', '普通用户记忆条数', section='chat', min=1, max=100),
         field('chat.admin_memory_turns', 'number', chat.get('admin_memory_turns', 50), 'Memory turns (admins)', '管理员记忆条数', section='chat', min=1, max=500),
         field('chat.cooldown_seconds', 'number', chat.get('cooldown_seconds', 5), 'Reply cooldown (s)', '回复冷却（秒）', section='chat', min=1, max=3600),

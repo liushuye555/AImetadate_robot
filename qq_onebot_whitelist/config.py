@@ -75,6 +75,7 @@ class AppConfig:
     relay_dedupe_hours: int = 24
     chat_enabled: bool = False
     chat_persona: str = ''
+    chat_groups: set[str] = field(default_factory=set)
     chat_memory_turns: int = 10
     chat_admin_memory_turns: int = 50
     chat_cooldown_seconds: int = 5
@@ -192,6 +193,7 @@ def load_config(path: str | Path) -> AppConfig:
         relay_dedupe_hours=int(relay.get('dedupe_hours') or 24),
         chat_enabled=bool(chat.get('enabled', False)),
         chat_persona=str(chat.get('persona') or ''),
+        chat_groups={str(x) for x in (chat.get('groups') or [])},
         chat_memory_turns=int(chat.get('memory_turns') or 10),
         chat_admin_memory_turns=int(chat.get('admin_memory_turns') or 50),
         chat_cooldown_seconds=int(chat.get('cooldown_seconds') or 5),

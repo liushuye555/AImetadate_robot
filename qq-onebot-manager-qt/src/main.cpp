@@ -201,6 +201,15 @@ int main(int argc, char *argv[]) {
         if (doc.isArray())
             relayPage->setGroups(doc.array().toVariantList());
     });
+    QObject::connect(chatPage, &ChatPage::groupsScanRequested, scanControl, [scanControl] {
+        scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
+    });
+    QObject::connect(scanControl, &ServiceControl::finished, chatPage, [chatPage](bool ok, QString out) {
+        if (!ok) return;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isArray())
+            chatPage->setGroups(doc.array().toVariantList());
+    });
     // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效；
     // 使用独立控制通道，避免被其他按钮任务占用而静默丢弃
     auto *restartControl = new ServiceControl(&window);

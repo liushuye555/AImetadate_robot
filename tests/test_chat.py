@@ -74,6 +74,33 @@ def test_chat_disabled_or_llm_failure_returns_none(tmp_path, monkeypatch):
     assert chat.maybe_chat_reply(store, event, make_config()) is None
 
 
+def test_chat_group_gating(tmp_path, monkeypatch):
+    store = Store(tmp_path / 'bot.db')
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return '{"choices": [{"message": {"content": "喵"}}]}'.encode('utf-8')
+
+    monkeypatch.setattr(chat.netutil, 'open_url', lambda req, timeout=None: FakeResp())
+    event = {
+        'post_type': 'message', 'message_type': 'group', 'group_id': '111', 'user_id': 'u1',
+        'message': [{'type': 'text', 'data': {'text': '你好'}}],
+    }
+    # 限定群：不在列表内不回
+    assert chat.maybe_chat_reply(store, event, make_config(chat_groups={'222'})) is None
+    # 在列表内回
+    assert chat.maybe_chat_reply(store, event, make_config(chat_groups={'111'})) == '喵'
+    # 留空 = 全部群
+    chat._cooldown.clear()
+    assert chat.maybe_chat_reply(store, event, make_config(chat_groups=set())) == '喵'
+
+
 def test_build_reply_returns_empty_for_unmatched_private_text():
     """私聊普通文本不再被“已收到”兜底拦截，聊天才有机会回复。"""
     from qq_onebot_whitelist.commands import build_reply
