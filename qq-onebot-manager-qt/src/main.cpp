@@ -213,8 +213,10 @@ int main(int argc, char *argv[]) {
     // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效；
     // 使用独立控制通道，避免被其他按钮任务占用而静默丢弃
     auto *restartControl = new ServiceControl(&window);
-    QObject::connect(configBridge, &ConfigBridge::saved, [restartControl](bool ok, const QString &) {
-        if (ok) restartControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
+    QObject::connect(configBridge, &ConfigBridge::saved, [configBridge, restartControl](bool ok, const QString &) {
+        if (!ok) return;
+        configBridge->fetch();  // 保存后刷新所有页面，立即反映新配置
+        restartControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
     });
     QObject::connect(collectionPage, &CollectionPage::collectionToggle, collectionPage, [collectionControl, collectionPage] {
         collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",

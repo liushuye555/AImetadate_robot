@@ -13,6 +13,7 @@ from .summary import extract_links
 
 _GIF_MARK = '.gif'
 _STICKER_URL_MARKERS = ('/qqemoji/', '/face/', '/sticker/', '/emotion/')
+_img_streak: dict[tuple[str, str], int] = {}
 
 
 def is_sticker_like_image(image: dict) -> bool:
@@ -41,6 +42,16 @@ def _clean_segments(event: dict) -> list:
                 continue
         cleaned.append(seg)
     return cleaned
+
+
+def _update_image_streak(scope: str, user_id: str, image_only: bool) -> int:
+    """同一发送者的连续纯图片消息计数：非纯图片会清零。"""
+    key = (scope, user_id)
+    if image_only:
+        _img_streak[key] = _img_streak.get(key, 0) + 1
+    else:
+        _img_streak[key] = 0
+    return _img_streak[key]
 
 
 def relay_input_allows(scope: str, config) -> bool:
@@ -209,6 +220,13 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
     images = [img for img in extract_image_segments(event) if not is_sticker_like_image(img)]
     links = extract_links(text)
     files = [str(f.get('file_name') or '') for f in extract_file_segments(event)]
+    image_only = bool(images) and not text.strip() and not links and not files
+    streak = _update_image_streak(
+        scope_for_event(event), str(event.get('user_id') or ''), image_only,
+    )
+    # 纯单图不搬运（截图/随手图）；同一条消息多图或同一人多张连续图片才搬
+    if image_only and len(images) < 2 and streak < 2:
+        return
     if not ordinary_worth_relaying(text, images, links, files, config):
         return
     key = ordinary_content(event, text, images, links, files)
