@@ -2,6 +2,8 @@
 #include <QObject>
 #include <QProcess>
 #include <QJsonObject>
+#include <QQueue>
+#include <QStringList>
 #include <QVariant>
 
 // 把 {"a.b.c": v} 展平键转成 {"a": {"b": {"c": v}}} 嵌套结构（config_bridge patch 需要嵌套 JSON）。
@@ -19,7 +21,13 @@ signals:
     void saved(bool ok, QString message);
 private:
     enum class Mode { Fetch, Save, EnvSave };
-    void runArgs(const QStringList &args);
+    struct Pending {
+        Mode mode;
+        QStringList args;
+    };
+    void runArgs(const QStringList &args, Mode mode);
+    void startNext();
     QProcess m_proc;
     Mode m_mode = Mode::Fetch;
+    QQueue<Pending> m_queue;
 };
