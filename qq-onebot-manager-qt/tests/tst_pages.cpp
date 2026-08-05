@@ -52,17 +52,34 @@ void TestPages::relayPageReflectsRealSchema() {
     const auto boxes = page.findChildren<QCheckBox *>();
     dbg("relay: checkboxes=" + QString::number(boxes.size()));
     QVERIFY(boxes.size() >= 3);  // enabled / ordinary / image_streak
-    QVERIFY(boxes.at(0)->isChecked());   // 启用群搬运
-    QVERIFY(boxes.at(1)->isChecked());   // 普通消息搬运
-    QVERIFY(boxes.at(2)->isChecked());   // 连续多图
-    QVERIFY(!boxes.at(3)->isChecked());  // AI 过滤默认关
+    const QJsonArray arr = QJsonDocument::fromVariant(schema).array();
+    bool expEnabled = false, expOrdinary = false, expStreak = false, expAi = false;
+    int expGroups = 0, expInput = 0, expOutput = 0;
+    for (const QJsonValue &v : arr) {
+        const QJsonObject o = v.toObject();
+        const QString key = o.value("key").toString();
+        if (key == "relay.enabled") expEnabled = o.value("default").toBool();
+        else if (key == "relay.ordinary") expOrdinary = o.value("default").toBool();
+        else if (key == "relay.image_streak") expStreak = o.value("default").toBool();
+        else if (key == "relay.ai_filter") expAi = o.value("default").toBool();
+        else if (key == "relay.groups") expGroups = o.value("default").toArray().size();
+        else if (key == "relay.input_groups") expInput = o.value("default").toArray().size();
+        else if (key == "relay.output_groups") expOutput = o.value("default").toArray().size();
+    }
+    QVERIFY(boxes.at(0)->isChecked() == expEnabled);
+    QVERIFY(boxes.at(1)->isChecked() == expOrdinary);
+    QVERIFY(boxes.at(2)->isChecked() == expStreak);
+    QVERIFY(boxes.at(3)->isChecked() == expAi);
     const auto lists = page.findChildren<QListWidget *>();
     dbg("relay: lists=" + QString::number(lists.size()));
     QVERIFY(lists.size() >= 3);  // 参与/输入/输出
-    for (QListWidget *list : lists) {
+    const int expList[] = {expGroups, expInput, expOutput};
+    for (int li = 0; li < 3 && li < lists.size(); ++li) {
+        QListWidget *list = lists.at(li);
         int checked = 0;
         for (int i = 0; i < list->count(); ++i)
             if (list->item(i)->checkState() == Qt::Checked) checked++;
+        QVERIFY(checked == expList[li]);
         dbg(QString("relay: list count=%1 checked=%2").arg(list->count()).arg(checked));
     }
     dbg("relay: done");
@@ -77,13 +94,21 @@ void TestPages::chatPageReflectsRealSchema() {
     const auto boxes = page.findChildren<QCheckBox *>();
     dbg("chat: checkboxes=" + QString::number(boxes.size()));
     QVERIFY(!boxes.isEmpty());
-    QVERIFY(boxes.first()->isChecked());  // 聊天启用
+    bool expEnabled = false;
+    int expGroups = 0;
+    for (const QJsonValue &v : QJsonDocument::fromVariant(schema).array()) {
+        const QJsonObject o = v.toObject();
+        const QString key = o.value("key").toString();
+        if (key == "chat.enabled") expEnabled = o.value("default").toBool();
+        else if (key == "chat.groups") expGroups = o.value("default").toArray().size();
+    }
+    QVERIFY(boxes.first()->isChecked() == expEnabled);
     const auto lists = page.findChildren<QListWidget *>();
     QVERIFY(!lists.isEmpty());
     int checked = 0;
     for (int i = 0; i < lists.first()->count(); ++i)
         if (lists.first()->item(i)->checkState() == Qt::Checked) checked++;
-    QVERIFY2(checked >= 4, qPrintable(QString("chat groups checked=%1").arg(checked)));
+    QVERIFY(checked == expGroups);
     dbg(QString("chat: groups count=%1 checked=%2").arg(lists.first()->count()).arg(checked));
     dbg("chat: done");
 }

@@ -217,8 +217,13 @@ void RelayPage::setGroups(const QVariantList &groups) {
         for (QListWidget *list : lists) {
             if (!list) continue;
             bool exists = false;
-            for (int j = 0; j < list->count(); ++j)
-                if (list->item(j)->data(Qt::UserRole).toString() == id) { exists = true; break; }
+            for (int j = 0; j < list->count(); ++j) {
+                if (list->item(j)->data(Qt::UserRole).toString() == id) {
+                    list->item(j)->setText(name.isEmpty() ? id : name + " (" + id + ")");
+                    exists = true;
+                    break;
+                }
+            }
             if (exists) continue;
             auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
             item->setData(Qt::UserRole, id);
@@ -237,7 +242,8 @@ void RelayPage::fillGroupList(QListWidget *list, const QJsonArray &ids) {
     for (const QJsonValue &value : ids) {
         const QString id = value.toString();
         if (id.isEmpty()) continue;
-        auto *item = new QListWidgetItem(id, list);
+        const QString name = m_groupNames.value(id);
+        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
         item->setData(Qt::UserRole, id);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Checked);
