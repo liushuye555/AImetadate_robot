@@ -163,6 +163,8 @@ CREATE TABLE IF NOT EXISTS link_judges (
 CREATE TABLE IF NOT EXISTS relay_log (
   key TEXT PRIMARY KEY,
   kind TEXT,
+  scope TEXT,
+  text TEXT,
   seen_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -226,6 +228,11 @@ class Store:
         if 'message_key' not in message_cols:
             conn.execute('ALTER TABLE messages ADD COLUMN message_key TEXT')
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_key ON messages(scope, message_key) WHERE message_key IS NOT NULL')
+        relay_cols = {row[1] for row in conn.execute('PRAGMA table_info(relay_log)').fetchall()}
+        if 'scope' not in relay_cols:
+            conn.execute('ALTER TABLE relay_log ADD COLUMN scope TEXT')
+        if 'text' not in relay_cols:
+            conn.execute('ALTER TABLE relay_log ADD COLUMN text TEXT')
         hash_cols = {row[1] for row in conn.execute('PRAGMA table_info(image_hashes)').fetchall()}
         if 'xfq_ratio' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_ratio REAL')
@@ -387,13 +394,13 @@ class Store:
             ).fetchone()
         return row is not None
 
-    def relay_log(self, key: str, kind: str = '') -> None:
+    def relay_log(self, key: str, kind: str = '', scope: str = '', text: str = '') -> None:
         if not key:
             return
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute(
-                'INSERT OR REPLACE INTO relay_log (key, kind) VALUES (?, ?)',
-                (key, str(kind or '')),
+                'INSERT OR REPLACE INTO relay_log (key, kind, scope, text) VALUES (?, ?, ?, ?)',
+                (key, str(kind or ''), str(scope or ''), str(text or '')),
             )
             conn.execute("DELETE FROM relay_log WHERE seen_at < datetime('now', '-72 hours')")
             conn.commit()

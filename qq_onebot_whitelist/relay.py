@@ -199,7 +199,7 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
         except Exception as exc:
             print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
             await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
-    store.relay_log(key, 'forward')
+    store.relay_log(key, 'forward', scope_for_event(event), forward_text(messages)[:120])
 
 
 async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> None:
@@ -222,4 +222,4 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
             await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': message})
         except Exception as exc:
             print(f'relay ordinary failed to {gid}: {type(exc).__name__}: {exc}')
-    store.relay_log(key, 'ordinary')
+    store.relay_log(key, 'ordinary', scope_for_event(event), text[:120])

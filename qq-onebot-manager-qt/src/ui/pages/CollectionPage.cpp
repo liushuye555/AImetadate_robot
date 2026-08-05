@@ -20,6 +20,8 @@
 #include <QRadioButton>
 #include <QStackedWidget>
 #include <QFont>
+#include <QTime>
+#include <QTimer>
 #include <algorithm>
 
 CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
@@ -284,11 +286,14 @@ bool CollectionPage::collectionChecked() const {
 }
 
 void CollectionPage::setSavedMessage(const QString &text) {
-    m_message->setText(text);
-    if (!text.isEmpty()) {
-        m_dirty = false;
-        m_save->setEnabled(false);
+    if (text.isEmpty()) {
+        m_message->clear();
+        return;
     }
+    m_message->setText(text + "  " + QTime::currentTime().toString("HH:mm:ss"));
+    m_dirty = false;
+    m_save->setEnabled(false);
+    QTimer::singleShot(6000, m_message, [msg = m_message] { msg->clear(); });
 }
 
 void CollectionPage::rebuildCollectionList() {

@@ -14,6 +14,8 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <QTime>
+#include <QTimer>
 
 ChatPage::ChatPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
@@ -121,8 +123,13 @@ void ChatPage::setSchema(const QVariant &schemaVariant) {
 }
 
 void ChatPage::setSavedMessage(const QString &text) {
-    m_message->setText(text);
-    if (!text.isEmpty()) m_save->setEnabled(false);
+    if (text.isEmpty()) {
+        m_message->clear();
+        return;
+    }
+    m_message->setText(text + "  " + QTime::currentTime().toString("HH:mm:ss"));
+    m_save->setEnabled(false);
+    QTimer::singleShot(6000, m_message, [msg = m_message] { msg->clear(); });
 }
 
 QStringList ChatPage::groupIds(QListWidget *list) const {
