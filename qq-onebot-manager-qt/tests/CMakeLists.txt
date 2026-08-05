@@ -32,3 +32,14 @@ add_executable(tst_configfetch
 target_include_directories(tst_configfetch PRIVATE ../src)
 target_link_libraries(tst_configfetch PRIVATE Qt6::Test Qt6::Core)
 add_test(NAME tst_configfetch COMMAND tst_configfetch)
+
+add_executable(tst_pages
+    tst_pages.cpp
+    ../src/core/ConfigBridge.cpp
+    ../src/ui/pages/RelayPage.cpp
+    ../src/ui/pages/ChatPage.cpp
+    ../src/ui/Strings.cpp
+)
+target_include_directories(tst_pages PRIVATE ../src)
+target_link_libraries(tst_pages PRIVATE Qt6::Test Qt6::Widgets ole32 shell32)
+add_test(NAME tst_pages COMMAND tst_pages)
