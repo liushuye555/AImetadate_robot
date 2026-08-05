@@ -183,6 +183,8 @@ async def relay_event(ws, store, event: dict, config) -> None:
 
 
 async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> None:
+    import websockets
+
     from .onebot import call_action
     from .collection import forward_ids
 
@@ -190,30 +192,41 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
     if not ids:
         return
     messages: list[dict] = []
-    for fid in ids[:5]:
-        try:
-            resp = await call_action(ws, 'get_forward_msg', {'id': fid})
-            messages.extend(((resp.get('data') or {}).get('messages') or []))
-        except Exception as exc:
-            print(f'relay forward fetch failed: {type(exc).__name__}: {exc}')
-    if not messages:
-        return
-    key = forward_content(messages)
-    if store.relay_seen(key, hours=config.relay_dedupe_hours):
-        return
-    if config.relay_ai_filter and not _relay_judge_ok(forward_text(messages)):
-        return
-    nodes = build_forward_nodes(messages)
-    for gid in targets:
-        try:
-            await call_action(ws, 'send_forward_msg', {'group_id': int(gid), 'messages': nodes})
-        except Exception as exc:
-            print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
-            await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
-    store.relay_log(key, 'forward', scope_for_event(event), forward_text(messages)[:120])
+    # 独立连接收发指令，避免与主消息循环并发 recv 冲突
+    async with websockets.connect(config.onebot_ws_url) as action_ws:
+        for fid in ids[:5]:
+            try:
+                resp = await call_action(action_ws, 'get_forward_msg', {'id': fid})
+                messages.extend(((resp.get('data') or {}).get('messages') or []))
+            except Exception as exc:
+                print(f'relay forward fetch failed: {type(exc).__name__}: {exc}')
+        if not messages:
+            return
+        key = forward_content(messages)
+        if store.relay_seen(key, hours=config.relay_dedupe_hours):
+            return
+        if config.relay_ai_filter and not _relay_judge_ok(forward_text(messages)):
+            return
+        nodes = build_forward_nodes(messages)
+        sent = False
+        for gid in targets:
+            try:
+                await call_action(action_ws, 'send_forward_msg', {'group_id': int(gid), 'messages': nodes})
+                sent = True
+            except Exception as exc:
+                print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
+                try:
+                    await call_action(action_ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
+                    sent = True
+                except Exception as exc2:
+                    print(f'relay fallback failed to {gid}: {type(exc2).__name__}: {exc2}')
+        if sent:
+            store.relay_log(key, 'forward', scope_for_event(event), forward_text(messages)[:120])
 
 
 async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> None:
+    import websockets
+
     from .onebot import call_action
 
     text = extract_text(event)
@@ -238,9 +251,13 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
     if config.relay_ai_filter and not _relay_judge_ok(text):
         return
     message = _clean_segments(event) or (text or '[图片]')
-    for gid in targets:
-        try:
-            await call_action(ws, 'send_group_msg', {'group_id': int(gid), 'message': message})
-        except Exception as exc:
-            print(f'relay ordinary failed to {gid}: {type(exc).__name__}: {exc}')
-    store.relay_log(key, 'ordinary', scope_for_event(event), text[:120])
+    sent = False
+    async with websockets.connect(config.onebot_ws_url) as action_ws:
+        for gid in targets:
+            try:
+                await call_action(action_ws, 'send_group_msg', {'group_id': int(gid), 'message': message})
+                sent = True
+            except Exception as exc:
+                print(f'relay ordinary failed to {gid}: {type(exc).__name__}: {exc}')
+    if sent:
+        store.relay_log(key, 'ordinary', scope_for_event(event), text[:120])

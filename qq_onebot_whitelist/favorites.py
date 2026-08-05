@@ -13,6 +13,8 @@ async def maybe_save_private_forward(ws, store, event: dict, config) -> bool:
         return False
     if reply_to_message_id(event):
         return False  # 引用消息不默认收藏
+    import websockets
+
     from .collection import forward_ids, is_forward_event
     from .onebot import call_action
     from .relay import build_forward_nodes, forward_content, forward_text
@@ -23,12 +25,13 @@ async def maybe_save_private_forward(ws, store, event: dict, config) -> bool:
     if not ids:
         return False
     messages: list[dict] = []
-    for fid in ids[:5]:
-        try:
-            resp = await call_action(ws, 'get_forward_msg', {'id': fid})
-            messages.extend(((resp.get('data') or {}).get('messages') or []))
-        except Exception as exc:
-            print(f'favorite fetch failed: {type(exc).__name__}: {exc}')
+    async with websockets.connect(config.onebot_ws_url) as action_ws:
+        for fid in ids[:5]:
+            try:
+                resp = await call_action(action_ws, 'get_forward_msg', {'id': fid})
+                messages.extend(((resp.get('data') or {}).get('messages') or []))
+            except Exception as exc:
+                print(f'favorite fetch failed: {type(exc).__name__}: {exc}')
     if not messages:
         return False
     return store.save_favorite(

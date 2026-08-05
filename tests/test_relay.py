@@ -2,10 +2,24 @@
 
 import asyncio
 
+import websockets
+
 from qq_onebot_whitelist import relay
 from qq_onebot_whitelist.config import AppConfig
 from qq_onebot_whitelist.config_bridge import config_schema
 from qq_onebot_whitelist.store import Store
+
+
+class FakeWs:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def patch_ws(monkeypatch):
+    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
 
 
 def make_config(**over):
@@ -60,6 +74,7 @@ def test_sticker_like_image_detection():
 
 
 def test_relay_skips_gif_sticker_only_message(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     store = Store(tmp_path / 'bot.db')
     actions = []
 
@@ -79,6 +94,7 @@ def test_relay_skips_gif_sticker_only_message(tmp_path, monkeypatch):
 
 
 def test_pure_single_image_not_relayed(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     relay._img_streak.clear()
     store = Store(tmp_path / 'bot.db')
     actions = []
@@ -99,6 +115,7 @@ def test_pure_single_image_not_relayed(tmp_path, monkeypatch):
 
 
 def test_consecutive_images_by_same_sender_relayed(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     relay._img_streak.clear()
     store = Store(tmp_path / 'bot.db')
     actions = []
@@ -124,6 +141,7 @@ def test_consecutive_images_by_same_sender_relayed(tmp_path, monkeypatch):
 
 
 def test_image_streak_toggle_off_never_relays_pure_images(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     relay._img_streak.clear()
     store = Store(tmp_path / 'bot.db')
     actions = []
@@ -148,6 +166,7 @@ def test_image_streak_toggle_off_never_relays_pure_images(tmp_path, monkeypatch)
 
 
 def test_image_with_text_relayed(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     relay._img_streak.clear()
     store = Store(tmp_path / 'bot.db')
     actions = []
@@ -178,6 +197,7 @@ def test_relay_dedup_24h(tmp_path):
 
 
 def test_relay_event_forwards_and_dedups(tmp_path, monkeypatch):
+    patch_ws(monkeypatch)
     store = Store(tmp_path / 'bot.db')
     actions = []
 

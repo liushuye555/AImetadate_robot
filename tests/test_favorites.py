@@ -2,8 +2,18 @@
 
 import asyncio
 
+import websockets
+
 from qq_onebot_whitelist.config import AppConfig
 from qq_onebot_whitelist.store import Store
+
+
+class FakeWs:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
 
 
 def _forward_event(*, message_type='private', reply=False, user_id='2718273234'):
@@ -32,6 +42,7 @@ def test_favorites_store_dedup(tmp_path):
 def test_private_forward_saved(tmp_path, monkeypatch):
     from qq_onebot_whitelist import favorites
 
+    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
     store = Store(tmp_path / 'bot.db')
 
     async def fake_call(ws, action, params):
