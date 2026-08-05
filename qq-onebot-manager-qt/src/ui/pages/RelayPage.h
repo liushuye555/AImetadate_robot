@@ -17,7 +17,7 @@ class RelayPage : public QWidget {
     Q_OBJECT
 public:
     explicit RelayPage(QWidget *parent = nullptr);
-    void setSchema(const QVariant &schema);
+    void setSchema(bool ok, const QVariant &schema);
     void setGroups(const QVariantList &groups);
     void setSavedMessage(const QString &text);
 signals:

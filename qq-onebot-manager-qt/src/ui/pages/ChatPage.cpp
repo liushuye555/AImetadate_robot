@@ -105,7 +105,8 @@ ChatPage::ChatPage(QWidget *parent) : QWidget(parent) {
     });
 }
 
-void ChatPage::setSchema(const QVariant &schemaVariant) {
+void ChatPage::setSchema(bool ok, const QVariant &schemaVariant) {
+    if (!ok) return;
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     for (const QJsonValue &value : items) {
         const QJsonObject obj = value.toObject();

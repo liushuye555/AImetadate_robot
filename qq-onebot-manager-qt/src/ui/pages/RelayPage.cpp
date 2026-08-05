@@ -175,7 +175,8 @@ QStringList RelayPage::groupIds(QListWidget *list) const {
     return ids;
 }
 
-void RelayPage::setSchema(const QVariant &schemaVariant) {
+void RelayPage::setSchema(bool ok, const QVariant &schemaVariant) {
+    if (!ok) return;
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     for (const QJsonValue &value : items) {
         const QJsonObject obj = value.toObject();

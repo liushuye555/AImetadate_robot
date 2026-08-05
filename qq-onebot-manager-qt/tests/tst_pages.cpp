@@ -22,6 +22,7 @@ class TestPages : public QObject {
 private slots:
     void relayPageReflectsRealSchema();
     void chatPageReflectsRealSchema();
+    void relayPageViaSignalConnection();
 };
 
 static bool fetchSchema(QVariant &out) {
@@ -46,7 +47,7 @@ void TestPages::relayPageReflectsRealSchema() {
     dbg("relay: schema ok, size=" + QString::number(schema.toList().size()));
     RelayPage page;
     dbg("relay: page constructed");
-    page.setSchema(schema);
+    page.setSchema(true, schema);
     dbg("relay: setSchema done");
     const auto boxes = page.findChildren<QCheckBox *>();
     dbg("relay: checkboxes=" + QString::number(boxes.size()));
@@ -72,7 +73,7 @@ void TestPages::chatPageReflectsRealSchema() {
     QVariant schema;
     QVERIFY(fetchSchema(schema));
     ChatPage page;
-    page.setSchema(schema);
+    page.setSchema(true, schema);
     const auto boxes = page.findChildren<QCheckBox *>();
     dbg("chat: checkboxes=" + QString::number(boxes.size()));
     QVERIFY(!boxes.isEmpty());
@@ -85,6 +86,25 @@ void TestPages::chatPageReflectsRealSchema() {
     QVERIFY2(checked >= 4, qPrintable(QString("chat groups checked=%1").arg(checked)));
     dbg(QString("chat: groups count=%1 checked=%2").arg(lists.first()->count()).arg(checked));
     dbg("chat: done");
+}
+
+void TestPages::relayPageViaSignalConnection() {
+    dbg("signal: start");
+    ConfigBridge bridge;
+    RelayPage page;
+    QObject::connect(&bridge, &ConfigBridge::schemaLoaded, &page, &RelayPage::setSchema);
+    QSignalSpy spy(&bridge, &ConfigBridge::schemaLoaded);
+    bridge.fetch();
+    for (int i = 0; i < 150 && spy.count() == 0; ++i)
+        QTest::qWait(100);
+    dbg("signal: emitted=" + QString::number(spy.count())
+        + " variantList=" + QString::number(spy.at(0).at(1).toList().size()));
+    const auto boxes = page.findChildren<QCheckBox *>();
+    if (!boxes.isEmpty())
+        dbg("signal: relay enabled checked=" + QString::number(boxes.at(0)->isChecked()));
+    QVERIFY(!boxes.isEmpty());
+    QVERIFY(boxes.at(0)->isChecked());
+    dbg("signal: done");
 }
 
 QTEST_MAIN(TestPages)

@@ -198,7 +198,8 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     connect(m_save, &QPushButton::clicked, this, [this] { emit saveRequested(buildPatch()); });
 }
 
-void CollectionPage::setSchema(const QVariant &schemaVariant) {
+void CollectionPage::setSchema(bool ok, const QVariant &schemaVariant) {
+    if (!ok) return;
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     for (const QJsonValue &value : items) {
         const QJsonObject obj = value.toObject();

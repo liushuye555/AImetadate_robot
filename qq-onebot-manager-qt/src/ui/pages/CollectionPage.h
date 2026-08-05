@@ -15,7 +15,7 @@ class CollectionPage : public QWidget {
     Q_OBJECT
 public:
     explicit CollectionPage(QWidget *parent = nullptr);
-    void setSchema(const QVariant &schema);
+    void setSchema(bool ok, const QVariant &schema);
     void setGroups(const QVariantList &groups);
     void setCollectionPaused(bool paused);
     void setSavedMessage(const QString &text);
