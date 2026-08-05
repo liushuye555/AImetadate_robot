@@ -16,6 +16,7 @@ def make_config(**over):
         relay_input_groups=set(),
         relay_output_groups=set(),
         relay_ordinary=True,
+        relay_image_streak=True,
         relay_text_keywords=[],
         relay_text_regex='',
         relay_ai_filter=False,
@@ -120,6 +121,30 @@ def test_consecutive_images_by_same_sender_relayed(tmp_path, monkeypatch):
     assert [a for a in actions if a == 'send_group_msg'] == []  # 第一张纯图不搬
     asyncio.run(relay.relay_event(None, store, image_event('https://gchat.qpic.cn/b.png'), cfg))
     assert [a for a in actions if a == 'send_group_msg'] == ['send_group_msg']  # 连续第二张搬
+
+
+def test_image_streak_toggle_off_never_relays_pure_images(tmp_path, monkeypatch):
+    relay._img_streak.clear()
+    store = Store(tmp_path / 'bot.db')
+    actions = []
+
+    async def fake_call(ws, action, params):
+        actions.append(action)
+        return {'status': 'ok'}
+
+    monkeypatch.setattr('qq_onebot_whitelist.onebot.call_action', fake_call)
+    cfg = make_config(relay_groups={'111', '222'}, relay_image_streak=False)
+
+    def image_event(url):
+        return {
+            'post_type': 'message', 'message_type': 'group', 'group_id': '111',
+            'user_id': 'u1', 'self_id': 'bot',
+            'message': [{'type': 'image', 'data': {'url': url}}],
+        }
+
+    asyncio.run(relay.relay_event(None, store, image_event('https://gchat.qpic.cn/a.png'), cfg))
+    asyncio.run(relay.relay_event(None, store, image_event('https://gchat.qpic.cn/b.png'), cfg))
+    assert [a for a in actions if a == 'send_group_msg'] == []
 
 
 def test_image_with_text_relayed(tmp_path, monkeypatch):

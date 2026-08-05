@@ -36,6 +36,7 @@ private:
     QListWidget *m_outputGroups = nullptr;
     QMap<QString, QString> m_groupNames;
     QCheckBox *m_ordinary = nullptr;
+    QCheckBox *m_imageStreak = nullptr;
     QPlainTextEdit *m_keywords = nullptr;
     QLineEdit *m_regex = nullptr;
     QCheckBox *m_aiFilter = nullptr;

@@ -115,6 +115,7 @@ QString Strings::zh(const QString &key) {
     if (key == "relayOutputGroups") return "输出群（留空=按模式列表）";
     if (key == "relayGroupsHint") return "扫描会把群加入三个列表：勾选参与群会自动同步到输入/输出群，也可单独勾选输入/输出。GIF/表情包不搬运；纯单图不搬，同一人多张连续图片会搬。";
     if (key == "relayOrdinary") return "转发含链接/图片/文件的普通消息";
+    if (key == "relayImageStreak") return "同一人多张连续图片也搬运（关闭后纯图片一律不搬）";
     if (key == "relayText") return "纯文本转发条件";
     if (key == "relayKeywords") return "关键词（任一命中即转）";
     if (key == "relayRegex") return "正则表达式（可选）";
@@ -244,6 +245,7 @@ QString Strings::en(const QString &key) {
     if (key == "relayOutputGroups") return "Output groups (blank = mode list)";
     if (key == "relayGroupsHint") return "Scan fills all three lists. Checking a participating group syncs it to input/output; you can also check input/output independently. GIFs/stickers never relay; single pure images skipped, consecutive multi-images by the same sender relay.";
     if (key == "relayOrdinary") return "Relay messages with links/images/files";
+    if (key == "relayImageStreak") return "Relay consecutive multi-images by the same sender (off = never relay pure images)";
     if (key == "relayText") return "Plain text relay rules";
     if (key == "relayKeywords") return "Keywords (any hit relays)";
     if (key == "relayRegex") return "Regex (optional)";

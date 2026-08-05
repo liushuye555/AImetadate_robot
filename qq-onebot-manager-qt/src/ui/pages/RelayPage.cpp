@@ -83,6 +83,9 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
     m_ordinary = new QCheckBox(Strings::zh("relayOrdinary"), container);
     m_ordinary->setChecked(true);
     layout->addWidget(m_ordinary);
+    m_imageStreak = new QCheckBox(Strings::zh("relayImageStreak"), container);
+    m_imageStreak->setChecked(true);
+    layout->addWidget(m_imageStreak);
 
     auto *textBox = new QGroupBox(Strings::zh("relayText"), container);
     auto *textForm = new QFormLayout(textBox);
@@ -120,6 +123,7 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
     connect(m_enabled, &QCheckBox::toggled, this, [this] { markDirty(); });
     connect(m_mode, &QComboBox::currentIndexChanged, this, [this] { markDirty(); });
     connect(m_ordinary, &QCheckBox::toggled, this, [this] { markDirty(); });
+    connect(m_imageStreak, &QCheckBox::toggled, this, [this] { markDirty(); });
     connect(m_keywords, &QPlainTextEdit::textChanged, this, [this] { markDirty(); });
     connect(m_regex, &QLineEdit::textChanged, this, [this] { markDirty(); });
     connect(m_aiFilter, &QCheckBox::toggled, this, [this] { markDirty(); });
@@ -132,6 +136,7 @@ RelayPage::RelayPage(QWidget *parent) : QWidget(parent) {
         patch.insert("relay.input_groups", QJsonArray::fromStringList(groupIds(m_inputGroups)));
         patch.insert("relay.output_groups", QJsonArray::fromStringList(groupIds(m_outputGroups)));
         patch.insert("relay.ordinary", m_ordinary->isChecked());
+        patch.insert("relay.image_streak", m_imageStreak->isChecked());
         QStringList keywords;
         for (const QString &line : m_keywords->toPlainText().split('\n'))
             if (!line.trimmed().isEmpty())
@@ -185,6 +190,7 @@ void RelayPage::setSchema(const QVariant &schemaVariant) {
         else if (key == "relay.input_groups") fillGroupList(m_inputGroups, def.toArray());
         else if (key == "relay.output_groups") fillGroupList(m_outputGroups, def.toArray());
         else if (key == "relay.ordinary") m_ordinary->setChecked(def.toBool());
+        else if (key == "relay.image_streak") m_imageStreak->setChecked(def.toBool());
         else if (key == "relay.text_keywords") {
             QStringList lines;
             for (const QJsonValue &v : def.toArray())

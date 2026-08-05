@@ -69,6 +69,7 @@ class AppConfig:
     relay_input_groups: set[str] = field(default_factory=set)
     relay_output_groups: set[str] = field(default_factory=set)
     relay_ordinary: bool = True
+    relay_image_streak: bool = True
     relay_text_keywords: list[str] = field(default_factory=list)
     relay_text_regex: str = ''
     relay_ai_filter: bool = False
@@ -187,6 +188,7 @@ def load_config(path: str | Path) -> AppConfig:
         relay_input_groups={str(x) for x in (relay.get('input_groups') or [])},
         relay_output_groups={str(x) for x in (relay.get('output_groups') or [])},
         relay_ordinary=bool(relay.get('ordinary', True)),
+        relay_image_streak=bool(relay.get('image_streak', True)),
         relay_text_keywords=[str(x) for x in (relay.get('text_keywords') or [])],
         relay_text_regex=str(relay.get('text_regex') or ''),
         relay_ai_filter=bool(relay.get('ai_filter', False)),

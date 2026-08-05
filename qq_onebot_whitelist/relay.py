@@ -224,9 +224,12 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
     streak = _update_image_streak(
         scope_for_event(event), str(event.get('user_id') or ''), image_only,
     )
-    # 纯单图不搬运（截图/随手图）；同一条消息多图或同一人多张连续图片才搬
-    if image_only and len(images) < 2 and streak < 2:
-        return
+    # 纯单图不搬运（截图/随手图）；开关开启时，同一条消息多图或同一人多张连续图片才搬
+    if image_only:
+        if not config.relay_image_streak:
+            return
+        if len(images) < 2 and streak < 2:
+            return
     if not ordinary_worth_relaying(text, images, links, files, config):
         return
     key = ordinary_content(event, text, images, links, files)

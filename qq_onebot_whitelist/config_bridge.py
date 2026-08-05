@@ -80,6 +80,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('relay.input_groups', 'list', relay.get('input_groups', []), 'Input groups (blank = mode list)', '输入群（留空=按模式列表）', section='relay'),
         field('relay.output_groups', 'list', relay.get('output_groups', []), 'Output groups (blank = mode list)', '输出群（留空=按模式列表）', section='relay'),
         field('relay.ordinary', 'bool', relay.get('ordinary', True), 'Relay link/image/file messages', '转发含链接/图片/文件的普通消息', section='relay'),
+        field('relay.image_streak', 'bool', relay.get('image_streak', True), 'Relay consecutive multi-images', '同一人多张连续图片也搬运', section='relay'),
         field('relay.text_keywords', 'list', relay.get('text_keywords', []), 'Text keywords to relay', '纯文本转发关键词', section='relay'),
         field('relay.text_regex', 'text', relay.get('text_regex', ''), 'Text regex to relay', '纯文本转发正则', section='relay'),
         field('relay.ai_filter', 'bool', relay.get('ai_filter', False), 'AI filter before relay', '转发前 AI 过滤', section='relay'),
