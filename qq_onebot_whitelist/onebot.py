@@ -687,6 +687,64 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         retry_delay = min(retry_delay * 2, 60)
 
 
+def _acquire_single_instance_lock() -> bool:
+    """单实例锁：面板自动重启与手动/uv 启动叠加会跑出多个 bot（重复回复、重复同步）。
+
+    data/bot.lock 以 O_CREAT|O_EXCL 抢占并写入 PID；已有锁且 PID 存活则拒绝启动，
+    锁文件是崩溃残留（PID 已不存在）时清掉重抢。文件句柄保持到进程退出时删除。
+    """
+    import atexit
+    import os
+
+    lock_path = _REPO_ROOT / 'data' / 'bot.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _pid_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            import ctypes
+            if os.name == 'nt':
+                k32 = ctypes.windll.kernel32
+                handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+                if not handle:
+                    return False
+                k32.CloseHandle(handle)
+                return True
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    for _ in range(2):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                pid = int(lock_path.read_text().strip() or '0')
+            except Exception:
+                pid = 0
+            if _pid_alive(pid):
+                return False
+            lock_path.unlink(missing_ok=True)  # 崩溃残留的陈旧锁
+            continue
+        os.write(fd, str(os.getpid()).encode())
+
+        def _release(fd: int = fd) -> None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        atexit.register(_release)
+        return True
+    return False
+
+
 def main() -> int:
     import argparse
     import sys
@@ -699,6 +757,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='OneBot whitelist @ bot')
     parser.add_argument('--config', default='config.yaml')
     args = parser.parse_args()
+    if not _acquire_single_instance_lock():
+        print('bot 已在运行（单实例锁 data/bot.lock），本实例退出')
+        time.sleep(3)  # 拖慢面板自动重启的循环
+        return 1
     asyncio.run(run(load_config(args.config), args.config))
     return 0
 
