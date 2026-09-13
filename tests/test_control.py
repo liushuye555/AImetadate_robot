@@ -75,6 +75,113 @@ def test_stop_kills_pid_files(tmp_path, monkeypatch):
     control.stop_services()
     assert any("111" in " ".join(c) for c in killed)
     assert any("222" in " ".join(c) for c in killed)
+    assert (tmp_path / "manual-stop").exists()
+    assert control.load_status()["manualStop"] is True
+    assert control.load_status()["bot"] is False
+
+
+
+def test_stop_publishes_manual_stop_before_killing(tmp_path, monkeypatch):
+    observed = []
+
+    def fake_run(cmd, **kwargs):
+        status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+        observed.append(((tmp_path / "manual-stop").exists(), status["manualStop"]))
+        return None
+
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
+    (tmp_path / "bot.pid").write_text("222\n", encoding="ascii")
+    monkeypatch.setattr(control.subprocess, "run", fake_run)
+
+    control.stop_services()
+
+    assert observed == [(True, True)]
+
+def test_start_clears_manual_stop_marker(tmp_path, monkeypatch):
+    napcat_bat = tmp_path / "runtime" / "NapCat.Shell.Windows.Node" / "napcat.bat"
+    napcat_bat.parent.mkdir(parents=True)
+    napcat_bat.write_text("@echo off", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("bot:\n", encoding="utf-8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "manual-stop").write_text("stop", encoding="ascii")
+
+    monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: True)
+    monkeypatch.setattr(control.subprocess, "Popen", lambda *args, **kwargs: type("P", (), {"pid": 42})())
+
+    control.start_services(clear_manual_stop=True)
+    assert not (tmp_path / "manual-stop").exists()
+
+
+def test_bot_restart_respects_manual_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
+    (tmp_path / "manual-stop").write_text("stop", encoding="ascii")
+    monkeypatch.setattr(control, "start_services", lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not start")))
+
+    assert control.cmd_bot_restart(None) == 0
+
+
+def test_pid_running_uses_windows_safe_probe(tmp_path, monkeypatch):
+    pid_path = tmp_path / "bot.pid"
+    pid_path.write_text("42", encoding="ascii")
+    calls = []
+
+    class FakeOS:
+        name = "nt"
+
+        @staticmethod
+        def kill(*args):
+            raise AssertionError("Windows PID probe must not call os.kill")
+
+    monkeypatch.setattr(control, "os", FakeOS)
+    monkeypatch.setattr(control, "_windows_pid_running", lambda pid: calls.append(pid) or True)
+
+    assert control.pid_running(pid_path) is True
+    assert calls == [42]
+
+
+def test_live_status_uses_current_process_and_ports(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: port in {6099, 3001})
+    monkeypatch.setattr(control, "pid_running", lambda path: path.name == "bot.pid")
+    (tmp_path / "bot.pid").write_text("42", encoding="ascii")
+    (tmp_path / "manual-stop").write_text("stop", encoding="ascii")
+    (tmp_path / "status.json").write_text(
+        '{"qqNumber":"123","qqNickname":"昵称"}', encoding="utf-8"
+    )
+
+    status = control.live_status()
+
+    assert status["napcat"] is True
+    assert status["onebot"] is True
+    assert status["bot"] is True
+    assert status["qqLoggedIn"] is True
+    assert status["manualStop"] is True
+    assert status["qqNumber"] == ""
+    assert status["updatedAt"]
+
+
+def test_live_status_survives_corrupt_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: False)
+    monkeypatch.setattr(control, "pid_running", lambda path: False)
+    (tmp_path / "status.json").write_text("not-json", encoding="utf-8")
+
+    status = control.live_status()
+
+    assert status["napcat"] is False
+    assert status["onebot"] is False
+    assert status["bot"] is False
+    assert status["qqNumber"] == ""
+
+
+def test_cmd_live_status_prints_json(capsys, monkeypatch):
+    monkeypatch.setattr(control, "live_status", lambda: {"bot": True})
+
+    assert control.cmd_live_status(None) == 0
+
+    assert '"bot": true' in capsys.readouterr().out
 
 
 def test_stats_counts_real_db(tmp_path):

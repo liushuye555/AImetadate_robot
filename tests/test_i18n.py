@@ -9,6 +9,18 @@ def test_language_normalization_and_fallback():
     assert text('help_title', 'zh-CN').startswith('管理员')
 
 
+
+def test_favorites_prompt_uses_explicit_save_command():
+    zh = text('fav_none', 'zh-CN')
+    en = text('fav_none', 'en-US')
+
+    assert '/保存图片' in zh
+    assert '未分类' in zh
+    assert '自动保存' not in zh
+    assert '/save images' in en
+    assert 'automatically' not in en.lower()
+
+
 def test_config_bridge_preserves_unknown_fields(tmp_path):
     from qq_onebot_whitelist.config_bridge import patch_config
 

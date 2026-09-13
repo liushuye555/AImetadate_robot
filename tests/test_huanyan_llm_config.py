@@ -7,7 +7,7 @@ def test_huanyan_is_lower_priority_than_ds_when_openrouter_missing(monkeypatch):
     monkeypatch.delenv('OPENROUTER_MODEL', raising=False)
     monkeypatch.setenv('DS_V4_FLASH_BASE_URL', 'https://api.deepseek.com')
     monkeypatch.setenv('DS_V4_FLASH_API_KEY', 'old')
-    monkeypatch.setenv('DS_V4_FLASH_MODEL', 'deepseek-v4-flash')
+    monkeypatch.setenv('DS_V4_FLASH_MODEL', 'deepseek-flash')
     monkeypatch.setenv('HUANYAN_BASE_URL', 'https://api.huanyan.fun/v1')
     monkeypatch.setenv('HUANYAN_API_KEY', 'new')
     monkeypatch.setenv('HUANYAN_MODEL', 'qwen/qwen3-next-80b-a3b-instruct')
@@ -15,4 +15,4 @@ def test_huanyan_is_lower_priority_than_ds_when_openrouter_missing(monkeypatch):
     assert cfg is not None
     assert cfg.base_url == 'https://api.deepseek.com/v1'
     assert cfg.api_key == 'old'
-    assert cfg.model == 'deepseek-v4-flash'
+    assert cfg.model == 'deepseek-flash'

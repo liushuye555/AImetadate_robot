@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import shutil
+import tempfile
 import urllib.request
 from urllib.parse import urlparse
 
@@ -45,14 +46,36 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
+def verify_image_file(path: str | Path) -> str | None:
+    """Return an error for an image Pillow cannot fully decode, else ``None``."""
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+    except Exception as exc:
+        return f'invalid or truncated image: {exc or type(exc).__name__}'
+    return None
+
+
 def download_image(url: str, tmp_dir: Path, filename_hint: str | None = None, timeout: int = 30) -> Path:
+    """下载到每次独占的临时文件，避免相同 QQ 链接并发写入互相覆盖。"""
     tmp_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename_hint or urlparse(url).path).suffix or '.img'
-    out = tmp_dir / (hashlib.sha1(url.encode('utf-8')).hexdigest() + suffix)
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, out.open('wb') as f:
-        shutil.copyfileobj(resp, f)
-    return out
+    handle = tempfile.NamedTemporaryFile(
+        mode='wb', prefix='.download-', suffix=suffix, dir=tmp_dir, delete=False,
+    )
+    out = Path(handle.name)
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with handle, urllib.request.urlopen(req, timeout=timeout) as resp:
+            shutil.copyfileobj(resp, handle)
+        return out
+    except Exception:
+        out.unlink(missing_ok=True)
+        raise
 
 
 def archive_image(tmp: Path, archive_root: Path, digest: str) -> Path:
@@ -129,8 +152,14 @@ def process_image_url(
     candidate_root: Path | None = None,
     filename_hint: str | None = None,
     nearby_text: str = '',
+    force_keep: bool = False,
+    force_reason: str = 'manual_saved',
 ) -> dict:
     tmp = download_image(url, tmp_dir, filename_hint=filename_hint)
+    validation_error = verify_image_file(tmp)
+    if validation_error:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(validation_error)
     size = tmp.stat().st_size
     digest = sha256_file(tmp)
     try:
@@ -144,6 +173,8 @@ def process_image_url(
     except Exception:
         blockiness_value = 0.0
     keep, reason = should_keep_image(meta, nearby_text=nearby_text)
+    if force_keep:
+        keep, reason = True, (force_reason or 'manual_saved')
     kept_path = None
     existing = existing_content_path(digest, archive_root, candidate_root)
     if existing is not None:
@@ -181,4 +212,5 @@ def process_image_url(
         'prompt_key': prompt_key,
         'kept_path': str(kept_path) if kept_path else None,
         'retention_reason': reason,
+        'already_archived': existing is not None,
     }

@@ -6,7 +6,7 @@ import os
 import yaml
 
 from .policy import BotConfig
-from .schedule import normalize_time_windows
+from .schedule import normalize_time_windows, normalize_weekdays
 from .i18n import effective_language, normalize_language
 
 
@@ -42,6 +42,7 @@ class AppConfig:
     ai_context_auto_interval_minutes: int = 15
     ai_context_min_new_messages: int = 300
     ai_context_allowed_windows: list[str] = field(default_factory=list)
+    ai_context_all_day_weekdays: list[str] = field(default_factory=list)
     language: str = 'en-US'
     daily_report_enabled: bool = True
     daily_report_hour: int = 20
@@ -60,6 +61,8 @@ class AppConfig:
     load_aware_enabled: bool = True
     load_aware_cpu_threshold: int = 80
     load_aware_check_seconds: int = 60
+    vision_recheck_enabled: bool = False
+    vision_recheck_batch: int = 20
     network_proxy_enabled: bool = True
     network_proxy_host: str = '127.0.0.1'
     network_proxy_port: int = 7897
@@ -140,6 +143,8 @@ def load_config(path: str | Path) -> AppConfig:
         reencode_threshold=float(images.get('reencode_threshold') or 6.5),
     ai_discussion_judge=str(images.get('ai_discussion_judge') or 'rule').lower(),
     prompt_judge_mode=str(images.get('prompt_judge') or 'rule').lower(),
+    vision_recheck_enabled=bool(images.get('vision_recheck_enabled', False)),
+    vision_recheck_batch=int(images.get('vision_recheck_batch') or 20),
     images_ignore_bot_user_ids={str(x) for x in (images.get('ignore_bot_user_ids') or [])},
         startup_history_enabled=bool(startup_history.get('enabled', True)),
         startup_history_mode=str(startup_history.get('mode') or 'whitelist').lower(),
@@ -157,6 +162,7 @@ def load_config(path: str | Path) -> AppConfig:
         ai_context_auto_interval_minutes=int(ai_context.get('auto_interval_minutes') or 15),
         ai_context_min_new_messages=int(ai_context.get('min_new_messages') or 300),
         ai_context_allowed_windows=normalize_time_windows([str(x) for x in (ai_context.get('allowed_windows') or [])]),
+        ai_context_all_day_weekdays=normalize_weekdays(ai_context.get('all_day_weekdays') or []),
         language=effective_language(configured_language),
         daily_report_enabled=bool(daily_report.get('enabled', True)),
         daily_report_hour=int(daily_report.get('hour') or 20),

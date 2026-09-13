@@ -71,3 +71,39 @@ def test_bound_prompt_and_prompt_key_columns(tmp_path):
     row = conn.execute("SELECT bound_prompt, prompt_key FROM images WHERE sha256='p1'").fetchone()
     conn.close()
     assert row == ("1girl, solo", "abc123")
+
+
+def test_store_migrates_saved_category_before_creating_index(tmp_path):
+    import sqlite3
+
+    db = tmp_path / 'legacy.db'
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            '''CREATE TABLE images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                scope TEXT,
+                user_id TEXT,
+                url TEXT,
+                sha256 TEXT,
+                size INTEGER,
+                format TEXT,
+                width INTEGER,
+                height INTEGER,
+                metadata_keys_json TEXT,
+                has_ai_metadata INTEGER,
+                ai_source TEXT,
+                text_excerpt TEXT,
+                kept_path TEXT,
+                retention_reason TEXT,
+                raw_json TEXT
+            )'''
+        )
+
+    Store(db)
+
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
+        indexes = {row[1] for row in conn.execute('PRAGMA index_list(images)')}
+    assert 'saved_category' in columns
+    assert 'idx_images_saved_category' in indexes

@@ -19,7 +19,7 @@ from .collection import (
     is_collection_paused,
     is_forward_event,
 )
-from .commands import build_reply, scope_for_event
+from .commands import build_reply, parse_repair_images_command, scope_for_event
 from .config import AppConfig, load_config
 from .ai_context_analyze import analyze_configured, configured_scopes
 from .daily_report import build_daily_resource_report, should_run_daily_report, split_message, today_key
@@ -34,22 +34,34 @@ _sync_requested = threading.Event()
 def request_image_sync() -> None:
     """请求后台负载感知同步重建视图（面板/回复触发）。"""
     _sync_requested.set()
-from .policy import extract_text, should_reply
-from .schedule import is_in_time_windows
+from .policy import extract_text, is_group_admin, should_reply
+from .schedule import all_day_today, is_in_time_windows
 from .store import Store
 
 
-_echo_state: dict[tuple[str, str], list[float]] = {}
+_echo_state: dict[tuple[str, str], list[tuple[str, float]]] = {}
 _echo_last: dict[str, tuple[str, float]] = {}
 _group_activity: dict[str, float] = {}
+_purge_keepalive_last: dict[str, float] = {}
+PURGE_KEEPALIVE_COOLDOWN_SECONDS = 60
+
+
+def _is_self_message(event: dict[str, Any]) -> bool:
+    """Return true only when both OneBot IDs are present and equal."""
+    user_id = str(event.get("user_id") or "")
+    self_id = str(event.get("self_id") or "")
+    return bool(user_id and self_id and user_id == self_id)
 
 
 def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
     """多人连续重复同一条消息时返回要复读的文本；window_seconds=0 表示无限（只看连续性）。"""
+    if _is_self_message(event):
+        return None
     if not config.echo_enabled or event.get('post_type') != 'message' or event.get('message_type') != 'group':
         return None
     group = str(event.get('group_id') or '')
-    if not group:
+    sender = str(event.get('user_id') or '')
+    if not group or not sender:
         return None
     if config.echo_groups and group not in config.echo_groups:
         return None
@@ -64,13 +76,17 @@ def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
     if last and last[0] != text:
         _echo_state.pop((group, last[0]), None)
     _echo_last[group] = (text, now)
-    stamps = _echo_state.setdefault(key, [])
+    senders = _echo_state.setdefault(key, [])
     if window > 0:
         cutoff = now - window
-        stamps = [item for item in stamps if item >= cutoff]
-        _echo_state[key] = stamps
-    stamps.append(now)
-    if len(_echo_state[key]) >= max(2, config.echo_min_repeat):
+        senders[:] = [item for item in senders if item[1] >= cutoff]
+    for index, (known_sender, _) in enumerate(senders):
+        if known_sender == sender:
+            senders[index] = (sender, now)
+            break
+    else:
+        senders.append((sender, now))
+    if len(senders) >= max(2, config.echo_min_repeat):
         _echo_state.pop(key, None)
         return text
     return None
@@ -278,6 +294,7 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
                     "onebot": True,
                     "bot": True,
                     "collectionPaused": is_collection_paused(),
+                    "manualStop": control.manual_stop_requested(),
                     **login,
                 }
             )
@@ -293,7 +310,8 @@ def should_run_ai_context(config_path: str | Path, store: Store, now: datetime) 
         store.count_messages_after(str(scope), store.last_ai_context_end_message_id(str(scope)))
         for scope in scopes
     )
-    allowed = is_in_time_windows(now, current.ai_context_allowed_windows)
+    # DeepSeek 错峰政策支持按星期全天放开（如周末全天错峰），其余时间按窗口判定
+    allowed = all_day_today(current.ai_context_all_day_weekdays, now) or         is_in_time_windows(now, current.ai_context_allowed_windows)
     enabled = current.ai_context_enabled and current.feature_ai_context
     return enabled and pending >= current.ai_context_min_new_messages and allowed, pending, current
 
@@ -474,14 +492,26 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
 
 
 async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
+    if _is_self_message(event):
+        return False
     if event.get('post_type') != 'message':
         return False
     if event.get('message_type') == 'group':
-        _group_activity[str(event.get('group_id') or '')] = time.time()
-        if config.keepalive_enabled and config.keepalive_message.strip() and is_purge_announcement(event):
-            # 管理员 @全体成员 宣布清理不活跃成员 → 立即发保活消息，避免机器人被当不活跃账号清理
-            await _send_group_message(ws, str(event.get('group_id') or ''), config.keepalive_message)
-            _group_activity[str(event.get('group_id') or '')] = time.time()
+        group_id = str(event.get('group_id') or '')
+        _group_activity[group_id] = time.time()
+        if (
+            config.keepalive_enabled
+            and config.keepalive_message.strip()
+            and is_group_admin(event)
+            and is_purge_announcement(event)
+        ):
+            # 管理员 @全体成员 宣布清理不活跃成员 → 冷却后立即发保活消息。
+            now = time.monotonic()
+            last_purge = _purge_keepalive_last.get(group_id)
+            if last_purge is None or now - last_purge >= PURGE_KEEPALIVE_COOLDOWN_SECONDS:
+                await _send_group_message(ws, group_id, config.keepalive_message)
+                _purge_keepalive_last[group_id] = now
+                _group_activity[group_id] = time.time()
     if is_blocked_event(event, config):
         return False
     echo_text = echo_reply_text(event, config)
@@ -496,11 +526,58 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
     if config.relay_enabled:
         from .relay import relay_event
         asyncio.create_task(relay_event(ws, store, event, config))
-    if event.get('message_type') == 'private' and is_forward_event(event):
-        from .favorites import maybe_save_private_forward
-        asyncio.create_task(maybe_save_private_forward(ws, store, event, config))
     if not should_reply(event, config.bot):
         return False
+    from .favorites import format_save_images_result, parse_save_images_command, save_replied_forward_images
+    command_text = extract_text(event)
+    save_category = parse_save_images_command(command_text)
+    if save_category is not None:
+        result = await save_replied_forward_images(store, event, config)
+        await send_reply(ws, event, format_save_images_result(result, config.language))
+        if result.get('saved', 0):
+            request_image_sync()
+        return True
+    repair_command = parse_repair_images_command(command_text)
+    if repair_command is not False:
+        if event.get('message_type') != 'private':
+            reply_text = (
+                'The repair images command only works in private chat.'
+                if config.language == 'en-US'
+                else '“修复图片”只能在私聊中使用。'
+            )
+            await send_reply(ws, event, reply_text)
+            return True
+        from .image_repair import repair_damaged_images, repair_image
+        tmp_dir = Path(config.data_dir) / 'tmp'
+        archive_root = Path(config.data_dir) / 'images' / 'ai'
+        if repair_command is None:
+            result = await asyncio.to_thread(
+                repair_damaged_images,
+                store,
+                tmp_dir=tmp_dir,
+                archive_root=archive_root,
+            )
+            reply_text = (
+                f"损坏图片扫描完成：扫描 {result['scanned']} 张，发现损坏 {result['damaged']} 张，"
+                f"修复 {result['repaired']} 张，失败 {result['failed']} 张。"
+            )
+            if result['repaired']:
+                request_image_sync()
+        else:
+            result = await asyncio.to_thread(
+                repair_image,
+                store,
+                repair_command,
+                tmp_dir=tmp_dir,
+                archive_root=archive_root,
+            )
+            if result.get('status') == 'repaired':
+                reply_text = f"图片 #{repair_command} 已重新下载并校验完成。"
+                request_image_sync()
+            else:
+                reply_text = f"图片 #{repair_command} 修复失败：{result.get('reason', '未知错误')}"
+        await send_reply(ws, event, reply_text)
+        return True
     def load_aware_view_builder():
         from .build_image_view import stale_view_counts
         if not load_aware_ok(config):
@@ -602,7 +679,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             control.write_status(
                 {"napcat": control.port_open(control.NAPCAT_PORT),
                  "onebot": False, "bot": False,
-                 "qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
+                 "qqLoggedIn": False, "qqNumber": "", "qqNickname": "",
+                 "manualStop": control.manual_stop_requested()}
             )
         print(f'OneBot disconnected; reconnecting in {retry_delay}s')
         await asyncio.sleep(retry_delay)

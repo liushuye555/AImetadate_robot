@@ -102,6 +102,8 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('images.obfuscation_threshold', 'number', images.get('obfuscation_threshold', 10), 'Obfuscation match threshold', '混淆匹配阈值（汉明距离）', section='advanced', min=1, max=20),
         field('images.reencode_threshold', 'number', images.get('reencode_threshold', 6.5), 'Re-encode blockiness threshold', '重编码疑似阈值（块状伪影）', section='advanced', min=1, max=20),
         field('images.ai_discussion_judge', 'select', images.get('ai_discussion_judge', 'rule'), 'Discussion judge mode', '参数讨论判定模式', section='advanced', options=['rule', 'llm', 'both']),
+        field('images.vision_recheck_enabled', 'bool', images.get('vision_recheck_enabled', False), 'Vision recheck (DeepSeek)', '视觉复核错分图（DeepSeek）', section='advanced'),
+        field('images.vision_recheck_batch', 'number', images.get('vision_recheck_batch', 20), 'Recheck batch size', '每轮复核张数', section='advanced', min=1, max=200),
         field('images.prompt_judge', 'select', images.get('prompt_judge', 'rule'), 'Prompt binding judge mode', '提示词绑定复核模式', section='advanced', options=['rule', 'llm', 'both']),
         field('images.ignore_bot_user_ids', 'list', list(images.get('ignore_bot_user_ids') or []),
               'Ignore bot user IDs', '忽略的机器人账号（图片直接无视）', section='advanced'),

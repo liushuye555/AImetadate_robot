@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS images (
   text_excerpt TEXT,
   kept_path TEXT,
   retention_reason TEXT,
+  saved_category TEXT,
   raw_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_images_scope_id ON images(scope, id);
@@ -127,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_context_scope_id ON ai_context_batches(scope, 
 
 CREATE TABLE IF NOT EXISTS link_metadata (
   url_key TEXT PRIMARY KEY,
+  resolved_url TEXT,
   title TEXT,
   description TEXT,
   fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -249,18 +251,29 @@ class Store:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_obfuscated INTEGER')
         if 'xfq_confidence' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_confidence TEXT')
+
         image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)').fetchall()}
         if 'restored_path' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN restored_path TEXT')
         if 'deobfuscated' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN deobfuscated INTEGER DEFAULT 0')
+        if 'vision_checked' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN vision_checked INTEGER DEFAULT 0')
+        if 'vision_verdict' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN vision_verdict TEXT')
         if 'bound_prompt' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN bound_prompt TEXT')
         if 'prompt_key' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN prompt_key TEXT')
         if 'context_reason' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN context_reason TEXT')
+        if 'saved_category' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN saved_category TEXT')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_images_saved_category ON images(saved_category, id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_images_prompt_key ON images(prompt_key)')
+        metadata_cols = {row[1] for row in conn.execute('PRAGMA table_info(link_metadata)').fetchall()}
+        if 'resolved_url' not in metadata_cols:
+            conn.execute('ALTER TABLE link_metadata ADD COLUMN resolved_url TEXT')
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
@@ -319,9 +332,9 @@ class Store:
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
-                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, restored_path,
+                  has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, saved_category, restored_path,
                   deobfuscated, bound_prompt, prompt_key, context_reason, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -337,12 +350,75 @@ class Store:
                     result.get('text_excerpt'),
                     kept_path,
                     result.get('retention_reason'),
-                    result.get('restored_path'),
+                    result.get('saved_category'),
+                     result.get('restored_path'),
                     1 if result.get('deobfuscated') else 0,
                     result.get('bound_prompt'),
                     result.get('prompt_key'),
                     result.get('context_reason'),
                     json.dumps(raw, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+
+    def get_image_record(self, image_id: int) -> dict[str, Any] | None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                '''SELECT id, scope, url, sha256, size, format, width, height, metadata_keys_json,
+                          has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason,
+                          saved_category, prompt_key, raw_json
+                   FROM images WHERE id = ?''',
+                (int(image_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            raw = json.loads(row[16] or '{}')
+        except Exception:
+            raw = {}
+        try:
+            metadata_keys = json.loads(row[8] or '[]')
+        except Exception:
+            metadata_keys = []
+        return {
+            'id': row[0], 'scope': row[1] or '', 'url': row[2] or '', 'sha256': row[3] or '', 'size': row[4] or 0,
+            'format': row[5] or '', 'width': row[6], 'height': row[7],
+            'metadata_keys': metadata_keys, 'has_ai_metadata': bool(row[9]),
+            'ai_source': row[10] or '', 'text_excerpt': row[11] or '', 'kept_path': row[12] or '',
+            'retention_reason': row[13] or '', 'saved_category': row[14] or '', 'prompt_key': row[15] or '', 'raw': raw,
+        }
+
+
+    def same_batch_image_records(self, image_id: int) -> list[dict[str, Any]]:
+        record = self.get_image_record(int(image_id))
+        if not record or not record.get('prompt_key'):
+            return []
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                "SELECT id FROM images WHERE scope = ? AND prompt_key = ? AND id <> ?"
+                " AND retention_reason = 'ai_metadata' AND kept_path IS NOT NULL ORDER BY id",
+                (str(record.get('scope') or ''), str(record['prompt_key']), int(image_id)),
+            ).fetchall()
+        return [candidate for row in rows
+                if (candidate := self.get_image_record(int(row[0]))) is not None]
+
+    def update_repaired_image(self, image_id: int, result: dict[str, Any]) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                '''UPDATE images SET
+                   url = ?, sha256 = ?, size = ?, format = ?, width = ?, height = ?,
+                   metadata_keys_json = ?, has_ai_metadata = ?, ai_source = ?, text_excerpt = ?,
+                   prompt_key = ?, kept_path = ?
+                   WHERE id = ?''',
+                (
+                    str(result.get('url') or ''), str(result.get('sha256') or ''),
+                    int(result.get('size') or 0), str(result.get('format') or ''),
+                    result.get('width'), result.get('height'),
+                    json.dumps(result.get('metadata_keys') or [], ensure_ascii=False),
+                    1 if result.get('has_ai_metadata') else 0,
+                    str(result.get('ai_source') or ''), str(result.get('text_excerpt') or ''),
+                    str(result.get('prompt_key') or ''), str(result.get('kept_path') or ''),
+                    int(image_id),
                 ),
             )
             conn.commit()
@@ -721,21 +797,35 @@ class Store:
     def get_link_metadata(self, url_key: str) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
             row = conn.execute(
-                'SELECT url_key, title, description, fetched_at, error FROM link_metadata WHERE url_key = ?',
+                'SELECT url_key, resolved_url, title, description, fetched_at, error FROM link_metadata WHERE url_key = ?',
                 (str(url_key),),
             ).fetchone()
         if not row:
             return None
-        return {'url_key': row[0], 'title': row[1] or '', 'description': row[2] or '', 'fetched_at': row[3] or '', 'error': row[4] or ''}
+        return {
+            'url_key': row[0], 'resolved_url': row[1] or '', 'title': row[2] or '',
+            'description': row[3] or '', 'fetched_at': row[4] or '', 'error': row[5] or '',
+        }
 
-    def save_link_metadata(self, url_key: str, title: str, description: str, error: str = '') -> None:
+    def save_link_metadata(
+        self,
+        url_key: str,
+        title: str,
+        description: str,
+        error: str = '',
+        resolved_url: str = '',
+    ) -> None:
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute(
-                '''INSERT INTO link_metadata (url_key, title, description, fetched_at, error)
-                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-                   ON CONFLICT(url_key) DO UPDATE SET title = excluded.title,
-                     description = excluded.description, fetched_at = excluded.fetched_at, error = excluded.error''',
-                (str(url_key), str(title or ''), str(description or ''), str(error or '')),
+                '''INSERT INTO link_metadata (url_key, resolved_url, title, description, fetched_at, error)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                   ON CONFLICT(url_key) DO UPDATE SET resolved_url = excluded.resolved_url,
+                     title = excluded.title, description = excluded.description,
+                     fetched_at = excluded.fetched_at, error = excluded.error''',
+                (
+                    str(url_key), str(resolved_url or ''), str(title or ''),
+                    str(description or ''), str(error or ''),
+                ),
             )
             conn.commit()
 
@@ -810,10 +900,51 @@ class Store:
 
     def image_records_with_paths(self) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as conn:
-            rows = conn.execute(
-                'SELECT id, kept_path, retention_reason, has_ai_metadata FROM images WHERE kept_path IS NOT NULL ORDER BY id'
-            ).fetchall()
-        return [{'id': r[0], 'kept_path': r[1], 'retention_reason': r[2], 'has_ai_metadata': bool(r[3])} for r in rows]
+            rows = conn.execute('SELECT id FROM images WHERE kept_path IS NOT NULL ORDER BY id').fetchall()
+        return [record for row in rows if (record := self.get_image_record(int(row[0]))) is not None]
+
+    def has_saved_image(self, sha256: str, category: str) -> bool:
+        if not sha256 or not category:
+            return False
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM images WHERE sha256 = ? AND retention_reason = 'chat_record_saved' AND saved_category = ? LIMIT 1",
+                (str(sha256), str(category)),
+            ).fetchone()
+        return row is not None
+
+    def saved_image_records(self, user_id: str | None = None, *, category: str | None = None,
+                            limit: int = 5000) -> list[dict[str, Any]]:
+        sql = (
+            'SELECT id, scope, user_id, seen_at, url, sha256, size, format, width, height, '
+            'kept_path, retention_reason, saved_category, raw_json '
+            "FROM images WHERE retention_reason = 'chat_record_saved'"
+        )
+        args: list[Any] = []
+        if user_id is not None:
+            sql += ' AND user_id = ?'
+            args.append(str(user_id))
+        if category is not None:
+            sql += ' AND saved_category = ?'
+            args.append(str(category))
+        sql += ' ORDER BY id DESC LIMIT ?'
+        args.append(int(limit))
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(sql, args).fetchall()
+        result = []
+        for row in rows:
+            try:
+                raw = json.loads(row[13] or '{}')
+            except Exception:
+                raw = {}
+            result.append({
+                'id': row[0], 'scope': row[1], 'user_id': row[2], 'seen_at': row[3] or '',
+                'url': row[4] or '', 'sha256': row[5] or '', 'size': row[6] or 0,
+                'format': row[7] or '', 'width': row[8], 'height': row[9],
+                'kept_path': row[10] or '', 'retention_reason': row[11] or '',
+                'saved_category': row[12] or '', 'raw': raw,
+            })
+        return result
 
     def latest_candidate_image(self, scope: str) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
@@ -981,6 +1112,41 @@ class Store:
         if not row or row[0] is None:
             return None
         return (float(row[0]), int(row[1]) if row[1] is not None else None, bool(row[2]), row[3])
+
+    def set_vision_verdict(self, verdict: str, image_id: int) -> None:
+        """缓存视觉复核结果（一张图只花一次 token）。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                'UPDATE images SET vision_verdict = ?, vision_checked = 1 WHERE id = ?',
+                (verdict, int(image_id)),
+            )
+            conn.commit()
+
+    def vision_unchecked_images(self, *, categories: tuple[str, ...], limit: int = 20) -> list[tuple]:
+        """未做过视觉复核的图：(id, sha256, kept_path, context, category)。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.row_factory = sqlite3.Row
+            placeholders = ', '.join('?' for _ in categories)
+            rows = conn.execute(
+                "SELECT id, COALESCE(sha256, ''), COALESCE(kept_path, ''), "
+                "COALESCE(bound_prompt, text_excerpt, ''), retention_reason FROM images "
+                "WHERE retention_reason IN (" + placeholders + ") "
+                "AND kept_path IS NOT NULL "
+                "AND (vision_checked IS NULL OR vision_checked = 0) "
+                "ORDER BY id DESC LIMIT ?",
+                (*categories, int(limit)),
+            ).fetchall()
+        return [(r['id'], r[1], r[2], r[3], r['retention_reason']) for r in rows]
+
+    def demote_image_to_candidate(self, image_id: int) -> None:
+        """视觉判定图不对：降到 04_候选待观察（数据不删，报告可见）。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute(
+                "UPDATE images SET retention_reason = 'candidate', "
+                "bound_prompt = NULL, vision_checked = 1 WHERE id = ?",
+                (int(image_id),),
+            )
+            conn.commit()
 
     def archive_hashes(self, limit: int = 20000) -> list[tuple[int, str]]:
         """返回 AI 归档图片的 (phash, sha256) 列表。"""

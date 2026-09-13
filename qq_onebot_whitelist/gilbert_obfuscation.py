@@ -39,7 +39,7 @@ RESTORE_WEAK = 1.02         # 逆置换后 TV 不升反降/持平 → 疑似（�
 RATIO_WEAK_MAX = 0.95       # 疑似档的 ratio 上限
 RATIO_FALLBACK = 0.30       # 超大图无法逆置换时的严格 ratio 兜底
 MAX_LAYERS = 3              # 尝试解混淆的最大层数
-MAX_RESTORE_PIXELS = 6_000_000  # 超过此像素数不做逆置换（内存/耗时）
+MAX_RESTORE_PIXELS = MAX_PIXELS  # 检测到的图片都允许进入还原；超大图仍由 MAX_PIXELS 拦截
 
 # 曲线顺序缓存：按 (w, h) 存 array('I')，总量上限约 64MB，超出清空
 MAX_CACHE_BYTES = 64 * 1024 * 1024

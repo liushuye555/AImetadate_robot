@@ -154,6 +154,12 @@ def test_detector_marks_resized_obfuscated_as_possible(tmp_path):
     assert result['confidence'] == 'possible'
 
 
+def test_restore_limit_covers_detector_supported_image_size():
+    from qq_onebot_whitelist import gilbert_obfuscation as module
+
+    assert module.MAX_RESTORE_PIXELS >= module.MAX_PIXELS
+
+
 def test_oversized_image_skipped(tmp_path):
     w, h = 3000, 3000  # 9MP > 上限，正常情况会跳过
     raw = bytes(64 for _ in range(w * h))

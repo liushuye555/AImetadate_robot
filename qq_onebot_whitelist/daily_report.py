@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from .scope_names import display_scope
 from .content_utils import fallback_link_description, file_description, redact_secrets, resource_context
 from .link_metadata import get_or_fetch_link_metadata
-from .resources import deterministic_category, domain_profiles, site_key
+from .resources import deterministic_category, domain_profiles, link_category, nearest_link_context, site_key
 from .i18n import text as tr
 
 
@@ -48,6 +48,7 @@ TRACKING_QUERY_KEYS = {
     'share_tag', 'spm_id_from', 'srcid', 'trackid', 'uct2', 'vd_source',
 }
 MAX_ENRICHED_LINKS = 8
+DAILY_MUTED_CATEGORIES = {'音乐', '音乐视频', '娱乐视频', '图片'}
 
 
 def split_message(text: str, *, max_chars: int = 1800) -> list[str]:
@@ -87,7 +88,7 @@ def canonical_url(url: str) -> str:
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         if key.lower() not in TRACKING_QUERY_KEYS and key.lower() != 'utm' and not key.lower().startswith('utm_')
     ]
-    path = parsed.path if parsed.fragment else (parsed.path.rstrip('/') or parsed.path)
+    path = parsed.path if parsed.fragment else parsed.path.rstrip('/')
     return urlunparse((parsed.scheme.lower() or 'https', host, path, '', urlencode(query), parsed.fragment))
 
 
@@ -201,8 +202,12 @@ def build_daily_resource_report(
         url = str(item.get('url') or '')
         if not url:
             continue
+        nearby_context = nearest_link_context(url, context)
+        category = link_category(url, nearby_context)
+        if category in DAILY_MUTED_CATEGORIES:
+            continue
         det = deterministic_category(profiles.get(site_key(urlparse(url).netloc)))
-        if is_low_value_link(url, context) and not (det and det not in ('娱乐视频', '其他')):
+        if is_low_value_link(url, context) and category not in ('AI教程视频', 'AI资讯视频', '音乐视频') and not (det and det not in ('娱乐视频', '其他')):
             continue
         score = link_score(item) if analyze_links else 0
         key = dedupe_url_key(url)
@@ -212,6 +217,7 @@ def build_daily_resource_report(
             new_item['_score'] = score
             new_item['purpose'] = (link_purpose(new_item) if analyze_links else '') or ('值得一看' if det else '')
             new_item['canonical_url'] = canonical_url(url)
+            new_item['category'] = category
             deduped_links[key] = new_item
 
     selected_files = list(deduped_files.values())
@@ -229,7 +235,7 @@ def build_daily_resource_report(
         lines.append(tr('daily_links', language))
         for index, item in enumerate(selected_links):
             should_enrich = enrich_links and index < max(0, int(max_enriched_links))
-            lines.append(f'- {item.get("canonical_url") or item.get("url")} · {describe_link_context(item, store, enrich_links=should_enrich, analyze_links=analyze_links)}')
+            lines.append(f'- [{item.get("category") or "其他"}] {item.get("canonical_url") or item.get("url")} · {describe_link_context(item, store, enrich_links=should_enrich, analyze_links=analyze_links)}')
     return redact_secrets('\n'.join(lines))
 
 

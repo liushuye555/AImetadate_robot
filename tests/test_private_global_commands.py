@@ -40,3 +40,14 @@ def test_private_image_info_reads_all_scopes(tmp_path):
 
     assert 'ComfyUI' in reply
     assert '512x768' in reply
+
+
+def test_favorites_command_explains_explicit_chat_record_save(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.save_favorite(user_id='200000001', content_hash='legacy', summary='旧版收藏')
+
+    reply = build_reply(private_event('收藏夹'), store)
+
+    assert '/保存图片' in reply
+    assert '未分类' in reply
+    assert '旧版收藏' not in reply

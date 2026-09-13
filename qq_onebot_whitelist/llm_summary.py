@@ -50,7 +50,7 @@ def _read_env_values(path: str | Path) -> dict[str, str]:
 class LLMConfig:
     base_url: str
     api_key: str
-    model: str = 'deepseek-v4-flash'
+    model: str = 'deepseek-flash'
     timeout_seconds: int = 60
 
     @classmethod
@@ -58,7 +58,7 @@ class LLMConfig:
         file_cfg = cls.from_env_file(Path.cwd() / '.env')
         base_url = os.environ.get('OPENROUTER_BASE_URL') or os.environ.get('SUMMARY_LLM_BASE_URL') or os.environ.get('DS_V4_FLASH_BASE_URL') or os.environ.get('HUANYAN_BASE_URL') or os.environ.get('OPENAI_BASE_URL') or (file_cfg.base_url if file_cfg else None)
         api_key = os.environ.get('OPENROUTER_API_KEY') or os.environ.get('SUMMARY_LLM_API_KEY') or os.environ.get('DS_V4_FLASH_API_KEY') or os.environ.get('HUANYAN_API_KEY') or os.environ.get('OPENAI_API_KEY') or (file_cfg.api_key if file_cfg else None)
-        model = os.environ.get('OPENROUTER_MODEL') or os.environ.get('SUMMARY_LLM_MODEL') or os.environ.get('DS_V4_FLASH_MODEL') or os.environ.get('HUANYAN_MODEL') or os.environ.get('OPENAI_MODEL') or (file_cfg.model if file_cfg else None) or 'deepseek-v4-flash'
+        model = os.environ.get('OPENROUTER_MODEL') or os.environ.get('SUMMARY_LLM_MODEL') or os.environ.get('DS_V4_FLASH_MODEL') or os.environ.get('HUANYAN_MODEL') or os.environ.get('OPENAI_MODEL') or (file_cfg.model if file_cfg else None) or 'deepseek-flash'
         if not base_url or not api_key:
             return None
         return cls(base_url=normalize_base_url(base_url), api_key=api_key, model=model)
@@ -71,7 +71,7 @@ class LLMConfig:
         values = _read_env_values(path)
         base_url = os.environ.get('OPENROUTER_BASE_URL') or os.environ.get('SUMMARY_LLM_BASE_URL') or os.environ.get('DS_V4_FLASH_BASE_URL') or os.environ.get('HUANYAN_BASE_URL') or os.environ.get('OPENAI_BASE_URL') or values.get('OPENROUTER_BASE_URL') or values.get('SUMMARY_LLM_BASE_URL') or values.get('DS_V4_FLASH_BASE_URL') or values.get('HUANYAN_BASE_URL') or values.get('OPENAI_BASE_URL')
         api_key = os.environ.get('OPENROUTER_API_KEY') or os.environ.get('SUMMARY_LLM_API_KEY') or os.environ.get('DS_V4_FLASH_API_KEY') or os.environ.get('HUANYAN_API_KEY') or os.environ.get('OPENAI_API_KEY') or values.get('OPENROUTER_API_KEY') or values.get('SUMMARY_LLM_API_KEY') or values.get('DS_V4_FLASH_API_KEY') or values.get('HUANYAN_API_KEY') or values.get('OPENAI_API_KEY')
-        model = os.environ.get('OPENROUTER_MODEL') or os.environ.get('SUMMARY_LLM_MODEL') or os.environ.get('DS_V4_FLASH_MODEL') or os.environ.get('HUANYAN_MODEL') or os.environ.get('OPENAI_MODEL') or values.get('OPENROUTER_MODEL') or values.get('SUMMARY_LLM_MODEL') or values.get('DS_V4_FLASH_MODEL') or values.get('HUANYAN_MODEL') or values.get('OPENAI_MODEL') or 'deepseek-v4-flash'
+        model = os.environ.get('OPENROUTER_MODEL') or os.environ.get('SUMMARY_LLM_MODEL') or os.environ.get('DS_V4_FLASH_MODEL') or os.environ.get('HUANYAN_MODEL') or os.environ.get('OPENAI_MODEL') or values.get('OPENROUTER_MODEL') or values.get('SUMMARY_LLM_MODEL') or values.get('DS_V4_FLASH_MODEL') or values.get('HUANYAN_MODEL') or values.get('OPENAI_MODEL') or 'deepseek-flash'
         if not base_url or not api_key:
             return None
         return cls(base_url=normalize_base_url(base_url), api_key=api_key, model=model)
@@ -82,7 +82,7 @@ class LLMConfig:
         values = _read_env_values(path)
         base_url = os.environ.get('DS_V4_FLASH_BASE_URL') or values.get('DS_V4_FLASH_BASE_URL')
         api_key = os.environ.get('DS_V4_FLASH_API_KEY') or values.get('DS_V4_FLASH_API_KEY')
-        model = os.environ.get('DS_V4_FLASH_MODEL') or values.get('DS_V4_FLASH_MODEL') or 'deepseek-v4-flash'
+        model = os.environ.get('DS_V4_FLASH_MODEL') or values.get('DS_V4_FLASH_MODEL') or 'deepseek-flash'
         if not base_url or not api_key:
             return None
         return cls(base_url=normalize_base_url(base_url), api_key=api_key, model=model)

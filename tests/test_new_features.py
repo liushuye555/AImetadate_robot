@@ -5,32 +5,33 @@ from qq_onebot_whitelist.config import load_config
 from qq_onebot_whitelist.daily_report import build_daily_resource_report
 
 
-def text_event(group: str, text: str) -> dict:
+def text_event(group: str, text: str, user_id: str = "u1") -> dict:
     return {
         "post_type": "message",
         "message_type": "group",
         "group_id": group,
-        "user_id": "u1",
+        "user_id": user_id,
         "message": [{"type": "text", "data": {"text": text}}],
     }
 
 
 def test_echo_triggers_after_min_repeat():
     onebot._echo_state.clear()
+    onebot._echo_last.clear()
     config = AppConfig(echo_enabled=True, echo_min_repeat=3, echo_window_seconds=60)
-    event = text_event("1", "同一句话")
-    assert onebot.echo_reply_text(event, config) is None
-    assert onebot.echo_reply_text(event, config) is None
-    assert onebot.echo_reply_text(event, config) == "同一句话"
+    assert onebot.echo_reply_text(text_event("1", "同一句话", "u1"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "同一句话", "u2"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "同一句话", "u3"), config) == "同一句话"
 
 
 def test_echo_respects_group_allowlist():
     onebot._echo_state.clear()
+    onebot._echo_last.clear()
     config = AppConfig(echo_enabled=True, echo_min_repeat=2, echo_window_seconds=60, echo_groups={"9"})
-    assert onebot.echo_reply_text(text_event("1", "x"), config) is None
-    assert onebot.echo_reply_text(text_event("1", "x"), config) is None  # 群1不在白名单，永不触发
-    assert onebot.echo_reply_text(text_event("9", "x"), config) is None
-    assert onebot.echo_reply_text(text_event("9", "x"), config) == "x"
+    assert onebot.echo_reply_text(text_event("1", "x", "u1"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "x", "u2"), config) is None  # 群1不在白名单，永不触发
+    assert onebot.echo_reply_text(text_event("9", "x", "u1"), config) is None
+    assert onebot.echo_reply_text(text_event("9", "x", "u2"), config) == "x"
 
 
 def test_echo_disabled_by_default():
@@ -43,19 +44,19 @@ def test_echo_interleaved_text_resets():
     onebot._echo_state.clear()
     onebot._echo_last.clear()
     config = AppConfig(echo_enabled=True, echo_min_repeat=2, echo_window_seconds=0)
-    assert onebot.echo_reply_text(text_event("1", "aaa"), config) is None
-    assert onebot.echo_reply_text(text_event("1", "bbb"), config) is None
-    assert onebot.echo_reply_text(text_event("1", "aaa"), config) is None  # 被 bbb 打断，不连续
-    assert onebot.echo_reply_text(text_event("1", "aaa"), config) == "aaa"  # 连续两条 aaa 触发
+    assert onebot.echo_reply_text(text_event("1", "aaa", "u1"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "bbb", "u2"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "aaa", "u3"), config) is None  # 被 bbb 打断，不连续
+    assert onebot.echo_reply_text(text_event("1", "aaa", "u4"), config) == "aaa"  # 连续两条 aaa 触发
 
 
 def test_echo_unlimited_window_consecutive():
     onebot._echo_state.clear()
     onebot._echo_last.clear()
     config = AppConfig(echo_enabled=True, echo_min_repeat=3, echo_window_seconds=0)
-    assert onebot.echo_reply_text(text_event("1", "x"), config) is None
-    assert onebot.echo_reply_text(text_event("1", "x"), config) is None
-    assert onebot.echo_reply_text(text_event("1", "x"), config) == "x"
+    assert onebot.echo_reply_text(text_event("1", "x", "u1"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "x", "u2"), config) is None
+    assert onebot.echo_reply_text(text_event("1", "x", "u3"), config) == "x"
 
 
 def test_cmd_view_list_prints_categories(tmp_path, monkeypatch, capsys):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import subprocess
 import time
@@ -15,6 +16,7 @@ STATUS_PATH = RUN_DIR / "status.json"
 PAUSE_MARKER = RUN_DIR / "collection-paused"
 NAPCAT_PORT = 6099
 ONEBOT_PORT = 3001
+STATUS_STALE_SECONDS = 90
 
 
 def status_path() -> Path:
@@ -44,7 +46,95 @@ def port_open(port: int, timeout: float = 0.5) -> bool:
         return False
 
 
-def start_services() -> None:
+def manual_stop_path() -> Path:
+    return RUN_DIR / "manual-stop"
+
+
+def manual_stop_requested() -> bool:
+    return manual_stop_path().exists()
+
+
+def _windows_pid_running(pid: int) -> bool:
+    """Probe a Windows PID without sending a signal or terminating it."""
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    SYNCHRONIZE = 0x00100000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = wintypes.DWORD()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))) and exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def pid_running(pid_path: Path) -> bool:
+    """Return whether the PID recorded by the manager is still alive."""
+    try:
+        pid = int(pid_path.read_text(encoding="ascii").strip())
+    except (FileNotFoundError, OSError, ValueError, OverflowError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            return _windows_pid_running(pid)
+        except (OSError, RuntimeError):
+            return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+    return True
+
+
+def live_status() -> dict:
+    """Probe current service liveness without trusting the heartbeat file."""
+    try:
+        cached = load_status()
+    except (OSError, ValueError, json.JSONDecodeError):
+        cached = {}
+    onebot = port_open(ONEBOT_PORT)
+    cached_identity = {}
+    try:
+        updated_at = datetime.fromisoformat(str(cached.get("updatedAt") or "").replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.astimezone()
+        age = (datetime.now().astimezone() - updated_at.astimezone()).total_seconds()
+        if 0 <= age <= STATUS_STALE_SECONDS:
+            cached_identity = cached
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return {
+        "napcat": port_open(NAPCAT_PORT),
+        "onebot": onebot,
+        "bot": pid_running(RUN_DIR / "bot.pid"),
+        # NapCat exposes OneBot only after QQ login; this is the same liveness
+        # contract used by status_writer_loop.
+        "qqLoggedIn": onebot,
+        "qqNumber": str(cached_identity.get("qqNumber") or "") if onebot else "",
+        "qqNickname": str(cached_identity.get("qqNickname") or "") if onebot else "",
+        "collectionPaused": collection_paused(),
+        "manualStop": manual_stop_requested(),
+        "updatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+
+
+def start_services(*, clear_manual_stop: bool = False) -> None:
     """启动 NapCat 与机器人（迁移自 start-qq-onebot-whitelist-hidden.ps1 的核心逻辑）。"""
     napcat_dir = REPO_ROOT / "runtime" / "NapCat.Shell.Windows.Node"
     napcat_bat = napcat_dir / "napcat.bat"
@@ -85,9 +175,26 @@ def start_services() -> None:
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).pid
     (RUN_DIR / "bot.pid").write_text(str(bot_pid), encoding="ascii")
+    if clear_manual_stop:
+        manual_stop_path().unlink(missing_ok=True)
 
 
 def stop_services() -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    # Publish the intentional-stop marker and heartbeat before terminating any
+    # child process. Otherwise the Qt auto-restart monitor can observe the
+    # brief "services down" window and launch a second instance.
+    manual_stop_path().write_text("stop", encoding="ascii")
+    write_status({
+        "napcat": False,
+        "onebot": False,
+        "bot": False,
+        "qqLoggedIn": False,
+        "qqNumber": "",
+        "qqNickname": "",
+        "collectionPaused": collection_paused(),
+        "manualStop": True,
+    })
     for name in ("napcat.pid", "bot.pid"):
         pid_path = RUN_DIR / name
         if not pid_path.exists():
@@ -100,7 +207,7 @@ def stop_services() -> None:
 
 def cmd_start(args: argparse.Namespace) -> int:
     try:
-        start_services()
+        start_services(clear_manual_stop=True)
         return 0
     except Exception as exc:
         print(f"start failed: {type(exc).__name__}: {exc}")
@@ -124,6 +231,8 @@ def cmd_restart(args: argparse.Namespace) -> int:
 def cmd_bot_restart(args: argparse.Namespace) -> int:
     """只重启 bot（不动 NapCat，避免重新扫码）；面板保存配置后调用。"""
     pid_path = RUN_DIR / 'bot.pid'
+    if manual_stop_requested():
+        return 0
     if pid_path.exists():
         pid = pid_path.read_text(encoding='ascii').strip()
         if pid.isdigit():
@@ -251,6 +360,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live_status(args: argparse.Namespace) -> int:
+    print(json.dumps(live_status(), ensure_ascii=False))
+    return 0
+
+
 def collection_paused() -> bool:
     return PAUSE_MARKER.exists()
 
@@ -305,6 +419,20 @@ def cmd_custom(args: argparse.Namespace) -> int:
         store = Store(config.data_dir / "bot.db")
         rows = store.recent_custom_collections(rule=args.rule or None, limit=50)
         print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
+def cmd_vision_recheck(args: argparse.Namespace) -> int:
+    """手动跑一批 DeepSeek 视觉复核（force=True 绕过错峰窗口限制）。"""
+    try:
+        from .config import load_config
+        from .vision_recheck import recheck_batch
+        result = recheck_batch(REPO_ROOT, load_config(REPO_ROOT / 'config.yaml'),
+                               limit=max(1, int(args.limit)), force=not args.respect_window)
+        print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as exc:
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
@@ -366,11 +494,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="print run/status.json")
+    sub.add_parser("live-status", help="probe current service liveness")
     collection_parser = sub.add_parser("collection", help="pause/resume collection")
     collection_parser.add_argument("state", choices=("on", "off"))
     custom_parser = sub.add_parser("custom", help="inspect custom collection records")
     custom_parser.add_argument("--rule", default=None, help="filter by rule name")
     sub.add_parser("view", help="rebuild report views")
+    vision = sub.add_parser("vision-recheck", help="visually recheck misclassified 02/03 images")
+    vision.add_argument("--limit", default="20")
+    vision.add_argument("--respect-window", action="store_true")
     sub.add_parser("view-list", help="list existing report categories")
     sub.add_parser("start")
     sub.add_parser("stop")
@@ -394,9 +526,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "status": cmd_status,
+        "live-status": cmd_live_status,
         "collection": cmd_collection,
         "custom": cmd_custom,
         "view": cmd_view,
+        "vision-recheck": cmd_vision_recheck,
         "view-list": cmd_view_list,
         "start": cmd_start,
         "stop": cmd_stop,

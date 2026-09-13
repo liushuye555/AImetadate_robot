@@ -6,6 +6,31 @@ import re
 
 WINDOW_RE = re.compile(r'^(\d{2}):(\d{2})-(\d{2}):(\d{2})$')
 
+WEEKDAY_KEYS = {'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6}
+_WEEKDAY_ALIASES = {'周六': 'sat', '周日': 'sun', '星期六': 'sat', '星期日': 'sun',
+                    'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed',
+                    'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat', 'sunday': 'sun'}
+
+
+def normalize_weekdays(items) -> list[str]:
+    """归一星期标识为 mon/tue/... 列表；无效项忽略。"""
+    result = []
+    for item in items or ():
+        key = str(item).strip().lower()
+        key = _WEEKDAY_ALIASES.get(key, key)
+        if key in WEEKDAY_KEYS and key not in result:
+            result.append(key)
+    return result
+
+
+def all_day_today(weekdays, now: datetime) -> bool:
+    """now 的星期是否在全天允许列表里（如 DeepSeek 周末全天错峰）。"""
+    enabled = normalize_weekdays(weekdays)
+    if not enabled:
+        return False
+    keys = list(WEEKDAY_KEYS)
+    return keys[now.weekday()] in enabled
+
 
 def normalize_time_windows(windows: list[str]) -> list[str]:
     result = []

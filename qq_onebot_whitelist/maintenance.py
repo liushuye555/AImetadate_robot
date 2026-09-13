@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .build_image_view import build_view
-from .gilbert_obfuscation import safe_restore
+from .gilbert_obfuscation import analyze_image, safe_restore
 from .resource_view import write_resource_pages
 from .store import Store
 
@@ -253,9 +253,40 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
             if not path.exists():
                 continue
             cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-            if not (cached and cached[2] and cached[3] == 'confirmed'):
-                continue
-            layers = cached[1]
+            if cached is not None and cached[3] is not None:
+                # 已分析过（含负结果）：直接复用缓存，避免每轮同步全量重分析
+                if cached[2] and cached[3] == 'confirmed':
+                    layers = cached[1]
+                else:
+                    continue
+            else:
+                # 存量 02/03 图片可能从未写入 image_hashes；先现场检测，避免
+                # 只有新采集图片才能自动解混淆。
+                try:
+                    detected = analyze_image(path)
+                except Exception:
+                    detected = None
+                if not (detected and detected.get('obfuscated') and detected.get('confidence') == 'confirmed'):
+                    # 负结果同样落缓存：本轮分析一次，后续同步直接跳过
+                    if detected is not None and sha256:
+                        try:
+                            store.save_obfuscation_score(
+                                str(sha256), ratio=float(detected.get('ratio') or 0.0),
+                                layers=detected.get('layers'), obfuscated=False,
+                                confidence=detected.get('confidence') or 'none',
+                            )
+                        except Exception:
+                            pass
+                    continue
+                layers = detected.get('layers')
+                if sha256:
+                    try:
+                        store.save_obfuscation_score(
+                            str(sha256), ratio=float(detected['ratio']),
+                            layers=layers, obfuscated=True, confidence='confirmed',
+                        )
+                    except Exception:
+                        pass
             try:
                 tmp_dir = project_dir / 'data' / 'tmp'
                 tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -480,8 +511,16 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     prompt_judge_reclassified = reclassify_prompt_judge(project_dir, mode=config.prompt_judge_mode)
     params_judge_reclassified = reclassify_params_judge(project_dir, mode=config.ai_discussion_judge)
     empty_candidate_dirs = prune_empty_dirs(project_dir / 'data' / 'images' / 'candidates')
+    # DeepSeek 视觉复核 02/03 类错分图（默认关；限批 + 只在错峰窗口跑，省 token）
+    vision_stats = {'vision_checked': 0, 'vision_demoted': 0}
+    try:
+        from .vision_recheck import recheck_batch
+        vision_stats = recheck_batch(project_dir, config)
+    except Exception as exc:
+        print(f'vision recheck failed: {type(exc).__name__}: {exc}')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
+    counts.update(vision_stats)
     return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 

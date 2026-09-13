@@ -44,3 +44,44 @@ def test_should_run_daily_report_in_20_to_21_window_and_once():
     assert should_run_daily_report(hour=19, already_sent=False) is False
     assert should_run_daily_report(hour=21, already_sent=False) is False
     assert should_run_daily_report(hour=20, already_sent=True) is False
+
+
+def test_daily_report_shows_refined_video_categories(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:1', user_id='u', url='https://www.bilibili.com/video/BV1', message_text='ComfyUI 工作流教程')
+    store.record_link(scope='group:1', user_id='u', url='https://www.bilibili.com/video/BV2', message_text='MiniMax H3 正式发布')
+
+    report = build_daily_resource_report(store)
+
+    assert '[AI教程视频]' in report
+    assert '[AI资讯视频]' in report
+
+
+def test_daily_report_keeps_new_site_categories_without_music_videos(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:1', user_id='u', url='https://www.bilibili.com/video/BV1music', message_text='原创音乐 MV')
+    store.record_link(scope='group:1', user_id='u', url='https://linux.do/t/topic/123', message_text='')
+    store.record_link(scope='group:1', user_id='u', url='https://api.example.com', message_text='AI 中转公益站，注册送额度')
+    store.record_link(scope='group:1', user_id='u', url='https://tensor.art/images/123', message_text='')
+
+    report = build_daily_resource_report(store, max_links=10)
+
+    assert '[音乐视频]' not in report
+    assert '[技术社区]' in report
+    assert '[AI中转服务]' in report
+    assert '[AI作品展示]' in report
+
+
+def test_daily_report_omits_media_only_categories(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:1', user_id='u', url='https://music.163.com/song?id=1', message_text='单曲')
+    store.record_link(scope='group:1', user_id='u', url='https://www.bilibili.com/video/BV1music', message_text='原创音乐 MV')
+    store.record_link(scope='group:1', user_id='u', url='https://www.pixiv.net/artworks/1', message_text='作品图')
+    store.record_link(scope='group:1', user_id='u', url='https://github.com/example/repo', message_text='实用插件')
+
+    report = build_daily_resource_report(store, max_links=10)
+
+    assert 'music.163.com' not in report
+    assert 'BV1music' not in report
+    assert 'pixiv.net' not in report
+    assert 'github.com/example/repo' in report

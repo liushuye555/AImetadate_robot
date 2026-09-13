@@ -93,12 +93,20 @@ def fetch_link_metadata(url: str) -> dict[str, str]:
     validate_fetch_url(url)
     request = urllib.request.Request(url, headers={'User-Agent': 'qq-onebot-whitelist/1.0'}, method='GET')
     with netutil.open_url(request, timeout=FETCH_TIMEOUT_SECONDS, handlers=(_SafeRedirectHandler,)) as response:
+        # urllib follows HTTP redirects; geturl() is therefore the useful, shareable
+        # destination even when the final response is an image/file rather than HTML.
+        try:
+            resolved_url = str(response.geturl() or url)
+        except Exception:
+            resolved_url = str(url)
         content_type = str(response.headers.get('Content-Type') or '').lower()
         if content_type and 'html' not in content_type and 'xhtml' not in content_type:
-            return {}
+            return {'resolved_url': resolved_url}
         body = response.read(MAX_RESPONSE_BYTES + 1)[:MAX_RESPONSE_BYTES]
         charset = response.headers.get_content_charset() or 'utf-8'
-    return parse_html_metadata(body.decode(charset, errors='replace'))
+    result = parse_html_metadata(body.decode(charset, errors='replace'))
+    result['resolved_url'] = resolved_url
+    return result
 
 
 def _cache_fresh(row: dict, now: datetime) -> bool:
@@ -110,6 +118,17 @@ def _cache_fresh(row: dict, now: datetime) -> bool:
     return age <= (ERROR_CACHE_SECONDS if row.get('error') else SUCCESS_CACHE_SECONDS)
 
 
+def _public_metadata(value: dict | None) -> dict[str, str]:
+    if not value:
+        return {}
+    result: dict[str, str] = {}
+    for name in ('title', 'description', 'resolved_url'):
+        item = str(value.get(name) or '').strip()
+        if item:
+            result[name] = item
+    return result
+
+
 def get_or_fetch_link_metadata(store, url: str, *, fetcher=fetch_link_metadata) -> dict[str, str]:
     from .daily_report import canonical_url
 
@@ -117,11 +136,18 @@ def get_or_fetch_link_metadata(store, url: str, *, fetcher=fetch_link_metadata) 
     cached = store.get_link_metadata(key)
     now = datetime.utcnow()
     if cached and _cache_fresh(cached, now):
-        return {name: str(cached.get(name) or '') for name in ('title', 'description') if cached.get(name)}
+        return _public_metadata(cached)
     try:
         metadata = fetcher(key) or {}
-        store.save_link_metadata(key, metadata.get('title', ''), metadata.get('description', ''), '')
-        return {name: str(metadata.get(name) or '') for name in ('title', 'description') if metadata.get(name)}
+        resolved_url = str(metadata.get('resolved_url') or '').strip()
+        store.save_link_metadata(
+            key,
+            metadata.get('title', ''),
+            metadata.get('description', ''),
+            '',
+            resolved_url=resolved_url,
+        )
+        return _public_metadata(metadata)
     except Exception as exc:
         store.save_link_metadata(key, '', '', f'{type(exc).__name__}: {exc}')
         return {}

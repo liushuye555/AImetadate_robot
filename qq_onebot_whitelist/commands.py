@@ -7,7 +7,7 @@ from typing import Any
 from .policy import extract_text, is_keepalive_event
 from .summary import summarize_records
 from .llm_summary import LLMConfig, summarize_records_with_fallback
-from .settings import read_analysis_windows, write_analysis_windows
+from .settings import read_all_day_weekdays, read_analysis_windows, write_all_day_weekdays, write_analysis_windows
 from .i18n import text as tr
 
 HELP_TEXT = '''管理员菜单：
@@ -17,8 +17,11 @@ HELP_TEXT = '''管理员菜单：
 4. 最近总结 [条数]：总结消息（私聊看全部最近记录，群里看本群）
 5. 图片信息：查看最近处理图片（私聊看全部，群里看本群）
 6. 刷新分类：重建本地图片/资源视图
+8. 保存图片 [分类名]：私聊回复合并聊天记录后保存图片，不填分类名默认“未分类”
+9. 修复图片 [图片ID]：私聊重新下载并校验损坏图片
 
 7. 分析时段 查看/设置/全天：私聊调整 AI 分析时间
+10. 收藏夹：查看当前图片保存用法
 
 说明：直接发送指令即可；旧的 / 前缀仍兼容。
 
@@ -53,6 +56,15 @@ def parse_limit(text: str, default: int = 100, max_limit: int = 500) -> int:
     if value <= 0:
         return default
     return min(value, max_limit)
+
+
+def parse_repair_images_command(text: str) -> int | None | bool:
+    """识别 /修复图片 [图片ID]；无 ID 表示扫描全部损坏图片。"""
+    value = str(text or '').strip()
+    match = re.fullmatch(r'(?:/\s*)?(?:修复图片|repair\s+images)(?:\s+(\d+))?', value, flags=re.IGNORECASE)
+    if not match:
+        return False
+    return int(match.group(1)) if match.group(1) else None
 
 
 def is_refresh_command(normalized: str) -> bool:
@@ -104,7 +116,27 @@ def handle_analysis_windows_command(text: str, *, is_private: bool, config_path:
     if argument in {'', '查看', 'view', 'View'}:
         windows = read_analysis_windows(config_path)
         value = ('、'.join(windows) if language == 'zh-CN' else ', '.join(windows)) if windows else tr('windows_all', language)
+        weekdays = read_all_day_weekdays(config_path)
+        if weekdays:
+            label = tr('weekdays_label', language, value='、'.join(weekdays))
+            value += '（' + label + '）'
         return tr('windows_current', language, value=value)
+    weekend_prefix = None
+    for prefix in ('周末全天', 'weekend all day', 'weekend', 'all day weekdays'):
+        if argument.lower().startswith(prefix.lower()) or argument.startswith(prefix):
+            weekend_prefix = prefix
+            break
+    if weekend_prefix:
+        rest = argument[len(weekend_prefix):].strip()
+        from .schedule import normalize_weekdays
+        if rest in {'开', 'on', '启用', ''} and weekend_prefix in {'周末全天', 'weekend'}:
+            weekdays = write_all_day_weekdays(config_path, ['sat', 'sun'])
+            return tr('weekdays_set', language, value='、'.join(weekdays))
+        if rest in {'关', 'off', '关闭', '取消'}:
+            weekdays = write_all_day_weekdays(config_path, [])
+            return tr('weekdays_off', language)
+        days = write_all_day_weekdays(config_path, [d for d in rest.replace('，', ',').split(',') if d.strip()])
+        return tr('weekdays_set', language, value='、'.join(days))
     if argument in {'全天', 'all', 'All day'}:
         write_analysis_windows(config_path, [])
         return tr('windows_set', language, value=tr('windows_all', language))
@@ -170,14 +202,8 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
                 return tr('summary_failed', language, reason=type(exc).__name__, fallback=fallback)
         return summarize_records(records, language=language)
     if is_private and normalized in {'收藏夹', '收藏', 'favorites', 'fav', 'saved'}:
-        favs = store.list_favorites(str(event.get('user_id') or ''), limit=20)
-        if not favs:
-            return tr('fav_none', language)
-        lines = [tr('fav_title', language, count=len(favs))]
-        for idx, fav in enumerate(favs, 1):
-            when = str(fav.get('seen_at') or '')[:16]
-            summary = str(fav.get('summary') or '')
-            lines.append(f'{idx}. [{when}] {summary[:80]}')
-        return '\n'.join(lines)
+        # 旧 favorites 表保留用于兼容历史数据，但不再把它当作新的收藏入口；
+        # 图片收藏必须由用户明确回复合并聊天记录并发送 /保存图片。
+        return tr('fav_none', language)
     # 未匹配任何命令：返回空串，由调用方决定（聊天优先，否则发送通用兜底 ack）
     return ''

@@ -14,7 +14,7 @@ def test_domain_profiles_groups_by_domain_and_function(tmp_path):
 
     profiles = domain_profiles(store)
     assert profiles['music.163.com']['音乐'] == 2
-    assert set(profiles['bilibili.com']) == {'娱乐视频', 'AI模型'}  # 多功能 → 多标签
+    assert set(profiles['bilibili.com']) == {'娱乐视频', 'AI教程视频'}  # 多功能 → 多标签
 
 
 def test_deterministic_category_rules():

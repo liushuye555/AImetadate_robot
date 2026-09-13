@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from qq_onebot_whitelist.resource_view import write_resource_pages
+from qq_onebot_whitelist.resource_view import select_resource_links, write_resource_pages
 from qq_onebot_whitelist.store import Store
 
 
@@ -20,6 +20,16 @@ def test_write_resource_pages_keeps_old_records_and_filters_low_value(tmp_path):
     assert '用途：核心AI资源' in resources
     assert '好用的 lora' in resources
     assert 'kuaishou' not in resources.lower()
+    # 共享样式骨架：返回总览、计数 chip、空结果提示与排序
+    assert '<a href="index.html">← 返回总览</a>' in resources
+    assert 'id="count"' in resources
+    assert 'id="noResult"' in resources
+    assert 'id="sortSel"' in resources
+    assert '最新优先' in resources
+    assert '<li data-time="' in resources
+    assert 'id="sortSel"' in files
+    assert 'data-size="' in files
+    assert 'data-name="' in files
     assert 'workflow.json' in files
     assert '可导入或检查的工作流配置' in files
     assert 'https://long.url/x' not in files
@@ -63,3 +73,15 @@ def test_resource_pages_keep_unknown_link_without_source_group(tmp_path):
     assert 'https://unknown.example/item' in resources
     assert '群聊未说明用途' in resources
     assert '987654' not in resources
+
+
+def test_resource_selection_hides_opaque_image_and_short_links_and_dedupes_root_url(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_link(scope='group:1', user_id='u', url='https://postimg.cc/abc123', message_text='图片')
+    store.record_link(scope='group:1', user_id='u', url='https://xhslink.cn/abc123', message_text='短链')
+    store.record_link(scope='group:1', user_id='u', url='https://tool.example', message_text='在线工具')
+    store.record_link(scope='group:1', user_id='u', url='https://tool.example/', message_text='在线工具')
+
+    links = select_resource_links(store)
+
+    assert [item['url'] for item in links] == ['https://tool.example']
