@@ -16,8 +16,10 @@
 
 LogsPage::LogsPage(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(24, 24, 24, 24);
+    layout->setContentsMargins(24, 20, 24, 24);
+    layout->setSpacing(12);
     auto *top = new QHBoxLayout;
+    top->setSpacing(10);
     m_selector = new QComboBox(this);
     m_selector->addItem("bot.log");
     m_selector->addItem("napcat.log");

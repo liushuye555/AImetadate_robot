@@ -7,6 +7,7 @@ private slots:
     void parsesValidJson();
     void missingFileIsInvalid();
     void staleFileIsInvalid();
+    void parsesManualStop();
 };
 
 void TestStatusMonitor::parsesValidJson() {
@@ -28,12 +29,26 @@ void TestStatusMonitor::missingFileIsInvalid() {
     QVERIFY(!parseStatusJson(QByteArray(), QDateTime::currentDateTime()).valid);
 }
 
-void TestStatusMonitor::staleFileIsInvalid() {
+void TestStatusMonitor::parsesManualStop() {
     const QDateTime now = QDateTime::currentDateTime();
     const QByteArray json =
+        R"({"manualStop":true,"updatedAt":")"
+        + now.addSecs(-5).toUTC().toString(Qt::ISODate).toUtf8() + R"("})";
+    const StatusSnapshot s = parseStatusJson(json, now);
+    QVERIFY(s.valid);
+    QVERIFY(s.manualStop);
+}
+
+void TestStatusMonitor::staleFileIsInvalid() {
+    const QDateTime now = QDateTime::currentDateTime();
+    const QByteArray fresh =
         R"({"napcat":true,"updatedAt":")"
-        + now.addSecs(-60).toUTC().toString(Qt::ISODate).toUtf8() + R"("})";
-    QVERIFY(!parseStatusJson(json, now).valid);
+        + now.addSecs(-89).toUTC().toString(Qt::ISODate).toUtf8() + R"("})";
+    const QByteArray stale =
+        R"({"napcat":true,"updatedAt":")"
+        + now.addSecs(-91).toUTC().toString(Qt::ISODate).toUtf8() + R"("})";
+    QVERIFY(parseStatusJson(fresh, now, 90).valid);
+    QVERIFY(!parseStatusJson(stale, now, 90).valid);
 }
 
 QTEST_APPLESS_MAIN(TestStatusMonitor)

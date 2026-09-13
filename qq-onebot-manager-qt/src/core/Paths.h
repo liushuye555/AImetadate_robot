@@ -14,6 +14,7 @@ public:
         return dir.absolutePath();
     }
     static QString statusFile() { return repoRoot() + "/run/status.json"; }
+    static QString manualStopFile() { return repoRoot() + "/run/manual-stop"; }
     static QString pythonExe() {
         const QString candidate = repoRoot() + "/.venv/Scripts/python.exe";
         return QFileInfo::exists(candidate) ? candidate : "python";

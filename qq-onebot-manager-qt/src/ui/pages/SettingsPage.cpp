@@ -103,6 +103,8 @@ QWidget *SettingsPage::buildGeneralTab() {
     m_theme = new QComboBox(general);
     m_theme->addItem("浅色", "light");
     m_theme->addItem("深色", "dark");
+    if (!m_pendingTheme.isEmpty())
+        setTheme(m_pendingTheme);  // 应用启动早期暂存的主题同步
     m_autoStart = new QCheckBox(general);
     m_autoStart->setChecked(AutoStart::isEnabled());
     m_notifications = new QCheckBox(general);
@@ -241,23 +243,32 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             field = edit;
         } else {
             auto *edit = new QLineEdit(this);
+            const QJsonValue defaultValue = obj.value("default");
             if (kind == "secret") edit->setEchoMode(QLineEdit::Password);
-            if (obj.value("default").isNull())
+            if (defaultValue.isNull())
                 edit->setPlaceholderText(Strings::zh("optionalPlaceholder"));
-            else if (obj.value("default").toString().trimmed().isEmpty())
+            else if (defaultValue.toVariant().toString().trimmed().isEmpty())
                 edit->setPlaceholderText(Strings::zh("notSet"));
-            edit->setProperty("nullable", obj.value("default").isNull());
-            edit->setText(obj.value("default").toString());
+            edit->setProperty("nullable", defaultValue.isNull());
+            edit->setText(defaultValue.isNull() ? QString() : defaultValue.toVariant().toString());
             edit->setProperty("kind", kind);
-            edit->setProperty("min", obj.value("min").toInt());
-            edit->setProperty("max", obj.value("max").toInt());
+            edit->setProperty("hasMin", obj.contains("min"));
+            edit->setProperty("hasMax", obj.contains("max"));
+            edit->setProperty("min", obj.value("min").toDouble());
+            edit->setProperty("max", obj.value("max").toDouble());
             connect(edit, &QLineEdit::textChanged, this, [this, edit] {
                 markDirty();
-                bool ok = true;
-                const int v = edit->text().toInt(&ok);
-                const int min = edit->property("min").toInt();
-                const int max = edit->property("max").toInt();
-                const bool valid = !ok || (min == 0 && max == 0) || (v >= min && v <= max);
+                if (edit->property("kind").toString() != "number") return;
+                const QString text = edit->text().trimmed();
+                const bool empty = text.isEmpty();
+                bool ok = false;
+                const double value = text.toDouble(&ok);
+                const double min = edit->property("min").toDouble();
+                const double max = edit->property("max").toDouble();
+                const bool valid = (edit->property("nullable").toBool() && empty)
+                    || (ok
+                        && (!edit->property("hasMin").toBool() || value >= min)
+                        && (!edit->property("hasMax").toBool() || value <= max));
                 edit->setProperty("class", valid ? "" : "invalid");
                 edit->style()->unpolish(edit);
                 edit->style()->polish(edit);
@@ -287,10 +298,11 @@ QString SettingsPage::validationError() const {
         if (edit->property("kind").toString() != "number") continue;
         if (edit->property("nullable").toBool() && edit->text().trimmed().isEmpty()) continue;
         bool ok = false;
-        const int value = edit->text().trimmed().toInt(&ok);
-        const int min = edit->property("min").toInt();
-        const int max = edit->property("max").toInt();
-        const bool rangeOk = (min == 0 && max == 0) || (value >= min && value <= max);
+        const double value = edit->text().trimmed().toDouble(&ok);
+        const double min = edit->property("min").toDouble();
+        const double max = edit->property("max").toDouble();
+        const bool rangeOk = (!edit->property("hasMin").toBool() || value >= min)
+            && (!edit->property("hasMax").toBool() || value <= max);
         if (!ok || !rangeOk)
             return it.key();
     }
@@ -402,4 +414,16 @@ void SettingsPage::setSavedMessage(const QString &text) {
 
 void SettingsPage::showError(const QString &text) {
     m_message->setText(Strings::zh("error") + ": " + text);
+}
+
+void SettingsPage::setTheme(const QString &theme) {
+    if (!m_theme) {
+        m_pendingTheme = theme;  // 通用页尚未构建（config 未拉取），先暂存
+        return;
+    }
+    const int index = m_theme->findData(theme);
+    if (index >= 0 && index != m_theme->currentIndex()) {
+        QSignalBlocker blocker(m_theme);  // 只同步显示，不回发 themeChanged
+        m_theme->setCurrentIndex(index);
+    }
 }

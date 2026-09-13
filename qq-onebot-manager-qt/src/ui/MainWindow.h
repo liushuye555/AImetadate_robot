@@ -24,6 +24,7 @@ public:
     QSystemTrayIcon *trayIcon() const { return m_tray; }
 signals:
     void trayAction(const QString &action); // open/start/stop/restart/logs/reports/quit
+    void themeToggled(const QString &theme); // 侧栏切换主题后广播（设置页下拉同步）
 protected:
     void closeEvent(QCloseEvent *event) override;
 private:
@@ -31,6 +32,8 @@ private:
     QListWidget *m_nav = nullptr;
     QStackedWidget *m_stack = nullptr;
     QLabel *m_header = nullptr;
+    QLabel *m_subtitle = nullptr;
+    class QPushButton *m_themeButton = nullptr;
     QVector<PageDef> m_pages;
     QSystemTrayIcon *m_tray = nullptr;
     QString m_lang = "zh-CN";

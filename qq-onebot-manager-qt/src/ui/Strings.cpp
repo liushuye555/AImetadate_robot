@@ -33,6 +33,16 @@ QString Strings::zh(const QString &key) {
     if (key == "autoStart") return "开机自启";
     if (key == "notifications") return "登录提醒";
     if (key == "quit") return "退出管理器";
+    if (key == "panelName") return "管理器";
+    if (key == "toggleTheme") return "切换主题";
+    if (key == "quitApp") return "退出程序";
+    if (key == "groupService") return "服务控制";
+    if (key == "groupData") return "数据入口";
+    if (key == "groupInfo") return "运行信息";
+    if (key == "statImages") return "归档图片";
+    if (key == "statLinks") return "高价值链接";
+    if (key == "statLastReport") return "最近日报";
+    if (key == "collectionState") return "采集状态";
     if (key == "qqLogin") return "QQ 已登录";
     if (key == "qqLogout") return "QQ 已掉线";
     if (key == "running") return "运行中";
@@ -131,6 +141,13 @@ QString Strings::zh(const QString &key) {
     if (key == "chatAdminMemoryTurns") return "管理员记忆条数";
     if (key == "chatCooldownSeconds") return "回复冷却（秒）";
     if (key == "chatHint") return "群聊需 @ 机器人，私聊仅白名单用户；管理员=用户白名单。记忆以最近一次交流为准。";
+    if (key == "sub_overview") return "服务状态与快捷操作";
+    if (key == "sub_collection") return "采集范围与图片归档规则";
+    if (key == "sub_relay") return "群消息搬运规则";
+    if (key == "sub_chat") return "人设与聊天回复";
+    if (key == "sub_settings") return "机器人运行配置";
+    if (key == "sub_logs") return "bot 与 NapCat 实时日志";
+    if (key == "sub_reports") return "日报与图库浏览入口";
     return key;
 }
 
@@ -163,6 +180,16 @@ QString Strings::en(const QString &key) {
     if (key == "autoStart") return "Start with Windows";
     if (key == "notifications") return "Login notifications";
     if (key == "quit") return "Quit manager";
+    if (key == "panelName") return "Manager";
+    if (key == "toggleTheme") return "Toggle theme";
+    if (key == "quitApp") return "Exit";
+    if (key == "groupService") return "Service";
+    if (key == "groupData") return "Data";
+    if (key == "groupInfo") return "Runtime info";
+    if (key == "statImages") return "Archived images";
+    if (key == "statLinks") return "Valuable links";
+    if (key == "statLastReport") return "Last daily report";
+    if (key == "collectionState") return "Collection";
     if (key == "qqLogin") return "QQ logged in";
     if (key == "qqLogout") return "QQ disconnected";
     if (key == "running") return "Running";
@@ -261,6 +288,13 @@ QString Strings::en(const QString &key) {
     if (key == "chatAdminMemoryTurns") return "Memory turns (admins)";
     if (key == "chatCooldownSeconds") return "Reply cooldown (s)";
     if (key == "chatHint") return "Group: @bot required. Private: whitelisted users only. Admin = whitelist users.";
+    if (key == "sub_overview") return "Service status and quick actions";
+    if (key == "sub_collection") return "Collection scope and image archiving";
+    if (key == "sub_relay") return "Group message relay rules";
+    if (key == "sub_chat") return "Persona and chat replies";
+    if (key == "sub_settings") return "Bot runtime configuration";
+    if (key == "sub_logs") return "Live bot and NapCat logs";
+    if (key == "sub_reports") return "Daily report and gallery views";
     return key;
 }
 

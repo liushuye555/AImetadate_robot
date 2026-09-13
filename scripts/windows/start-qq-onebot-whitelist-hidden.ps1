@@ -1,10 +1,12 @@
 $ErrorActionPreference = 'Stop'
 
 $BotDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$NapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+$DefaultNapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+$NapcatDir = $DefaultNapcatDir
 if ($env:NAPCAT_DIR) { $NapcatDir = $env:NAPCAT_DIR }
 $LauncherConfig = Join-Path $PSScriptRoot 'launcher.config.ps1'
 if (Test-Path $LauncherConfig) { . $LauncherConfig }
+if (-not (Test-Path $NapcatDir)) { $NapcatDir = $DefaultNapcatDir }
 $LogDir = Join-Path $BotDir 'logs'
 $PidDir = Join-Path $BotDir 'run'
 
@@ -101,4 +103,8 @@ if ($botRunning) {
 Write-Host 'Ready.'
 Write-Host 'NapCat WebUI: http://127.0.0.1:6099'
 Write-Host 'OneBot WS: ws://127.0.0.1:3001'
+# A successful explicit start resumes the tray auto-restart monitor.
+$ManualStopPath = Join-Path $PidDir 'manual-stop'
+if (Test-Path $ManualStopPath) { [System.IO.File]::Delete($ManualStopPath) }
+
 Write-Host "Logs: $LogDir"

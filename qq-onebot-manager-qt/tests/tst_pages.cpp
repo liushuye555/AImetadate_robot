@@ -125,10 +125,17 @@ void TestPages::relayPageViaSignalConnection() {
     dbg("signal: emitted=" + QString::number(spy.count())
         + " variantList=" + QString::number(spy.at(0).at(1).toList().size()));
     const auto boxes = page.findChildren<QCheckBox *>();
-    if (!boxes.isEmpty())
-        dbg("signal: relay enabled checked=" + QString::number(boxes.at(0)->isChecked()));
     QVERIFY(!boxes.isEmpty());
-    QVERIFY(boxes.at(0)->isChecked());
+    // 与真实配置对齐：断言信号路径写入的值等于 schema 里 relay.enabled 的默认值，
+    // 而不是硬编码 true（config.yaml 里 relay.enabled 可能为 false）。
+    bool expEnabled = false;
+    const QJsonArray arr = QJsonDocument::fromVariant(spy.at(0).at(1)).array();
+    for (const QJsonValue &v : arr) {
+        const QJsonObject o = v.toObject();
+        if (o.value("key").toString() == "relay.enabled")
+            expEnabled = o.value("default").toBool();
+    }
+    QCOMPARE(boxes.at(0)->isChecked(), expEnabled);
     dbg("signal: done");
 }
 

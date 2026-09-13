@@ -11,6 +11,7 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network Svg Test)
 add_executable(qq-onebot-manager-qt WIN32
     src/main.cpp
     src/app/SingleInstance.cpp
+    src/core/AvatarCache.cpp
     src/core/AutoStart.cpp
     src/core/AutoRestart.cpp
     src/core/ConfigBridge.cpp
@@ -26,6 +27,7 @@ add_executable(qq-onebot-manager-qt WIN32
     src/ui/pages/ReportsPage.cpp
     src/ui/pages/SettingsPage.cpp
     src/ui/widgets/StatusCard.cpp
+    src/ui/widgets/GroupItemRow.cpp
     src/ui/Strings.cpp
     src/ui/MainWindow.cpp
     src/ui/theme/ThemeManager.cpp

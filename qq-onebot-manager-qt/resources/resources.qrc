@@ -1,6 +1,19 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/app.svg</file>
+        <file>icons/nav-overview.svg</file>
+        <file>icons/nav-collection.svg</file>
+        <file>icons/nav-relay.svg</file>
+        <file>icons/nav-chat.svg</file>
+        <file>icons/nav-settings.svg</file>
+        <file>icons/nav-logs.svg</file>
+        <file>icons/nav-reports.svg</file>
+        <file>icons/card-napcat.svg</file>
+        <file>icons/card-onebot.svg</file>
+        <file>icons/card-bot.svg</file>
+        <file>icons/card-qq.svg</file>
+        <file>icons/check-white.svg</file>
+        <file>icons/mascot.png</file>
         <file>themes/light.qss</file>
         <file>themes/dark.qss</file>
     </qresource>

@@ -1,5 +1,6 @@
 #include "RelayPage.h"
 #include "../Strings.h"
+#include "../widgets/GroupItemRow.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -153,6 +154,7 @@ QWidget *RelayPage::buildGroupBox(const QString &title, QListWidget *&list) {
     auto *box = new QGroupBox(title, this);
     auto *v = new QVBoxLayout(box);
     list = new QListWidget(box);
+    list->setObjectName("groupList");
     v->addWidget(list);
     auto *buttons = new QHBoxLayout;
     auto *scan = new QPushButton(Strings::zh("scanGroups"), box);
@@ -219,16 +221,22 @@ void RelayPage::setGroups(const QVariantList &groups) {
             bool exists = false;
             for (int j = 0; j < list->count(); ++j) {
                 if (list->item(j)->data(Qt::UserRole).toString() == id) {
-                    list->item(j)->setText(name.isEmpty() ? id : name + " (" + id + ")");
+                    const QString displayName = name.isEmpty() ? id : name;
+                    // GroupItemRow 条目由控件渲染；扫描后同步群名
+                    if (auto *row = qobject_cast<GroupItemRow *>(list->itemWidget(list->item(j))))
+                        row->setName(displayName);
+                    else if (!list->itemWidget(list->item(j)))
+                        list->item(j)->setText(displayName + " (" + id + ")");
                     exists = true;
                     break;
                 }
             }
             if (exists) continue;
-            auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
+            auto *item = new QListWidgetItem(list);
             item->setData(Qt::UserRole, id);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(Qt::Unchecked);
+            GroupItemRow::bind(list, item, id, name.isEmpty() ? id : name, id);
             list->addItem(item);
             added++;
         }
@@ -243,10 +251,11 @@ void RelayPage::fillGroupList(QListWidget *list, const QJsonArray &ids) {
         const QString id = value.toString();
         if (id.isEmpty()) continue;
         const QString name = m_groupNames.value(id);
-        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " (" + id + ")", list);
+        auto *item = new QListWidgetItem(list);
         item->setData(Qt::UserRole, id);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Checked);
+        GroupItemRow::bind(list, item, id, name.isEmpty() ? id : name, id);
         list->addItem(item);
     }
 }

@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    ThemeManager::apply(&app, ThemeManager::Theme::Light);
+    ThemeManager::apply(&app, ThemeManager::loadStored());
 
     const QVector<PageDef> pages = {
         {"overview", "overview", makeOverview},
@@ -68,12 +68,16 @@ int main(int argc, char *argv[]) {
     // 采集按钮初始状态来自暂停标记文件（不依赖滞后的状态刷新）
     overview->setCollectionPaused(QFileInfo::exists(Paths::repoRoot() + "/run/collection-paused"));
     auto *statusMonitor = new StatusMonitor(Paths::statusFile(), 4000, &window);
-    // 机器人每 30 秒写一次状态；过期阈值取 90 秒，避免两次写入之间误显示“未知”
+    // 机器人每 30 秒写一次状态；过期阈值取 90 秒。过期时由 control.py
+    // 通过端口和 PID 做一次实时探测，避免冷启动沿用旧状态。
     statusMonitor->setStaleSeconds(90);
+    statusMonitor->setLiveProbe(Paths::pythonExe(),
+                                {"-m", "qq_onebot_whitelist.control", "live-status"});
     auto *serviceControl = new ServiceControl(&window);
     auto *collectionControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
     auto *autoRestart = new AutoRestart(serviceControl, &window);
+    autoRestart->setManualStop(QFileInfo::exists(Paths::manualStopFile()));
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
     QObject::connect(serviceControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
         if (!ok) overview->setHint("操作失败：" + out.trimmed());
@@ -94,10 +98,9 @@ int main(int argc, char *argv[]) {
         if (!doc.isObject()) return;
         const QJsonObject obj = doc.object();
         const QString lastReport = obj.value("lastReport").toString();
-        overview->setStats(QString("图片 %1 · 链接 %2 · 最近报告 %3")
-                               .arg(obj.value("images").toInt())
-                               .arg(obj.value("links").toInt())
-                               .arg(lastReport.isEmpty() ? "无" : lastReport));
+        overview->setStatNumbers(obj.value("images").toInt(),
+                                 obj.value("links").toInt(),
+                                 lastReport.isEmpty() ? QStringLiteral("无") : lastReport);
     });
     QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats, autoRestart, overview, collectionControl](const QString &action) {
         if (action == "logs") {
@@ -129,6 +132,8 @@ int main(int argc, char *argv[]) {
     });
 
     auto *settings = qobject_cast<SettingsPage *>(window.pageWidget("settings"));
+    // 启动时把已加载的主题同步给设置页下拉（侧栏按钮只在点击时广播）
+    settings->setTheme(ThemeManager::themeName(ThemeManager::current()));
     auto *collectionPage = qobject_cast<CollectionPage *>(window.pageWidget("collection"));
     auto *configBridge = new ConfigBridge(&window);
     QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, [settings](bool ok, const QVariant &schema) {
@@ -164,6 +169,8 @@ int main(int argc, char *argv[]) {
     QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
         ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
     });
+    // 侧栏「切换主题」：广播给设置页同步下拉框
+    QObject::connect(&window, &MainWindow::themeToggled, settings, &SettingsPage::setTheme);
     QObject::connect(settings, &SettingsPage::languageChanged, &window, &MainWindow::setLanguage);
     QObject::connect(configBridge, &ConfigBridge::schemaLoaded, collectionPage, &CollectionPage::setSchema);
     QObject::connect(collectionPage, &CollectionPage::saveRequested, configBridge, &ConfigBridge::save);

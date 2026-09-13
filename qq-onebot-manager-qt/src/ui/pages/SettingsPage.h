@@ -22,6 +22,8 @@ public:
     void setSchema(const QVariant &schema);
     void setSavedMessage(const QString &text);
     void showError(const QString &text);
+    // 侧栏切换主题后同步下拉框（不触发 themeChanged 回环）
+    void setTheme(const QString &theme);
     QComboBox *languageCombo() const { return m_language; }
     QComboBox *themeCombo() const { return m_theme; }
     QCheckBox *autoStartBox() const { return m_autoStart; }
@@ -55,6 +57,7 @@ private:
     QMap<QString, QVBoxLayout *> m_tabLayouts;
     QComboBox *m_language = nullptr;
     QComboBox *m_theme = nullptr;
+    QString m_pendingTheme;
     QCheckBox *m_autoStart = nullptr;
     QCheckBox *m_notifications = nullptr;
     QListWidget *m_providerList = nullptr;

@@ -1,12 +1,42 @@
 $ErrorActionPreference = 'Continue'
 
 $BotDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$NapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+$DefaultNapcatDir = Join-Path $BotDir 'runtime\NapCat.Shell.Windows.Node'
+$NapcatDir = $DefaultNapcatDir
 if ($env:NAPCAT_DIR) { $NapcatDir = $env:NAPCAT_DIR }
 $LauncherConfig = Join-Path $PSScriptRoot 'launcher.config.ps1'
 if (Test-Path $LauncherConfig) { . $LauncherConfig }
+if (-not (Test-Path $NapcatDir)) { $NapcatDir = $DefaultNapcatDir }
 $NapcatNeedle = $NapcatDir
 $PidDir = Join-Path $BotDir 'run'
+
+# Mark an intentional stop before killing anything. The Qt tray monitor reads
+# this heartbeat and must not interpret the shutdown window as a crash.
+New-Item -ItemType Directory -Force -Path $PidDir | Out-Null
+$ManualStopPath = Join-Path $PidDir 'manual-stop'
+Set-Content -LiteralPath $ManualStopPath -Value 'stop' -Encoding ascii
+$StatusPath = Join-Path $PidDir 'status.json'
+$StatusTmpPath = Join-Path $PidDir 'status.json.stop.tmp'
+try {
+    $status = [ordered]@{
+        napcat = $false
+        onebot = $false
+        bot = $false
+        qqLoggedIn = $false
+        qqNumber = ''
+        qqNickname = ''
+        collectionPaused = Test-Path (Join-Path $PidDir 'collection-paused')
+        manualStop = $true
+        updatedAt = (Get-Date).ToString('o')
+    }
+    [System.IO.File]::WriteAllText(
+        $StatusTmpPath,
+        ($status | ConvertTo-Json -Compress),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::Move($StatusTmpPath, $StatusPath, $true)
+} catch {
+}
 
 function Stop-TreeByPid {
     param([int]$ProcessId)

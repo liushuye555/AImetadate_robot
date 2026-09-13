@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QSignalSpy>
 #include <QJsonDocument>
 #include <QGroupBox>
 #include <QCheckBox>
@@ -6,6 +7,7 @@
 #include <QComboBox>
 #include <QPlainTextEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include "ui/pages/SettingsPage.h"
 
 class TestSettingsPage : public QObject {
@@ -15,6 +17,7 @@ private slots:
     void emptySchemaKeepsGeneralSection();
     void listFieldsRenderLines();
     void providerListRendersEditor();
+    void numericFieldsValidateOpenBoundsAndDecimals();
 };
 
 static QByteArray sampleSchema() {
@@ -65,5 +68,27 @@ void TestSettingsPage::providerListRendersEditor() {
     QVERIFY(foundProvider);                                     // 现有供应商显示在列表中
 }
 
+void TestSettingsPage::numericFieldsValidateOpenBoundsAndDecimals() {
+    const QByteArray schema = R"([
+      {"key":"images.candidate_ttl_hours","kind":"number","default":24,"min":1,"label":{"zh-CN":"候选图片保留时间"},"section":"advanced"},
+      {"key":"images.reencode_threshold","kind":"number","default":6.5,"min":1,"max":20,"label":{"zh-CN":"重编码疑似阈值"},"section":"advanced"}
+    ])";
+    SettingsPage page;
+    page.setSchema(QJsonDocument::fromJson(schema).toVariant());
+
+    QLineEdit *candidate = nullptr;
+    for (QLineEdit *edit : page.findChildren<QLineEdit *>()) {
+        if (edit->text() == "24") candidate = edit;
+    }
+    QVERIFY(candidate);
+
+    QPushButton *save = page.findChild<QPushButton *>("primary");
+    QVERIFY(save);
+    QSignalSpy saved(&page, &SettingsPage::saveRequested);
+    candidate->setText("25");
+    QVERIFY(save->isEnabled());
+    save->click();
+    QCOMPARE(saved.count(), 1);
+}
 QTEST_MAIN(TestSettingsPage)
 #include "tst_settingspage.moc"

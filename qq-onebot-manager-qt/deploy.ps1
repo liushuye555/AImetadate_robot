@@ -9,4 +9,10 @@ if (-not (Test-Path -LiteralPath $Exe)) {
 }
 
 & "$QtBin\windeployqt.exe" --release --no-translations --no-opengl-sw $Exe
+$TestDir = Join-Path $PSScriptRoot "build\tests"
+if (Test-Path -LiteralPath $TestDir) {
+    Get-ChildItem -LiteralPath $TestDir -Filter "tst_*.exe" -File | ForEach-Object {
+        & "$QtBin\windeployqt.exe" --release --no-translations --no-opengl-sw $_.FullName
+    }
+}
 Write-Host "部署完成，可直接运行: $Exe"

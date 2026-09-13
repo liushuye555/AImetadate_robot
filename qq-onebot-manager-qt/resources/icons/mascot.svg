@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="176" height="196" viewBox="0 0 176 196">
+  <!-- 占位看板娘：用同名文件替换成你的二次元立绘（建议透明底 PNG/SVG，宽约 176） -->
+  <g>
+    <!-- 双马尾 -->
+    <path d="M40 58 C20 92 22 144 34 174 L56 152 C46 120 48 88 56 66 Z" fill="#f0a3c2"/>
+    <path d="M136 58 C156 92 154 144 142 174 L120 152 C130 120 128 88 120 66 Z" fill="#f0a3c2"/>
+    <!-- 身体 -->
+    <path d="M50 122 C50 100 63 92 88 92 C113 92 126 100 126 122 L131 176 C104 186 72 186 45 176 Z" fill="#43385c"/>
+    <!-- 领结 -->
+    <path d="M80 100 L88 106 L96 100 L96 112 L88 118 L80 112 Z" fill="#eb2f96"/>
+    <!-- 后发 -->
+    <path d="M54 58 C52 30 70 16 88 16 C106 16 124 30 122 58 L114 96 C104 100 72 100 62 96 Z" fill="#5a4a78"/>
+    <!-- 猫耳 -->
+    <path d="M58 28 L48 6 L74 18 Z" fill="#5a4a78"/>
+    <path d="M118 28 L128 6 L102 18 Z" fill="#5a4a78"/>
+    <path d="M61 24 L56 12 L69 19 Z" fill="#f0a3c2"/>
+    <path d="M115 24 L120 12 L107 19 Z" fill="#f0a3c2"/>
+    <!-- 脸 -->
+    <circle cx="88" cy="54" r="33" fill="#ffeae1"/>
+    <!-- 刘海 -->
+    <path d="M55 52 C54 30 68 22 88 22 C108 22 122 30 121 52 C112 42 104 40 96 44 C90 47 78 47 72 44 C64 41 58 44 55 52 Z" fill="#5a4a78"/>
+    <!-- 眼睛 -->
+    <ellipse cx="76" cy="58" rx="5" ry="6" fill="#3b3550"/>
+    <ellipse cx="100" cy="58" rx="5" ry="6" fill="#3b3550"/>
+    <circle cx="77.5" cy="56" r="1.6" fill="#ffffff"/>
+    <circle cx="101.5" cy="56" r="1.6" fill="#ffffff"/>
+    <!-- 腮红与嘴 -->
+    <ellipse cx="68" cy="67" rx="5.5" ry="3" fill="#f8bfcf" opacity="0.85"/>
+    <ellipse cx="108" cy="67" rx="5.5" ry="3" fill="#f8bfcf" opacity="0.85"/>
+    <path d="M83 70 q5 5 10 0" stroke="#c46a8a" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>

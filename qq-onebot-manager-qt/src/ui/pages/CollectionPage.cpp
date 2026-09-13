@@ -1,5 +1,7 @@
 #include "CollectionPage.h"
 #include "../Strings.h"
+#include "../widgets/GroupItemRow.h"
+#include "../../core/AvatarCache.h"
 #include <QJsonDocument>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -37,9 +39,19 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     outer->addWidget(scroll, 1);
 
     // 采集总开关
-    m_collectionToggle = new QPushButton(Strings::zh("collectionOn"), container);
+    auto *stateCard = new QFrame(container);
+    stateCard->setObjectName("card");
+    auto *stateLayout = new QHBoxLayout(stateCard);
+    stateLayout->setContentsMargins(18, 12, 18, 12);
+    stateLayout->setSpacing(12);
+    auto *stateTitle = new QLabel(Strings::zh("collectionState"), stateCard);
+    stateTitle->setObjectName("sectionTitle");
+    stateLayout->addWidget(stateTitle);
+    stateLayout->addStretch();
+    m_collectionToggle = new QPushButton(Strings::zh("collectionOn"), stateCard);
     m_collectionToggle->setCheckable(true);
-    layout->addWidget(m_collectionToggle);
+    stateLayout->addWidget(m_collectionToggle);
+    layout->addWidget(stateCard);
     connect(m_collectionToggle, &QPushButton::clicked, this, [this] {
         setCollectionPaused(m_collectionToggle->isChecked());
         emit collectionToggle();
@@ -69,8 +81,11 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     m_expandForwards = new QCheckBox(Strings::zh("expandForwards"), groups);
     v->addWidget(m_expandForwards);
     m_collectionList = new QListWidget(groups);
+    m_collectionList->setObjectName("groupList");
+    m_collectionList->setMinimumHeight(180);
     v->addWidget(m_collectionList);
     auto *gButtons = new QHBoxLayout;
+    gButtons->setSpacing(10);
     auto *edit = new QPushButton(Strings::zh("editGroup"), groups);
     auto *scan = new QPushButton(Strings::zh("scanGroups"), groups);
     gButtons->addWidget(edit);
@@ -112,6 +127,7 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     m_customRuleList = new QListWidget(rules);
     rv->addWidget(m_customRuleList);
     auto *rButtons = new QHBoxLayout;
+    rButtons->setSpacing(10);
     auto *rAdd = new QPushButton(Strings::zh("addRule"), rules);
     auto *rEdit = new QPushButton(Strings::zh("editRule"), rules);
     auto *rRemove = new QPushButton(Strings::zh("removeRule"), rules);
@@ -305,22 +321,24 @@ void CollectionPage::rebuildCollectionList() {
         const QJsonObject p = m_collectionMap.value(id);
         const bool blocked = m_blockedGroups.contains(id);
         const QString name = m_groupNames.value(id);
-        const QString label = name.isEmpty() ? id : name + " (" + id + ")";
-        const QString summary = QString(blocked ? "【已屏蔽】" : "")
-            + (p.value("images").toBool() ? " · 图片" : "")
-            + (p.value("links").toBool() ? " · 链接" : "")
-            + (p.value("files").toBool() ? " · 文件" : "")
-            + (p.value("forwards").toBool() ? " · 转发" : "");
-        auto *item = new QListWidgetItem(label + summary, m_collectionList);
+        const QString displayName = name.isEmpty() ? id : name;
+        // 原版 QQ 风两行条目：第一行群名，第二行群号与采集内容摘要
+        QString summary = id;
+        for (const char *tag : {"图片", "链接", "文件", "转发"}) {
+            if (p.value(tag).toBool()) summary += QStringLiteral(" · ") + QString::fromUtf8(tag);
+        }
+        auto *item = new QListWidgetItem(m_collectionList);
         item->setData(Qt::UserRole, id);
         if (blocked) {
             item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
             item->setForeground(QBrush(QColor("#8b96a8")));
+            GroupItemRow::bind(m_collectionList, item, id, displayName, QStringLiteral("已屏蔽 · ") + summary, true);
         } else {
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             const bool any = p.isEmpty() || p.value("images").toBool() || p.value("links").toBool()
                              || p.value("files").toBool() || p.value("forwards").toBool();
             item->setCheckState(any ? Qt::Checked : Qt::Unchecked);
+            GroupItemRow::bind(m_collectionList, item, id, displayName, summary);
         }
         m_collectionList->addItem(item);
     }
