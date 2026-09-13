@@ -309,6 +309,7 @@ QString Strings::section(const QString &section) {
     if (section == "advanced") return "高级";
     if (section == "features") return "功能开关";
     if (section == "load") return "负载调度";
+    if (section == "network") return "网络";
     if (section == "relay") return "群搬运";
     if (section == "chat") return "聊天";
     return section;

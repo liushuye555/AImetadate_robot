@@ -54,6 +54,7 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('ai_context.min_new_messages', 'number', ai.get('min_new_messages', 300), 'Minimum new messages', '触发分析的最少新消息数', section='ai', min=1, max=100000),
         field('ai_context.max_chunks', 'number', ai.get('max_chunks'), 'Maximum batches per run', '每次最大批次数', section='ai', nullable=True, min=1, max=10000),
         field('ai_context.allowed_windows', 'list', ai.get('allowed_windows', []), 'Allowed analysis windows', '允许分析时段', section='ai'),
+        field('ai_context.all_day_weekdays', 'list', ai.get('all_day_weekdays', []), 'All-day weekdays (e.g. 周六,周日)', '全天开放日（如：周六,周日）', section='ai'),
         field('daily_report.enabled', 'bool', data.get('daily_report', {}).get('enabled', True), 'Daily report enabled', '启用日报', section='daily'),
         field('daily_report.hour', 'number', data.get('daily_report', {}).get('hour', 20), 'Daily report hour', '日报发送时间', section='daily', min=0, max=23),
         field('daily_report.max_links', 'number', data.get('daily_report', {}).get('max_links', 20), 'Max daily links', '日报最大链接数', section='daily', min=0, max=100),
