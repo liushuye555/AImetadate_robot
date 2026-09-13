@@ -279,22 +279,21 @@ class Store:
         links = extract_links(text)
         message_key = canonical_message_key(raw)
         with closing(sqlite3.connect(self.path)) as conn:
-            if message_key:
-                existing = conn.execute('SELECT 1 FROM messages WHERE scope = ? AND message_key = ?', (scope, message_key)).fetchone()
-                if existing:
-                    return []
-            conn.execute(
-                'INSERT INTO messages (scope, user_id, text, links_json, raw_json, message_key) VALUES (?, ?, ?, ?, ?, ?)',
+            # INSERT OR IGNORE：历史消息追赶与实时事件可能并发写入同一消息，
+            # 先查后插存在竞态窗口（UNIQUE 约束冲突会让整个 handle_event 失败）
+            cur = conn.execute(
+                'INSERT OR IGNORE INTO messages (scope, user_id, text, links_json, raw_json, message_key) VALUES (?, ?, ?, ?, ?, ?)',
                 (scope, str(user_id), text, json.dumps(links, ensure_ascii=False), json.dumps(raw, ensure_ascii=False), message_key),
             )
-            if collect_links:
+            inserted = cur.rowcount > 0
+            if inserted and collect_links:
                 for url in links:
                     conn.execute(
                         'INSERT INTO links (scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?)',
                         (scope, str(user_id), url, text, '', 'link'),
                     )
             conn.commit()
-        return links
+        return links if inserted else []
 
     def message_row_id(self, scope: str, raw: dict[str, Any]) -> int | None:
         message_key = canonical_message_key(raw)
