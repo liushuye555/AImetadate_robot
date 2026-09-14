@@ -32,22 +32,22 @@ class FakeConfig:
 
 def test_recheck_demotes_non_ai_images(tmp_path, monkeypatch):
     store = make_store(tmp_path)
-    # 依次判定（id DESC）：sha4(AI) → sha3(非AI) → sha2(AI) → sha1(非AI)
-    verdicts = [{'is_ai_image': True, 'tokens': 10},
-                {'is_ai_image': False, 'tokens': 10},
-                {'is_ai_image': True, 'tokens': 10},
-                {'is_ai_image': False, 'tokens': 10}]
+    # 并行下发，判定按图路径固定：sha4(AI) / sha2(AI) 保留，sha3 / sha1(非AI) 降级
+    verdict_by_stem = {'img3': {'is_ai_image': True, 'tokens': 10},
+                       'img2': {'is_ai_image': False, 'tokens': 10},
+                       'img1': {'is_ai_image': True, 'tokens': 10},
+                       'img0': {'is_ai_image': False, 'tokens': 10}}
     seen_modes = []
 
     def fake_judge(cfg, path, ctx, mode='strict'):
         seen_modes.append(mode)
-        return verdicts.pop(0)
+        return verdict_by_stem[Path(path).stem]
 
     monkeypatch.setattr(vision_recheck, 'judge_image', fake_judge)
 
     result = vision_recheck.recheck_batch(tmp_path, FakeConfig(), force=True)
 
-    assert result == {'checked': 4, 'demoted': 2, 'cached': 0}
+    assert result['checked'] == 4 and result['demoted'] == 2 and result['cached'] == 0
     import sqlite3
     conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
     rows = dict(conn.execute('SELECT sha256, retention_reason FROM images').fetchall())

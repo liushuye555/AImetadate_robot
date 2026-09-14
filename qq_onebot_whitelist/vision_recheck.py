@@ -179,6 +179,7 @@ def recheck_batch(project_dir: str | Path, config, *, limit: int | None = None,
     checked = demoted = reused = 0
     # 内容级缓存：同 sha256 的图（转发/多群副本）只花一次钱，命中直接落行标记
     cached = store.vision_cached_verdicts([r[1] for r in rows])
+    jobs: list[tuple[int, str, Path, str, str]] = []
     for image_id, sha256, kept_path, context, category in rows:
         path = Path(kept_path)
         if not path.exists():
@@ -192,8 +193,25 @@ def recheck_batch(project_dir: str | Path, config, *, limit: int | None = None,
                 store.demote_image_to_candidate(image_id)
                 demoted += 1
             continue
-        mode = CATEGORY_MODES.get(category, 'strict')
-        verdict = judge_image(cfg, path, context, mode=mode)
+        jobs.append((image_id, sha256, path, context, CATEGORY_MODES.get(category, 'strict')))
+
+    # 并行调用视觉模型（网络 IO 密集，线程池即可），写库在主线程串行完成
+    def _judge(job: tuple[int, str, Path, str, str]):
+        image_id, sha256, path, context, mode = job
+        try:
+            return (image_id, sha256, judge_image(cfg, path, context, mode=mode))
+        except Exception as exc:
+            print(f'vision recheck failed: {type(exc).__name__}: {exc}')
+            return (image_id, sha256, None)
+
+    if jobs:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+            results = list(pool.map(_judge, jobs))
+    else:
+        results = []
+
+    for image_id, sha256, verdict in results:
         content_verdict = 'missing' if verdict is None else \
             ('ok' if verdict['is_ai_image'] else 'not_ai')
         store.set_vision_verdict(content_verdict, image_id,
