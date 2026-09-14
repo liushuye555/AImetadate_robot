@@ -47,7 +47,7 @@ def test_recheck_demotes_non_ai_images(tmp_path, monkeypatch):
 
     result = vision_recheck.recheck_batch(tmp_path, FakeConfig(), force=True)
 
-    assert result == {'checked': 4, 'demoted': 2}
+    assert result == {'checked': 4, 'demoted': 2, 'cached': 0}
     import sqlite3
     conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
     rows = dict(conn.execute('SELECT sha256, retention_reason FROM images').fetchall())
@@ -70,6 +70,39 @@ def test_recheck_verdict_cached_never_repeats(tmp_path, monkeypatch):
     monkeypatch.setattr(vision_recheck, 'judge_image',
                         lambda cfg, path, ctx, mode='strict': (_ for _ in ()).throw(AssertionError('should not judge')))
     assert vision_recheck.recheck_batch(tmp_path, FakeConfig(), force=True)['checked'] == 0
+
+
+def test_recheck_reuses_content_verdict_for_same_sha(tmp_path, monkeypatch):
+    """同 sha256 的图再次入库：命中内容缓存，不再花钱重判，判定沿用。"""
+    store = make_store(tmp_path)
+    calls = []
+
+    def fake_judge(cfg, path, ctx, mode='strict'):
+        calls.append(mode)
+        return {'is_ai_image': False, 'tokens': 10}
+
+    monkeypatch.setattr(vision_recheck, 'judge_image', fake_judge)
+    vision_recheck.recheck_batch(tmp_path, FakeConfig(), force=True)
+    assert len(calls) == 4
+
+    # 同内容（sha1）再入库一条
+    img = tmp_path / 'img_dup.png'
+    img.write_bytes(b'x' * 64)
+    store.record_image(scope='group:1', user_id='u', result={
+        'sha256': 'sha1', 'format': 'PNG', 'size': 64, 'width': 64, 'height': 64,
+        'kept_path': str(img), 'retention_reason': 'params_discussion', 'text_excerpt': '重复图',
+    }, raw={})
+
+    result = vision_recheck.recheck_batch(tmp_path, FakeConfig(), force=True)
+    assert result['cached'] == 1 and result['checked'] == 0
+    assert len(calls) == 4  # 没有为重复内容再调用
+
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
+    reason = conn.execute(
+        "SELECT retention_reason FROM images WHERE text_excerpt='重复图'").fetchone()[0]
+    conn.close()
+    assert reason == 'candidate'  # 沿用缓存的 not_ai 判定降级
 
 
 def test_recheck_respects_batch_limit(tmp_path, monkeypatch):

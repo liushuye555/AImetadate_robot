@@ -176,20 +176,32 @@ def recheck_batch(project_dir: str | Path, config, *, limit: int | None = None,
     store = Store(project_dir / 'data' / 'bot.db')
     batch = min(limit or config.vision_recheck_batch, 500)
     rows = store.vision_unchecked_images(categories=tuple(CATEGORY_MODES), limit=batch)
-    checked = demoted = 0
+    checked = demoted = reused = 0
+    # 内容级缓存：同 sha256 的图（转发/多群副本）只花一次钱，命中直接落行标记
+    cached = store.vision_cached_verdicts([r[1] for r in rows])
     for image_id, sha256, kept_path, context, category in rows:
         path = Path(kept_path)
         if not path.exists():
             store.set_vision_verdict('missing', image_id)
             continue
+        cached_verdict = cached.get(sha256)
+        if cached_verdict:
+            store.set_vision_verdict(cached_verdict, image_id, sha256=sha256)
+            reused += 1
+            if cached_verdict == 'not_ai':
+                store.demote_image_to_candidate(image_id)
+                demoted += 1
+            continue
         mode = CATEGORY_MODES.get(category, 'strict')
         verdict = judge_image(cfg, path, context, mode=mode)
-        store.set_vision_verdict('missing' if verdict is None else
-                                 ('ok' if verdict['is_ai_image'] else 'not_ai'), image_id)
+        content_verdict = 'missing' if verdict is None else \
+            ('ok' if verdict['is_ai_image'] else 'not_ai')
+        store.set_vision_verdict(content_verdict, image_id,
+                                 sha256=sha256 if content_verdict != 'missing' else None)
         if verdict is None:
             continue
         checked += 1
         if not verdict['is_ai_image']:
             store.demote_image_to_candidate(image_id)
             demoted += 1
-    return {'checked': checked, 'demoted': demoted}
+    return {'checked': checked, 'demoted': demoted, 'cached': reused}

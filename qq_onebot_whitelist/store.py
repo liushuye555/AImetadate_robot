@@ -251,6 +251,8 @@ class Store:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_obfuscated INTEGER')
         if 'xfq_confidence' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_confidence TEXT')
+        if 'vision_verdict' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN vision_verdict TEXT')
 
         image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)').fetchall()}
         if 'restored_path' not in image_cols:
@@ -1112,14 +1114,39 @@ class Store:
             return None
         return (float(row[0]), int(row[1]) if row[1] is not None else None, bool(row[2]), row[3])
 
-    def set_vision_verdict(self, verdict: str, image_id: int) -> None:
-        """缓存视觉复核结果（一张图只花一次 token）。"""
+    def set_vision_verdict(self, verdict: str, image_id: int, sha256: str | None = None) -> None:
+        """缓存视觉复核结果（一张图只花一次 token）。
+
+        内容级判定（ok/not_ai）同时按 sha256 写入 image_hashes，
+        同一内容的其他副本/转发不再重复花钱；missing 是文件问题，不进内容缓存。
+        """
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute(
                 'UPDATE images SET vision_verdict = ?, vision_checked = 1 WHERE id = ?',
                 (verdict, int(image_id)),
             )
+            if sha256 and verdict in ('ok', 'not_ai'):
+                conn.execute(
+                    'INSERT INTO image_hashes (sha256, vision_verdict) VALUES (?, ?) '
+                    'ON CONFLICT(sha256) DO UPDATE SET vision_verdict = excluded.vision_verdict, '
+                    'updated_at = CURRENT_TIMESTAMP',
+                    (sha256, verdict),
+                )
             conn.commit()
+
+    def vision_cached_verdicts(self, sha256s: list[str]) -> dict[str, str]:
+        """按内容查已缓存的视觉判定（仅 ok/not_ai），用于跳过同图重复复核。"""
+        sha256s = [s for s in sha256s if s]
+        if not sha256s:
+            return {}
+        with closing(sqlite3.connect(self.path)) as conn:
+            placeholders = ', '.join('?' for _ in sha256s)
+            rows = conn.execute(
+                f'SELECT sha256, vision_verdict FROM image_hashes '
+                f'WHERE vision_verdict IN (\'ok\', \'not_ai\') AND sha256 IN ({placeholders})',
+                sha256s,
+            ).fetchall()
+        return {sha: verdict for sha, verdict in rows}
 
     def vision_unchecked_images(self, *, categories: tuple[str, ...], limit: int = 20) -> list[tuple]:
         """未做过视觉复核的图：(id, sha256, kept_path, context, category)。"""
