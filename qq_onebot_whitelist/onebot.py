@@ -733,7 +733,10 @@ def _acquire_single_instance_lock() -> bool:
     def _current_stamp() -> str:
         return f'{os.getpid()}:{_creation_time(os.getpid())}'
 
-    for _ in range(2):
+    attempts = 0
+    alive_seen = 0
+    while attempts < 6:
+        attempts += 1
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -743,9 +746,15 @@ def _acquire_single_instance_lock() -> bool:
                 pid, created = int(pid_s or '0'), int(created_s or '0')
             except Exception:
                 pid, created = 0, 0
-            if _lock_owner_alive(pid, created):
+            if not _lock_owner_alive(pid, created):
+                lock_path.unlink(missing_ok=True)  # 崩溃残留或 PID 已被复用的陈旧锁
+                continue
+            # 强杀旧实例后立刻启动的竞态：终止中的进程短暂仍可查询。
+            # 等 1.5s 复核一次；连续两次都确认存活才认输
+            alive_seen += 1
+            if alive_seen >= 2:
                 return False
-            lock_path.unlink(missing_ok=True)  # 崩溃残留或 PID 已被复用的陈旧锁
+            time.sleep(1.5)
             continue
         os.write(fd, _current_stamp().encode())
 
