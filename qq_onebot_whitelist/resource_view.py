@@ -230,11 +230,12 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
         link_sections.append('</ul></section>')
     if not link_sections:
         link_sections.append('<section class="card"><p class="muted">暂无高价值链接。</p></section>')
-    (view / 'resources.html').write_text(
+    from .build_image_view import _write_if_changed
+    _write_if_changed(
+        view / 'resources.html',
         _html_page('资源链接', '仅过滤明确的娱乐、广告和泛分享链接；按 URL 去重。', link_sections,
                    toolbar=link_toolbar, background=background,
                    sort_options=[('', '默认排序'), ('time-desc', '最新优先'), ('time-asc', '最早优先')]),
-        encoding='utf-8',
     )
 
     files = select_resource_files(store)
@@ -270,12 +271,13 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
             file_sections.append('</ul></section>')
     else:
         file_sections = ['<section class="card"><p class="muted">暂无高价值文件/工作流。</p></section>']
-    (view / 'files.html').write_text(
+    from .build_image_view import _write_if_changed
+    _write_if_changed(
+        view / 'files.html',
         _html_page('群文件/工作流', '按 文件名+大小+类型 去重；文件不下载，只记录所在群。', file_sections,
                    toolbar=file_toolbar, background=background,
                    sort_options=[('', '默认排序'), ('time-desc', '最新优先'), ('name-asc', '按名称'),
                                  ('size-desc', '最大优先'), ('size-asc', '最小优先')]),
-        encoding='utf-8',
     )
 
     return {'resource_links': link_count, 'resource_files': file_count}

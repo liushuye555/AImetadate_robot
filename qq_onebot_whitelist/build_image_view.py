@@ -10,6 +10,7 @@ import random
 import re
 import shutil
 import sqlite3
+import time
 from urllib.parse import quote
 
 from .view_theme import THEME_INIT_JS, THEME_TOGGLE_HTML, THEME_TOGGLE_JS, THEME_VARS_CSS
@@ -98,12 +99,33 @@ def _index_card(href: str, icon: str, title: str, desc: str, count: str) -> str:
     )
 
 
+def _write_if_changed(path: Path, content: str) -> bool:
+    """内容没变就不动文件：减少无谓的磁盘写入（索引/资源页每轮都在重建）。"""
+    try:
+        if path.exists() and path.read_text(encoding='utf-8') == content:
+            return False
+    except OSError:
+        pass
+    path.write_text(content, encoding='utf-8')
+    return True
+
+
 def _make_wallpaper(project_dir: Path, view: Path, conn: sqlite3.Connection) -> str | None:
     """随机挑一张横版高清归档图硬链进视图目录，作为全屏壁纸背景。
 
     只在 ai_metadata/positive_feedback 里选（质量信号最强），尺寸/比例
     适合铺满屏幕；挑不出就返回 None，页面回退到纯渐变背景。
+    壁纸每天换一张：同一天内跳过 PIL 重压缩与重写（每小时同步都不再写盘）。
     """
+    dst = view / 'wallpaper.jpg'
+    stamp = view / '.wallpaper-day'
+    today = time.strftime('%Y-%m-%d')
+    if dst.exists() and stamp.exists():
+        try:
+            if stamp.read_text().strip() == today:
+                return None  # 当天已生成，跳过（不打印，避免每轮刷日志）
+        except OSError:
+            pass
     try:
         rows = conn.execute(
             "SELECT kept_path FROM images "
@@ -123,13 +145,13 @@ def _make_wallpaper(project_dir: Path, view: Path, conn: sqlite3.Connection) -> 
         return None
     src = random.choice(candidates)
     # 压成 1920px 内的 JPEG（几百 KB），首屏不再被几 MB 的原图卡住
-    dst = view / 'wallpaper.jpg'
     try:
         from PIL import Image
         with Image.open(src) as img:
             rgb = img.convert('RGB')
             rgb.thumbnail((WALLPAPER_MAX_DIM, WALLPAPER_MAX_DIM), Image.LANCZOS)
             rgb.save(dst, 'JPEG', quality=82)
+        stamp.write_text(today, encoding='utf-8')
         return dst.name
     except Exception:
         pass
@@ -1000,8 +1022,8 @@ def _load_build_state(project_dir: Path) -> dict:
 
 def _save_build_state(project_dir: Path, state: dict) -> None:
     try:
-        _build_state_path(project_dir).write_text(
-            json.dumps(state, ensure_ascii=False), encoding='utf-8')
+        _write_if_changed(_build_state_path(project_dir),
+                          json.dumps(state, ensure_ascii=False))
     except OSError:
         pass
 
@@ -1133,6 +1155,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     view.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('PRAGMA journal_mode=WAL')
     conn.row_factory = sqlite3.Row
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
     sha256_col = 'sha256, ' if 'sha256' in image_cols else "'' AS sha256, "
@@ -1333,7 +1356,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
     except Exception as exc:
         print(f'resource pages failed: {type(exc).__name__}: {exc}')
     readme = view / 'README.txt'
-    readme.write_text(
+    _write_if_changed(
+        readme,
         '这是图片分类视图，按数据库筛选结果生成。\n'
         '优先使用 NTFS 硬链接，通常不额外占空间；不要在这里编辑原始数据库。\n\n'
         '分类：\n'
@@ -1344,7 +1368,6 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n',
-        encoding='utf-8',
     )
     write_view_index(view, counts)
     _save_build_state(project_dir, state)

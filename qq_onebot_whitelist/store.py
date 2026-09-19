@@ -219,6 +219,10 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.path)) as conn:
+            # WAL：每笔事务不再创建/删除 journal 文件，读写并发也更好；
+            # 持久设置，设一次即生效
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=5000')
             conn.executescript(SCHEMA)
             self._migrate(conn)
             conn.commit()
