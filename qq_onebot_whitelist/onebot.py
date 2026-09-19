@@ -687,76 +687,62 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         retry_delay = min(retry_delay * 2, 60)
 
 
+_MUTEX_HANDLES: list = []  # 保住互斥体句柄引用到进程退出（防 GC）
+
+
 def _acquire_single_instance_lock() -> bool:
     """单实例锁：面板自动重启与手动/uv 启动叠加会跑出多个 bot（重复回复、重复同步）。
 
-    data/bot.lock 以 O_CREAT|O_EXCL 抢占并写入 PID；已有锁且 PID 存活则拒绝启动，
-    锁文件是崩溃残留（PID 已不存在）时清掉重抢。文件句柄保持到进程退出时删除。
+    Windows 用命名互斥体：内核持有，进程死亡（含强杀）时 OS 自动释放，
+    天然没有"陈旧锁"——PID+创建时间方案会败给句柄泄漏的僵尸进程
+    （已终止但父进程仍握句柄时 OpenProcess/GetProcessTimes 依旧成功）。
+    POSIX 回退到 O_EXCL 锁文件 + PID 存活检查。
     """
     import atexit
     import os
-    import ctypes
 
     lock_path = _REPO_ROOT / 'data' / 'bot.lock'
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    k32 = ctypes.windll.kernel32 if os.name == 'nt' else None
-
-    def _creation_time(pid: int) -> int:
-        """进程创建时间（FILETIME）；拿不到返回 0。用于识别 Windows PID 复用。"""
-        if not k32:
-            return 0
-        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if os.name == 'nt':
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.CreateMutexW(None, True, 'Global\\qq_onebot_whitelist_bot')
         if not handle:
-            return 0
-        created = ctypes.c_longlong(0)
-        exit_t = ctypes.c_longlong(0)
-        kernel_t = ctypes.c_longlong(0)
-        user_t = ctypes.c_longlong(0)
-        ok = k32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exit_t),
-                                 ctypes.byref(kernel_t), ctypes.byref(user_t))
-        k32.CloseHandle(handle)
-        return created.value if ok else 0
+            return False  # 创建失败，宁可不跑也别双开
+        if k32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            k32.CloseHandle(handle)
+            return False
+        _MUTEX_HANDLES.append(handle)  # 进程退出时内核自动释放，无需显式清理
+        try:
+            lock_path.write_text(str(os.getpid()), encoding='utf-8')  # 仅诊断用途
+        except OSError:
+            pass
+        return True
 
-    def _lock_owner_alive(pid: int, created: int) -> bool:
+    # POSIX 回退：锁文件 + PID 存活检查
+    def _pid_alive(pid: int) -> bool:
         if pid <= 0:
             return False
         try:
-            if os.name == 'nt':
-                # PID 会被系统回收复用：必须连创建时间一起比对
-                return _creation_time(pid) == created and created != 0
             os.kill(pid, 0)
             return True
-        except Exception:
+        except OSError:
             return False
 
-    def _current_stamp() -> str:
-        return f'{os.getpid()}:{_creation_time(os.getpid())}'
-
-    attempts = 0
-    alive_seen = 0
-    while attempts < 6:
-        attempts += 1
+    for _ in range(2):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             try:
-                raw = lock_path.read_text().strip() or '0:0'
-                pid_s, _, created_s = raw.partition(':')
-                pid, created = int(pid_s or '0'), int(created_s or '0')
+                pid = int(lock_path.read_text().strip() or '0')
             except Exception:
-                pid, created = 0, 0
-            if not _lock_owner_alive(pid, created):
-                lock_path.unlink(missing_ok=True)  # 崩溃残留或 PID 已被复用的陈旧锁
-                continue
-            # 强杀旧实例后立刻启动的竞态：终止中的进程短暂仍可查询。
-            # 等 1.5s 复核一次；连续两次都确认存活才认输
-            alive_seen += 1
-            if alive_seen >= 2:
+                pid = 0
+            if _pid_alive(pid):
                 return False
-            time.sleep(1.5)
+            lock_path.unlink(missing_ok=True)
             continue
-        os.write(fd, _current_stamp().encode())
+        os.write(fd, str(os.getpid()).encode())
 
         def _release(fd: int = fd) -> None:
             try:
