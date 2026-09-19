@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -483,6 +484,29 @@ def reclassify_params_judge(project_dir: str | Path, *, mode: str = 'rule') -> i
     return changed
 
 
+def cleanup_stale_tmp_files(project_dir: str | Path, *, max_age_hours: float = 24) -> int:
+    """清掉下载中断/处理异常留下的孤儿临时文件（.download-* 等）。
+
+    只认修改时间超过 max_age_hours 的文件——正在处理中的临时件不会被误删。
+    """
+    tmp_dir = Path(project_dir) / 'data' / 'tmp'
+    if not tmp_dir.is_dir():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    removed = 0
+    for entry in tmp_dir.iterdir():
+        try:
+            if not entry.is_file() or entry.name.startswith('.git'):
+                continue
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            entry.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[str, int]:
     project_dir = Path(project_dir)
     store = Store(project_dir / 'data' / 'bot.db')
@@ -501,6 +525,9 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
             print(f'archive budget: removed {len(removed)} files')
     except Exception as exc:
         print(f'archive budget failed: {type(exc).__name__}: {exc}')
+    stale_tmp_removed = cleanup_stale_tmp_files(project_dir)
+    if stale_tmp_removed:
+        print(f'stale tmp cleanup: removed {stale_tmp_removed} files')
     image_duplicates_removed = deduplicate_image_storage(project_dir, store)
     missing_cleared = store.clear_missing_image_paths(project_dir)
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
@@ -521,7 +548,7 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
     counts.update(vision_stats)
-    return {'archive_budget_removed': archive_budget_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'stale_tmp_removed': stale_tmp_removed, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
 
 
 def main() -> int:
