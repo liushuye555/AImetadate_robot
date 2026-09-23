@@ -1170,7 +1170,6 @@ def build_view(project_dir: Path) -> dict[str, int]:
     dhash_cache = _DhashCache(conn)
     plans: dict[str, _CatPlan] = {}
     saved_categories: set[str] = set()
-    dedup_seen: dict[str, set[str]] = {}
     # 同批判定：同一完整工作流签名 且 组大小 2..30 且 时间跨度 ≤ 24 小时
     batch_keys: set[str] = set()
     if 'prompt_key' in image_cols:
@@ -1192,6 +1191,23 @@ def build_view(project_dir: Path) -> dict[str, int]:
                     batch_keys.add(str(pk))
         except Exception:
             batch_keys = set()
+    # 全类目按内容（sha256）去重：同一张图重发/转发只占一个位置，展示不重复。
+    # 后台记录保留全部出现记录；类目内出现次数先按 SQL 统计，代表行文件名带 _xN。
+    occurrences: dict[str, dict[str, int]] = {}
+    if 'sha256' in image_cols:
+        try:
+            for reason_val, source_val, sha_val, cnt in conn.execute(
+                "SELECT retention_reason, COALESCE(ai_source, ''), sha256, COUNT(*) FROM images "
+                "WHERE kept_path IS NOT NULL AND merged_into IS NULL AND sha256 != '' "
+                "GROUP BY retention_reason, COALESCE(ai_source, ''), sha256 HAVING COUNT(*) > 1"
+            ):
+                cat_val = CATEGORY_NAMES.get(str(reason_val), '90_' + safe_name(str(reason_val)))
+                if str(reason_val) == 'ai_metadata' and source_val:
+                    cat_val = cat_val + '_' + safe_name(str(source_val))
+                occurrences.setdefault(cat_val, {})[str(sha_val)] = int(cnt)
+        except sqlite3.OperationalError:
+            occurrences = {}
+    dedup_seen: dict[str, set[str]] = {}
     for row in rows:
         src = source_path(project_dir, row['kept_path'])
         if not src.exists():
@@ -1215,10 +1231,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
             cat = cat + '_' + safe_name(str(row['ai_source']))
-        # 03/05 分类按 sha 去重：同一张图（同 sha）只显示最新一条
-        if reason in ('prompt_bound', 'params_discussion', 'xiaofanqie_obfuscated'):
+        if sha256:
             seen = dedup_seen.setdefault(cat, set())
-            if sha256 and sha256 in seen:
+            if sha256 in seen:
                 continue
             seen.add(sha256)
         size_class = 'unknown_size'
@@ -1237,7 +1252,10 @@ def build_view(project_dir: Path) -> dict[str, int]:
         pk = str(row['prompt_key'] or '')[:8] if (
             'prompt_key' in row.keys() and row['prompt_key'] and str(row['prompt_key']) in batch_keys
         ) else ''
-        filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}") + ext
+        filename = safe_name(
+            f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}"
+            f"{'_x' + str(occurrences.get(cat, {}).get(sha256, 1)) if sha256 and occurrences.get(cat, {}).get(sha256, 1) > 1 else ''}"
+        ) + ext
         plan = plans.setdefault(cat, _CatPlan())
         plan.files[f'{size_class}/{filename}'] = str(src)
         if reason in ('prompt_bound', 'params_discussion'):
