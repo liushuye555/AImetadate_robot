@@ -267,12 +267,15 @@ class Store:
             conn.execute('ALTER TABLE images ADD COLUMN vision_checked INTEGER DEFAULT 0')
         if 'vision_verdict' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN vision_verdict TEXT')
+        if 'merged_into' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN merged_into INTEGER')
         if 'bound_prompt' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN bound_prompt TEXT')
         if 'prompt_key' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN prompt_key TEXT')
         if 'context_reason' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN context_reason TEXT')
+            conn.execute('ALTER TABLE images ADD COLUMN stego_state TEXT')
         if 'saved_category' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN saved_category TEXT')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_images_saved_category ON images(saved_category, id)')
@@ -338,8 +341,8 @@ class Store:
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
                   has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, saved_category, restored_path,
-                  deobfuscated, bound_prompt, prompt_key, context_reason, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  deobfuscated, bound_prompt, prompt_key, context_reason, stego_state, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -361,10 +364,34 @@ class Store:
                     result.get('bound_prompt'),
                     result.get('prompt_key'),
                     result.get('context_reason'),
+                    result.get('stego_state'),
                     json.dumps(raw, ensure_ascii=False),
                 ),
             )
             conn.commit()
+
+    def image_segment_processed(self, scope: str, message_db_id: int | None, segment_index: int) -> bool:
+        """同一次采集事件（scope+消息库ID+图片段序号）是否已处理过。
+
+        历史/实时并发重放同一事件时避免同一张图重复记账；
+        不同消息发同一张图不受影响（message_db_id 不同）。
+        """
+        if not message_db_id:
+            return False
+        with closing(sqlite3.connect(self.path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM images WHERE scope = ? AND raw_json LIKE ? LIMIT 1",
+                (scope, f'%"message_db_id": {int(message_db_id)}%'),
+            ).fetchone()
+            if not row:
+                return False
+            # 同消息已记过图；再确认该段序号也处理过（多段消息部分失败时可续传）
+            row2 = conn.execute(
+                "SELECT 1 FROM images WHERE scope = ? AND raw_json LIKE ? AND raw_json LIKE ? LIMIT 1",
+                (scope, f'%"message_db_id": {int(message_db_id)}%',
+                 f'%"segment_index": {int(segment_index)}%'),
+            ).fetchone()
+            return bool(row2)
 
     def get_image_record(self, image_id: int) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
@@ -1151,6 +1178,32 @@ class Store:
                 sha256s,
             ).fetchall()
         return {sha: verdict for sha, verdict in rows}
+
+    def merge_duplicate_event_images(self) -> int:
+        """归并同一次采集事件里的重复记账（幂等上线前的历史遗留）。
+
+        同 scope+message_db_id+sha256 出现多条时，保留最早一条为代表，
+        其余不删除：kept_path 置空（不参与视图/磁盘引用）、merged_into 指向
+        代表行 id，可随时审计或还原。
+        """
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                '''SELECT json_extract(raw_json, '$.message_db_id') mid, sha256,
+                          COUNT(*) c, MIN(id) keep_id
+                   FROM images
+                   WHERE sha256 != '' AND raw_json LIKE '%"message_db_id"%'
+                   GROUP BY scope, mid, sha256 HAVING c > 1'''
+            ).fetchall()
+            merged = 0
+            for mid, sha, _c, keep_id in rows:
+                cur = conn.execute(
+                    '''UPDATE images SET kept_path = NULL, merged_into = ?
+                       WHERE json_extract(raw_json, '$.message_db_id') = ? AND sha256 = ? AND id != ?''',
+                    (keep_id, mid, sha, keep_id),
+                )
+                merged += cur.rowcount
+            conn.commit()
+        return merged
 
     def vision_unchecked_images(self, *, categories: tuple[str, ...], limit: int = 20) -> list[tuple]:
         """未做过视觉复核的图：(id, sha256, kept_path, context, category)。"""

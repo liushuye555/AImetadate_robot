@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import gzip
+import json
 import struct
 import zlib
 
@@ -15,17 +17,50 @@ class ImageMetadata:
     text_excerpt: str = ''
     has_ai_metadata: bool = False
     ai_source: str | None = None
+    # NovelAI alpha 通道隐写：None=未检查；'suspected'=发现疑似载荷；'verified'=验证通过
+    stego_state: str | None = None
+    stego_excerpt: str = ''
 
 
-AI_MARKERS = {
-    'ComfyUI': ['comfyui', 'workflow', 'class_type', 'ksampler'],
-    'NovelAI': ['novelai', 'ucPreset', 'steps', 'scale'],
-    'A1111': ['negative prompt', 'cfg scale', 'sampler:', 'steps:', 'seed:'],
+# 来源判定分级：
+# - strong：来源专有的结构/签名，命中即可确认（ucPreset 是 NovelAI 软件专有键，
+#   class_type/ksampler 是 ComfyUI 工作流专有）；
+# - weak：通用参数词（steps/scale 同样见于 A1111/WebUI 参数块），单独命中
+#   只给"疑似"（ai_source 前缀 suspect:），不直接定来源——旧规则里
+#   NovelAI 排在 A1111 之前，纯 WebUI 参数图曾被误标为 NovelAI。
+AI_MARKERS_STRONG = {
+    'ComfyUI': ['comfyui', 'class_type', 'ksampler'],
+    'NovelAI': ['novelai', 'ucpreset'],
+    'A1111': ['negative prompt'],
     'Civitai': ['civitai'],
     'DALL-E/OpenAI': ['dall-e', 'dalle', 'openai'],
     'Midjourney': ['midjourney'],
     'Firefly': ['firefly'],
 }
+AI_MARKERS_WEAK = {
+    'NovelAI': ['steps', 'scale'],
+    'ComfyUI': ['workflow'],
+    'A1111': ['cfg scale', 'sampler:', 'steps:', 'seed:'],
+}
+SUSPECT_PREFIX = 'suspect:'
+
+# NovelAI alpha 通道隐写（stealth pnginfo）格式：alpha 最低位按 x 外层、y 内层
+# 逐像素展开成比特流，开头是签名 "stealth_pnginfo"（明文）或 "stealth_pngcomp"
+# （gzip 压缩），随后 32 位大端长度（比特数），再是载荷本体。
+STEGO_SIGNATURES = ('stealth_pnginfo', 'stealth_pngcomp')
+_STEGO_MAX_PIXELS = 24_000_000  # 解码上限，防超大图拖慢采集
+
+
+def classify_ai_source(text: str) -> tuple[bool, str | None]:
+    """返回 (有 AI 元数据证据, 来源或疑似来源)。强证据优先；弱证据只给疑似。"""
+    lower = text.lower()
+    for source, markers in AI_MARKERS_STRONG.items():
+        if any(marker.lower() in lower for marker in markers):
+            return True, source
+    for source, markers in AI_MARKERS_WEAK.items():
+        if any(marker.lower() in lower for marker in markers):
+            return True, SUSPECT_PREFIX + source
+    return False, None
 
 
 def parse_image_metadata(path: str | Path) -> ImageMetadata:
@@ -79,6 +114,7 @@ def _parse_png(path: Path) -> ImageMetadata:
             elif kind == b'IEND':
                 break
     _classify_ai(meta, '\n'.join(texts))
+    _check_alpha_stego(path, meta)
     return meta
 
 
@@ -149,13 +185,99 @@ def _add_text(meta: ImageMetadata, texts: list[str], key: bytes, text: str) -> N
             meta.text_excerpt = text[:500]
 
 
+def _decode_stego_bits(img) -> tuple[str, str] | None:
+    """从 PIL 图的 alpha 最低位提取 stealth pnginfo 载荷。
+
+    返回 ('suspected', '') 表示签名命中但载荷没解出（截断/损坏/格式变体）；
+    返回 ('verified', 文本) 表示完整解出可读元数据；None 表示没有隐写迹象。
+    """
+    if img.mode != 'RGBA':
+        return None
+    width, height = img.size
+    if width * height > _STEGO_MAX_PIXELS:
+        return None
+    pixels = img.load()
+
+    def bit_at(index: int) -> int:
+        # 写入端按 x 外层、y 内层展开，比特 i 位于像素 (i // height, i % height)
+        return pixels[index // height, index % height][3] & 1
+
+    sig_bits_len = len(STEGO_SIGNATURES[0]) * 8
+    if sig_bits_len > width * height:
+        return None
+    sig_stream = bytes(bit_at(i) for i in range(sig_bits_len))
+    matched_sig = None
+    for sig in STEGO_SIGNATURES:
+        sig_bits = bytes(int(b) for byte in sig.encode('utf-8') for b in format(byte, '08b'))
+        if sig_stream == sig_bits:
+            matched_sig = sig
+            break
+    if not matched_sig:
+        return None
+    compressed = matched_sig == 'stealth_pngcomp'
+
+    pos = sig_bits_len
+
+    def take(count: int) -> bytes | None:
+        nonlocal pos
+        if pos + count > width * height:
+            return None
+        out = bytes(bit_at(i) for i in range(pos, pos + count))
+        pos += count
+        return out
+
+    def to_bytes(bits: bytes) -> bytes:
+        return bytes(int(''.join(str(b) for b in bits[i:i + 8]), 2) for i in range(0, len(bits), 8))
+
+    len_bits = take(32)
+    if not len_bits:
+        return 'suspected', ''
+    payload_bit_len = int.from_bytes(to_bytes(len_bits), 'big')
+    if payload_bit_len <= 0 or payload_bit_len % 8 or payload_bit_len > 16_000_000:
+        return 'suspected', ''
+    payload_bits = take(payload_bit_len)
+    if not payload_bits:
+        return 'suspected', ''
+    payload = to_bytes(payload_bits)
+    if compressed:
+        try:
+            payload = gzip.decompress(payload)
+        except Exception:
+            return 'suspected', ''
+    text = payload.decode('utf-8', errors='replace').strip()
+    if not text:
+        return 'suspected', ''
+    # 验证通过的标准：载荷是可读文本（NovelAI 是 JSON 或提示词参数块）
+    printable = sum(ch.isprintable() or ch in '\r\n\t' for ch in text)
+    if printable / max(1, len(text)) < 0.9:
+        return 'suspected', ''
+    return 'verified', text[:2000]
+
+
+def _check_alpha_stego(path: Path, meta: ImageMetadata) -> None:
+    """独立的隐写检查步骤：不改变文本元数据结论，只补 stego_state/stego_excerpt。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            img.load()
+            result = _decode_stego_bits(img)
+    except Exception:
+        result = None
+    if not result:
+        return
+    meta.stego_state, meta.stego_excerpt = result
+    if result[0] == 'verified':
+        meta.metadata_keys.append('stealth_pnginfo')
+        meta.text_excerpt = meta.text_excerpt or meta.stego_excerpt[:500]
+        # 隐写载荷本身就是生成参数：据此提升 AI 判定
+        if not meta.has_ai_metadata:
+            meta.has_ai_metadata, meta.ai_source = True, 'NovelAI'
+        elif meta.ai_source and meta.ai_source.startswith(SUSPECT_PREFIX):
+            meta.ai_source = 'NovelAI'
+
+
 def _classify_ai(meta: ImageMetadata, text: str) -> None:
-    lower = text.lower()
-    for source, markers in AI_MARKERS.items():
-        if any(marker.lower() in lower for marker in markers):
-            meta.has_ai_metadata = True
-            meta.ai_source = source
-            return
+    meta.has_ai_metadata, meta.ai_source = classify_ai_source(text)
 
 
 def extract_prompt_signature(path: str | Path) -> str | None:

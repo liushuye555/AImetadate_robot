@@ -208,6 +208,7 @@ def process_image_url(
         'metadata_keys': meta.metadata_keys,
         'has_ai_metadata': meta.has_ai_metadata,
         'ai_source': meta.ai_source,
+        'stego_state': meta.stego_state,
         'text_excerpt': meta.text_excerpt,
         'prompt_key': prompt_key,
         'kept_path': str(kept_path) if kept_path else None,

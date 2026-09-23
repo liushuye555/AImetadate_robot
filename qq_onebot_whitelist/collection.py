@@ -248,7 +248,8 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return
     load_ok = load_aware_ok(config)
-    for image in extract_image_segments(event):
+    for index, image in enumerate(extract_image_segments(event)):
+        image['segment_index'] = index  # 事件幂等键的一部分（scope+消息+段序号）
         if not load_ok:
             defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id')))
             continue
@@ -300,9 +301,18 @@ def process_event_image(
     config: AppConfig,
     event: dict[str, Any] | None = None,
 ) -> None:
-    """处理单张图片：下载 → 归档 → 小番茄混淆检测/还原 → 表情包过滤 → 入库。"""
+    """处理单张图片：幂等检查 → 下载 → 归档 → 混淆检测/还原 → 表情包过滤 → 入库。"""
     if str(user_id or '') in config.images_ignore_bot_user_ids:
         return  # 机器人账号发送的图片直接忽略
+    # 事件级幂等：同一事件（scope+消息+段序号）重放时不再下载/记账。
+    # 段序号由调用方写入 image['segment_index']；缺序号（老路径/手动保存）不拦。
+    segment_index = image.get('segment_index')
+    if message_db_id and segment_index is not None:
+        try:
+            if store.image_segment_processed(scope, message_db_id, int(segment_index)):
+                return
+        except Exception:
+            pass  # 幂等检查失败时按新图处理，宁可多记不可漏记
     try:
         result = process_image_url(
             image['url'],
@@ -449,11 +459,14 @@ def process_event_image(
                 Path(kept).unlink(missing_ok=True)
             result['kept_path'] = None
             result['retention_reason'] = 'sticker_filtered'
+        raw = {'image': image, 'message_db_id': message_db_id, 'message_id': (event or {}).get('message_id')}
+        if image.get('segment_index') is not None:
+            raw['segment_index'] = int(image['segment_index'])
         store.record_image(
             scope=scope,
             user_id=user_id,
             result=result,
-            raw={'image': image, 'message_db_id': message_db_id, 'message_id': (event or {}).get('message_id')},
+            raw=raw,
         )
     except Exception as exc:
         print(f'image processing failed: {type(exc).__name__}: {exc}')
