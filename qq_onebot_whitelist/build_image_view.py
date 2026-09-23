@@ -27,6 +27,12 @@ CATEGORY_NAMES = {
 
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
 
+# 来源 → 目录显示名（存储值保持英文稳定，仅展示层换名）
+SOURCE_DISPLAY = {
+    'A1111': 'StableDiffusion_WebUI',
+    'suspect:NovelAI': '疑似NovelAI',
+}
+
 def stale_view_counts(view: Path) -> dict[str, int]:
     """不重建视图，直接从现有视图目录统计各分类图片数（低开销，供负载忙时兜底）。"""
     image_exts = IMAGE_EXTENSIONS
@@ -81,7 +87,7 @@ def group_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
 
 CATEGORY_ICONS = {'01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
 CATEGORY_DESC = {
-    '01': '自带 ComfyUI/NovelAI 等生成元数据，可信度最高',
+    '01': '自带 ComfyUI/Stable Diffusion WebUI/NovelAI 等生成元数据，可信度最高',
     '02': '被引用、好评或求提示词后晋升',
     '03': '图片与提示词/参数成对出现',
     '04': '暂存候选，等待后续反馈',
@@ -1203,7 +1209,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
             ):
                 cat_val = CATEGORY_NAMES.get(str(reason_val), '90_' + safe_name(str(reason_val)))
                 if str(reason_val) == 'ai_metadata' and source_val:
-                    cat_val = cat_val + '_' + safe_name(str(source_val))
+                    display = SOURCE_DISPLAY.get(str(source_val), str(source_val))
+                    cat_val = cat_val + '_' + safe_name(display)
                 occurrences.setdefault(cat_val, {})[str(sha_val)] = int(cnt)
         except sqlite3.OperationalError:
             occurrences = {}
@@ -1230,7 +1237,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
             continue
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
-            cat = cat + '_' + safe_name(str(row['ai_source']))
+            display = SOURCE_DISPLAY.get(str(row['ai_source']), str(row['ai_source']))
+            cat = cat + '_' + safe_name(display)
         if sha256:
             seen = dedup_seen.setdefault(cat, set())
             if sha256 in seen:
@@ -1379,7 +1387,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '这是图片分类视图，按数据库筛选结果生成。\n'
         '优先使用 NTFS 硬链接，通常不额外占空间；不要在这里编辑原始数据库。\n\n'
         '分类：\n'
-        '01_AI元数据_*：图片本身带 ComfyUI/NovelAI 等元数据，可信度最高。\n'
+        '01_AI元数据_*：图片本身带 ComfyUI/Stable Diffusion WebUI/NovelAI 等元数据，可信度最高。\n'
         '02_群友好评：被引用/附近好评、求提示词等晋升。\n'
         '03_提示词绑定：图片与明确提示词成对绑定（时序/引用）。\n'
         '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
