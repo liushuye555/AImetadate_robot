@@ -33,7 +33,10 @@ def deduplicate_image_storage(project_dir: str | Path, store: Store) -> int:
         updates.append((str(target), digest))
     if updates:
         with sqlite3.connect(store.path) as conn:
-            conn.executemany('UPDATE images SET kept_path = ? WHERE sha256 = ?', updates)
+            # 已归并的重复行不参与路径引用（kept_path 必须保持 NULL）
+            conn.executemany(
+                'UPDATE images SET kept_path = ? WHERE sha256 = ? AND merged_into IS NULL', updates
+            )
             conn.commit()
     return removed
 
