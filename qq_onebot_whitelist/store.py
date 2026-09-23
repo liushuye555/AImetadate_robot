@@ -337,7 +337,7 @@ class Store:
             digest = result.get('sha256')
             kept_path = result.get('kept_path')
             if digest and kept_path and result.get('retention_reason') != 'candidate':
-                conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ? AND kept_path IS NOT NULL', (kept_path, digest))
+                conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ? AND kept_path IS NOT NULL AND merged_into IS NULL', (kept_path, digest))
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
@@ -1199,10 +1199,15 @@ class Store:
             for mid, sha, _c, keep_id in rows:
                 cur = conn.execute(
                     '''UPDATE images SET kept_path = NULL, merged_into = ?
-                       WHERE json_extract(raw_json, '$.message_db_id') = ? AND sha256 = ? AND id != ?''',
+                       WHERE json_extract(raw_json, '$.message_db_id') = ? AND sha256 = ? AND id != ?
+                       AND merged_into IS NULL''',
                     (keep_id, mid, sha, keep_id),
                 )
                 merged += cur.rowcount
+            # 归并后路径引用可能被 record_image 的同 sha 传播填回，统一再清一次
+            conn.execute(
+                'UPDATE images SET kept_path = NULL WHERE merged_into IS NOT NULL AND kept_path IS NOT NULL'
+            )
             conn.commit()
         return merged
 
