@@ -275,6 +275,7 @@ class Store:
             conn.execute('ALTER TABLE images ADD COLUMN prompt_key TEXT')
         if 'context_reason' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN context_reason TEXT')
+        if 'stego_state' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN stego_state TEXT')
         if 'saved_category' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN saved_category TEXT')
