@@ -15,6 +15,10 @@ class ImageMetadata:
     height: int | None = None
     metadata_keys: list[str] = field(default_factory=list)
     text_excerpt: str = ''
+    # 完整元数据文本（text_excerpt 只有 500 字符截断，数据集导出等场景用全文）
+    full_text: str = ''
+    # 按 chunk 键索引的原文（parameters/prompt/Comment 等），提取提示词时按键取用
+    text_by_key: dict[str, str] = field(default_factory=dict)
     has_ai_metadata: bool = False
     ai_source: str | None = None
     # NovelAI alpha 通道隐写：None=未检查；'suspected'=发现疑似载荷；'verified'=验证通过
@@ -113,7 +117,8 @@ def _parse_png(path: Path) -> ImageMetadata:
                 _add_text(meta, texts, key, text)
             elif kind == b'IEND':
                 break
-    _classify_ai(meta, '\n'.join(texts))
+    meta.full_text = '\n'.join(texts)
+    _classify_ai(meta, meta.full_text)
     _check_alpha_stego(path, meta)
     return meta
 
@@ -143,7 +148,8 @@ def _parse_jpeg(path: Path) -> ImageMetadata:
                 _add_text(meta, texts, f'APP/{marker.hex()}'.encode(), text)
             elif marker in {b'\xc0', b'\xc1', b'\xc2', b'\xc3', b'\xc5', b'\xc6', b'\xc7', b'\xc9', b'\xca', b'\xcb', b'\xcd', b'\xce', b'\xcf'} and len(data) >= 5:
                 meta.height, meta.width = struct.unpack('>HH', data[1:5])
-    _classify_ai(meta, '\n'.join(texts))
+    meta.full_text = '\n'.join(texts)
+    _classify_ai(meta, meta.full_text)
     return meta
 
 
@@ -165,7 +171,8 @@ def _parse_webp(path: Path) -> ImageMetadata:
                 f.read(1)
             if kind in {b'EXIF', b'XMP '}:
                 _add_text(meta, texts, kind, data.decode('utf-8', 'ignore'))
-    _classify_ai(meta, '\n'.join(texts))
+    meta.full_text = '\n'.join(texts)
+    _classify_ai(meta, meta.full_text)
     return meta
 
 
@@ -181,6 +188,7 @@ def _add_text(meta: ImageMetadata, texts: list[str], key: bytes, text: str) -> N
         meta.metadata_keys.append(key_text)
     if text:
         texts.append(key_text + ': ' + text)
+        meta.text_by_key.setdefault(key_text, text)
         if not meta.text_excerpt:
             meta.text_excerpt = text[:500]
 
@@ -269,6 +277,8 @@ def _check_alpha_stego(path: Path, meta: ImageMetadata) -> None:
     if result[0] == 'verified':
         meta.metadata_keys.append('stealth_pnginfo')
         meta.text_excerpt = meta.text_excerpt or meta.stego_excerpt[:500]
+        meta.text_by_key.setdefault('stealth_pnginfo', meta.stego_excerpt)
+        meta.full_text = meta.full_text or meta.stego_excerpt
         # 隐写载荷本身就是生成参数：据此提升 AI 判定
         if not meta.has_ai_metadata:
             meta.has_ai_metadata, meta.ai_source = True, 'NovelAI'

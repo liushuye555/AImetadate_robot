@@ -449,3 +449,49 @@ def test_gallery_page_embeds_theme_toggle_and_light_palette(tmp_path):
     assert 'localStorage.getItem("viewTheme")' in page
     assert 'id="themeToggle"' in page
     assert 'html[data-theme="light"]' in page
+
+
+def test_gallery_embeds_user_filter_with_nickname(tmp_path):
+    """uid 进 chunk、用户下拉带昵称与数量；无名可查时退回 uid。"""
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img1 = tmp_path / "img1.png"
+    img1.write_bytes(b"x" * 10)
+    img2 = tmp_path / "img2.png"
+    img2.write_bytes(b"y" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, format, width, height, retention_reason, kept_path) "
+        "VALUES ('group:1', '100', 'PNG', 64, 64, 'positive_feedback', ?)", (str(img1),))
+    conn.execute(
+        "INSERT INTO images (scope, user_id, format, width, height, retention_reason, kept_path) "
+        "VALUES ('group:1', '200', 'PNG', 64, 64, 'positive_feedback', ?)", (str(img2),))
+    conn.execute(
+        "INSERT INTO messages (scope, user_id, raw_json) VALUES ('group:1', '100', ?)",
+        ('{"sender":{"card":"阿熊","nickname":"bear"}}',))
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+    cat = tmp_path / "data" / "view" / "02_群友好评"
+    page = (cat / "index.html").read_text(encoding="utf-8")
+    assert 'id="userSel"' in page
+    assert '阿熊（100 · 1张）' in page
+    assert '200 · 1张' in page  # 无昵称消息可查时退回 uid
+    chunk = (cat / "chunks" / "chunk-0001.js").read_text(encoding="utf-8")
+    assert '"uid":"100"' in chunk and '"uid":"200"' in chunk

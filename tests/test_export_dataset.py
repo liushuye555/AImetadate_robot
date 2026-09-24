@@ -1,0 +1,184 @@
+"""数据集导出（export_dataset）测试：用户过滤、内容去重、caption 提取、来源别名。"""
+
+import json
+import sqlite3
+
+from PIL import Image, PngImagePlugin
+
+
+SCHEMA = """CREATE TABLE images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+    format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+    ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+    deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT, sha256 TEXT,
+    merged_into INTEGER, saved_category TEXT, prompt_key TEXT, context_reason TEXT,
+    bound_prompt TEXT, stego_state TEXT)"""
+
+
+def make_db(tmp_path, rows):
+    """rows: (user_id, retention_reason, kept_path, ai_source, sha256[, width, height])。"""
+    data = tmp_path / 'data'
+    data.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(data / 'bot.db')
+    conn.execute(SCHEMA)
+    for r in rows:
+        w, h = (r[5], r[6]) if len(r) > 6 else (640, 640)
+        conn.execute(
+            "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, "
+            "kept_path, ai_source, has_ai_metadata, sha256) "
+            "VALUES ('group:1', ?, '2026-09-01 10:00:00', 'PNG', ?, ?, ?, ?, ?, 1, ?)",
+            (r[0], w, h, r[1], r[2], r[3], r[4]))
+    conn.commit()
+    conn.close()
+
+
+def a1111_png(path):
+    img = Image.new('RGB', (640, 640), (200, 30, 30))
+    info = PngImagePlugin.PngInfo()
+    info.add_text('parameters',
+                  'shiroko \\(blue archive\\), on bed\n'
+                  'Negative prompt: lazyneg, watermark\n'
+                  'Steps: 25, Sampler: Euler a, CFG scale: 4.5, Seed: 1, Size: 640x640')
+    img.save(path, 'PNG', pnginfo=info)
+    return path
+
+
+def comfy_png(path):
+    graph = {
+        '1': {'class_type': 'UNETLoader', 'inputs': {'unet_name': 'anima.safetensors'}},
+        '3': {'class_type': 'KSampler', 'inputs': {'positive': ['5', 0], 'negative': ['6', 0]}},
+        '5': {'class_type': 'CLIPTextEncode', 'inputs': {'text': '1girl, suwako, touhou'}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'bad hands, watermark'}},
+    }
+    img = Image.new('RGB', (640, 640), (30, 200, 30))
+    info = PngImagePlugin.PngInfo()
+    info.add_text('prompt', json.dumps(graph))
+    img.save(path, 'PNG', pnginfo=info)
+    return path
+
+
+def novelai_png(path):
+    img = Image.new('RGB', (640, 640), (30, 30, 200))
+    info = PngImagePlugin.PngInfo()
+    info.add_text('Comment', json.dumps({'prompt': 'masterpiece, 1girl', 'uc': 'lowres', 'steps': 28}))
+    info.add_text('Software', 'NovelAI')
+    img.save(path, 'PNG', pnginfo=info)
+    return path
+
+
+def read_manifest(out_dir):
+    return json.loads((out_dir / 'export_manifest.json').read_text(encoding='utf-8'))
+
+
+def test_user_filter_and_caption(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    png_a = a1111_png(tmp_path / 'a.png')
+    png_b = comfy_png(tmp_path / 'b.png')
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(png_a), 'A1111', 'sha-a'),
+        ('200', 'ai_metadata', str(png_b), 'ComfyUI', 'sha-b'),
+    ])
+    stats = export_dataset(tmp_path, users=['100'], out='u100')
+    out_dir = tmp_path / 'data' / 'export' / 'u100'
+    images = sorted(out_dir.glob('*.png'))
+    assert len(images) == 1
+    assert stats['exported'] == 1
+    caption = (out_dir / (images[0].stem + '.txt')).read_text(encoding='utf-8').strip()
+    assert caption == 'shiroko \\(blue archive\\), on bed'
+    assert read_manifest(out_dir)['counts']['captioned'] == 1
+
+
+def test_sha_dedup_keeps_one_file(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    png = a1111_png(tmp_path / 'a.png')
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(png), 'A1111', 'sha-a'),
+        ('100', 'ai_metadata', str(png), 'A1111', 'sha-a'),
+        ('100', 'ai_metadata', str(png), 'A1111', 'sha-a'),
+    ])
+    stats = export_dataset(tmp_path, out='dedup')
+    assert stats['deduped'] == 2
+    assert stats['exported'] == 1
+
+
+def test_source_display_alias(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    png_a = a1111_png(tmp_path / 'a.png')
+    png_b = comfy_png(tmp_path / 'b.png')
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(png_a), 'A1111', 'sha-a'),
+        ('200', 'ai_metadata', str(png_b), 'ComfyUI', 'sha-b'),
+    ])
+    stats = export_dataset(tmp_path, sources=['StableDiffusion_WebUI'], out='webui')
+    assert stats['exported'] == 1
+    assert stats['manifest']['by_source'] == {'A1111': 1}
+
+
+def test_min_side_and_limit(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    small = tmp_path / 'small.png'
+    Image.new('RGB', (320, 320)).save(small)
+    big = a1111_png(tmp_path / 'big.png')
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(small), 'A1111', 'sha-s', 320, 320),
+        ('100', 'ai_metadata', str(big), 'A1111', 'sha-b'),
+        ('100', 'ai_metadata', str(big), 'A1111', 'sha-b'),
+    ])
+    stats = export_dataset(tmp_path, min_side=640, limit=5, out='big')
+    assert stats['exported'] == 1
+    assert stats['skipped_filter'] == 1
+    assert stats['deduped'] == 1
+
+    stats2 = export_dataset(tmp_path, min_side=640, limit=0, out='none', dry_run=True)
+    assert stats2['exported'] == 0
+    assert stats2['skipped_limit'] == 1  # 去重后只剩 1 张可截断
+
+
+def test_dry_run_writes_nothing(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    png = a1111_png(tmp_path / 'a.png')
+    make_db(tmp_path, [('100', 'ai_metadata', str(png), 'A1111', 'sha-a')])
+    stats = export_dataset(tmp_path, out='dry', dry_run=True)
+    assert stats['exported'] == 0
+    assert not (tmp_path / 'data' / 'export' / 'dry').exists()
+
+
+def test_caption_extractors():
+    from qq_onebot_whitelist.export_dataset import _comfyui_positive_prompt, _a1111_positive_prompt, _prompt_from_novelai_json
+
+    graph = {
+        '3': {'class_type': 'KSampler', 'inputs': {'positive': ['5', 0], 'negative': ['6', 0]}},
+        '5': {'class_type': 'CLIPTextEncode', 'inputs': {'text': '1girl, suwako, touhou'}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'bad hands, watermark'}},
+    }
+    assert _comfyui_positive_prompt(graph) == '1girl, suwako, touhou'
+    # 没有采样器节点：取剔除 negative 后最长的文本
+    assert _comfyui_positive_prompt({'5': graph['5'], '6': graph['6']}) == '1girl, suwako, touhou'
+    assert _comfyui_positive_prompt('not a dict') == ''
+    assert _a1111_positive_prompt('prompt text\nNegative prompt: bad\nSteps: 20') == 'prompt text'
+    assert _prompt_from_novelai_json('{"prompt":"masterpiece, 1girl"}') == 'masterpiece, 1girl'
+    # v4 结构化 prompt 不是字符串：返回空，回退 Description
+    assert _prompt_from_novelai_json('{"prompt": {"content": "x"}}') == ''
+    assert _prompt_from_novelai_json('not json') == ''
+
+
+def test_novelai_comment_caption_and_exclude_user(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    png = novelai_png(tmp_path / 'n.png')
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(png), 'NovelAI', 'sha-n'),
+        ('200', 'ai_metadata', str(png), 'NovelAI', 'sha-n'),
+    ])
+    stats = export_dataset(tmp_path, users=['100'], exclude_users=['200'], out='nai')
+    out_dir = tmp_path / 'data' / 'export' / 'nai'
+    images = sorted(out_dir.glob('*.png'))
+    assert len(images) == 1
+    caption = (out_dir / (images[0].stem + '.txt')).read_text(encoding='utf-8').strip()
+    assert caption == 'masterpiece, 1girl'
+    assert stats['manifest']['by_user'] == {'100': 1}

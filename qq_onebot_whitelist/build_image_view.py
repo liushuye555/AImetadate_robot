@@ -85,6 +85,31 @@ def group_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
     return names
 
 
+def member_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
+    """uid -> 展示名：从最近的群消息 sender 昵称/群名片浅扫（新消息优先，先到先得）。"""
+    names: dict[str, str] = {}
+    try:
+        rows = conn.execute(
+            "SELECT user_id, raw_json FROM messages WHERE scope LIKE 'group:%' "
+            "ORDER BY id DESC LIMIT 4000"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return names
+    for row in rows:
+        uid = str(row['user_id'] or '')
+        if not uid or uid in names:
+            continue
+        try:
+            raw = json.loads(row['raw_json'] or '{}')
+        except Exception:
+            continue
+        sender = raw.get('sender') or {}
+        name = str(sender.get('card') or sender.get('nickname') or '').strip()
+        if name:
+            names[uid] = name[:40]
+    return names
+
+
 CATEGORY_ICONS = {'01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
 CATEGORY_DESC = {
     '01': '自带 ComfyUI/Stable Diffusion WebUI/NovelAI 等生成元数据，可信度最高',
@@ -306,6 +331,17 @@ def _script_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c')
 
 
+def _user_options_html(user_counts: dict[str, int], names: dict[str, str]) -> str:
+    """用户筛选下拉：按图片数降序；标签带原始 uid（可直接复制给导出命令）。"""
+    if not user_counts:
+        return ''
+    parts = ['<option value="">全部用户</option>']
+    for uid, cnt in sorted(user_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        label = names.get(uid) or uid
+        parts.append(f'<option value="{html.escape(uid, quote=True)}">{html.escape(label)}（{html.escape(uid)} · {cnt}张）</option>')
+    return ''.join(parts)
+
+
 def _group_data_file(key: str) -> str:
     """组数据文件名：key 通常已是安全字符（dupNNNNN / pk 十六进制），异常时退哈希。"""
     safe = re.sub(r'[^a-z0-9_-]', '', key.lower())[:40]
@@ -451,6 +487,7 @@ def _gallery_page(
     chunk_count: int,
     context_mode: bool = False,
     background: str = '',
+    user_options: str = '',
 ) -> str:
     '''生成单页图库壳；图片卡片由滚动/按钮触发的本地 chunk 按需追加。'''
     doc = r'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -470,9 +507,10 @@ h1{font-size:18px;margin:0 0 4px}.muted{color:var(--muted);font-size:13px}
 #jumpTo{width:74px;padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text)}
 #topBtn,#loadMore{padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer}
 #loadMore:disabled{opacity:.55;cursor:default}
-select#sortSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
-select#sortSel:focus{border-color:var(--accent)}
-select#sortSel option{background:var(--panel);color:var(--text)}
+select#sortSel,select#userSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
+select#sortSel:focus,select#userSel:focus{border-color:var(--accent)}
+select#sortSel option,select#userSel option{background:var(--panel);color:var(--text)}
+select#userSel{max-width:300px}
 /* 图库网格：横向顺序（从左到右逐行排列），按图片高度自动跨行补齐，无空洞 */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:16px 22px;grid-auto-rows:8px;align-items:start}
 .grid.context-grid{grid-auto-rows:auto;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
@@ -507,6 +545,7 @@ __THEME_TOGGLE__
     <option value="chunks-size">文件大小</option>
     <option value="chunks-name">文件名称</option>
   </select>
+__USER_TOOLBAR__
   <input id="jumpTo" type="number" min="1" max="__COUNT__" placeholder="序号">
   <button id="topBtn" type="button">回顶部</button>
   <span id="collapseInfo" class="muted"></span>
@@ -531,14 +570,19 @@ __THEME_TOGGLE__
   try{chunkBase=['chunks-size','chunks-name'].includes(localStorage.getItem('gallerySort'))?localStorage.getItem('gallerySort'):'';}catch(e){}
   const sortSel=document.getElementById('sortSel');
   if(sortSel)sortSel.value=chunkBase;
+  const userSel=document.getElementById('userSel');
+  let userFilter='';
 
   function updateProgress(){
-    progress.textContent='已加载 '+cells.length+' / '+total;
+    progress.textContent=userFilter?('命中 '+cells.length+' / '+total):('已加载 '+cells.length+' / '+total);
     const done=nextChunk>=chunkCount&&!loading;
     loadMore.disabled=done;
-    hint.textContent=errorMessage||(done?'已全部加载':'滚动到底部或点击“继续加载”');
+    hint.textContent=errorMessage||(done?(userFilter&&!cells.length?'该筛选没有命中图片':'已全部加载'):'滚动到底部或点击“继续加载”');
     const known=[...groups.values()].filter(g=>g.total>1||g.cells.length>1).length;
-    document.getElementById('collapseInfo').textContent=known?'已识别 '+known+' 组同批/相似（当前已加载部分）':'';
+    const parts=[];
+    if(userFilter&&userSel)parts.push('筛选用户 '+userSel.options[userSel.selectedIndex].text);
+    if(known)parts.push('已识别 '+known+' 组同批/相似（当前已加载部分）');
+    document.getElementById('collapseInfo').textContent=parts.join(' · ');
   }
   function applyMask(a){
     const image=a.querySelector('img');
@@ -607,10 +651,17 @@ __THEME_TOGGLE__
   function renderItems(items){
     const fragment=document.createDocumentFragment();
     const fresh=[];
-    for(const item of (Array.isArray(items)?items:[])){const index=cells.length;const card=createCard(item,index);cells.push(card.querySelector('a.cell'));itemCards.push(card);fresh.push(card);fragment.appendChild(card);}
+    let added=0;
+    for(const item of (Array.isArray(items)?items:[])){
+      // 用户筛选不命中的直接不建卡：cells 只含命中项，灯箱左右切换也只走筛选结果
+      if(userFilter&&String(item.uid||'')!==userFilter)continue;
+      const index=cells.length;const card=createCard(item,index);cells.push(card.querySelector('a.cell'));itemCards.push(card);fresh.push(card);fragment.appendChild(card);added++;
+    }
     grid.appendChild(fragment);
     requestAnimationFrame(()=>{for(const card of fresh)layoutCard(card);});
     updateProgress();
+    // 筛选后整块都被过滤时哨兵不会重新触发，主动续载下一块
+    if(userFilter&&added===0&&nextChunk<chunkCount)setTimeout(()=>void loadNext(),0);
   }
   window.__galleryAcceptChunk=(index,items)=>{
     const request=activeRequest;
@@ -774,6 +825,14 @@ __THEME_TOGGLE__
     overlay.style.display='none';grid.textContent='';
     updateProgress();void loadNext();
   });
+  if(userSel)userSel.addEventListener('change',()=>{
+    userFilter=userSel.value;
+    // 用户筛选切换：重置网格后按筛选重建（各排序分块都带 uid，前端过滤即可）
+    cells.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
+    groupNav=null;groupToken++;closeGroupLayer();hintDefault();
+    overlay.style.display='none';grid.textContent='';
+    updateProgress();void loadNext();
+  });
   let rsTimer=0;
   window.addEventListener('resize',()=>{clearTimeout(rsTimer);rsTimer=setTimeout(()=>{layoutAll();if(groupLayer.style.display==='flex'&&lastGroup)openGroup(lastGroup);},200);});
   loadMore.addEventListener('click',()=>void loadNext());
@@ -786,6 +845,10 @@ __THEME_TOGGLE__
 </script>
 __THEME_TOGGLE_JS__
 </body></html>'''
+    user_toolbar = (
+        '  <label class="muted" for="userSel">用户</label>\n'
+        f'  <select id="userSel">{user_options}</select>\n'
+    ) if user_options else ''
     replacements = {
         '__TITLE__': html.escape(title),
         '__COUNT__': str(int(count)),
@@ -797,6 +860,7 @@ __THEME_TOGGLE_JS__
         '__THEME_INIT__': THEME_INIT_JS,
         '__THEME_TOGGLE__': THEME_TOGGLE_HTML,
         '__THEME_TOGGLE_JS__': THEME_TOGGLE_JS,
+        '__USER_TOOLBAR__': user_toolbar,
     }
     for marker, value in replacements.items():
         doc = doc.replace(marker, value)
@@ -817,6 +881,8 @@ def write_category_gallery(
     thumb_prefix: str = '../..',
     force: bool = False,
     dhash_cache: '_DhashCache | None' = None,
+    user_map: dict[str, str] | None = None,
+    user_names: dict[str, str] | None = None,
 ) -> None:
     '''为图片分类目录生成单页按需图库；只加载首批，滚动后再追加本地 chunk。'''
     if not force and (cat_dir / 'index.html').exists():
@@ -876,6 +942,7 @@ def write_category_gallery(
         gallery_items.append({
             'href': url_path(rel),
             'id': image_key,
+            'uid': (user_map or {}).get(image_key, ''),
             'masked': '还原' in image.name,
             'batch': batch,
             'batch_total': batch_totals.get(batch, 0),
@@ -925,9 +992,15 @@ def write_category_gallery(
     else:
         shutil.rmtree(cat_dir / 'groups', ignore_errors=True)
     chunk_count = _write_gallery_chunk_sets(cat_dir, gallery_items)
+    user_counts: dict[str, int] = {}
+    for item in gallery_items:
+        uid = str(item.get('uid') or '')
+        if uid:
+            user_counts[uid] = user_counts.get(uid, 0) + 1
     (cat_dir / 'index.html').write_text(
         _gallery_page(title=cat_dir.name, count=len(gallery_items), chunk_count=chunk_count,
-                      background=_gallery_background(cat_dir)),
+                      background=_gallery_background(cat_dir),
+                      user_options=_user_options_html(user_counts, user_names or {})),
         encoding='utf-8',
     )
 
@@ -939,6 +1012,7 @@ def _write_context_gallery(
     *,
     project_dir: Path | None = None,
     thumb_prefix: str = '../..',
+    user_names: dict[str, str] | None = None,
 ) -> None:
     '''上下文分类也使用单页按需加载，文本随对应本地 chunk 追加。'''
     cat_dir.mkdir(parents=True, exist_ok=True)
@@ -955,6 +1029,7 @@ def _write_context_gallery(
         gallery_items.append({
             'href': url_path(str(item['image_rel'])),
             'masked': bool(item.get('deobfuscated')),
+            'uid': str(item.get('uid') or ''),
             'label': f"#{item['id']} · {item['meta']}",
             'text': str(item.get('text') or ''),
             'batch': '',
@@ -966,9 +1041,15 @@ def _write_context_gallery(
     if not gallery_items:
         return
     chunk_count = _write_gallery_chunks(cat_dir, gallery_items)
+    user_counts: dict[str, int] = {}
+    for item in gallery_items:
+        uid = str(item.get('uid') or '')
+        if uid:
+            user_counts[uid] = user_counts.get(uid, 0) + 1
     (cat_dir / 'index.html').write_text(
         _gallery_page(title=title, count=len(gallery_items), chunk_count=chunk_count,
-                      context_mode=True, background=_gallery_background(cat_dir)),
+                      context_mode=True, background=_gallery_background(cat_dir),
+                      user_options=_user_options_html(user_counts, user_names or {})),
         encoding='utf-8',
     )
 
@@ -981,7 +1062,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 18  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 19  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -996,6 +1077,8 @@ class _CatPlan:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.items: list[dict[str, object]] = []
+        # 记录 id -> 发送者 uid（uid 进 chunk 供页面按用户筛选）
+        self.users: dict[str, str] = {}
 
     def signature(self) -> str:
         h = hashlib.sha1()
@@ -1003,6 +1086,11 @@ class _CatPlan:
             h.update(rel.encode('utf-8'))
             h.update(b'\x1f')
             h.update(self.files[rel].encode('utf-8'))
+            h.update(b'\x1e')
+        for key in sorted(self.users):
+            h.update(key.encode('utf-8'))
+            h.update(b'\x1f')
+            h.update(self.users[key].encode('utf-8'))
             h.update(b'\x1e')
         for item in self.items:
             h.update(repr(sorted((k, str(v)) for k, v in item.items())).encode('utf-8'))
@@ -1174,6 +1262,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
            FROM images WHERE kept_path IS NOT NULL ORDER BY retention_reason, id DESC'''
     ).fetchall()
     dhash_cache = _DhashCache(conn)
+    member_names = member_name_map_from_conn(conn)
     plans: dict[str, _CatPlan] = {}
     saved_categories: set[str] = set()
     # 同批判定：同一完整工作流签名 且 组大小 2..30 且 时间跨度 ≤ 24 小时
@@ -1233,7 +1322,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
             w, h = row['width'], row['height']
             ext = src.suffix or '.img'
             filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
-            plans.setdefault(saved_key, _CatPlan()).files[filename] = str(src)
+            saved_plan = plans.setdefault(saved_key, _CatPlan())
+            saved_plan.files[filename] = str(src)
+            saved_plan.users[str(row['id'])] = str(row['user_id'] or '')
             continue
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
@@ -1266,12 +1357,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
         ) + ext
         plan = plans.setdefault(cat, _CatPlan())
         plan.files[f'{size_class}/{filename}'] = str(src)
+        plan.users[str(row['id'])] = str(row['user_id'] or '')
         if reason in ('prompt_bound', 'params_discussion'):
             plan.items.append({
                 'id': str(row['id']),
                 'image_rel': f'{size_class}/{filename}',
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                 'text': str(row['bound_prompt'] or ''),
+                'uid': str(row['user_id'] or ''),
                 'deobfuscated': is_deobfuscated,
                 'w': row['width'] or 0,
                 'h': row['height'] or 0,
@@ -1293,6 +1386,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                         'image_rel': f'{size_class}/{ctx_filename}',
                         'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                         'text': str(row['bound_prompt'] or ''),
+                        'uid': str(row['user_id'] or ''),
                         'deobfuscated': True,
                         'w': row['width'] or 0,
                         'h': row['height'] or 0,
@@ -1345,14 +1439,17 @@ def build_view(project_dir: Path) -> dict[str, int]:
         try:
             if cat_name in _CONTEXT_CAT_NAMES and plan.items:
                 if cat_name == CATEGORY_NAMES['prompt_bound']:
-                    write_prompt_bound_gallery(cat_dir, plan.items, project_dir=project_dir)
+                    write_prompt_bound_gallery(cat_dir, plan.items, project_dir=project_dir,
+                                               user_names=member_names)
                 else:
-                    write_params_gallery(cat_dir, plan.items, project_dir=project_dir)
+                    write_params_gallery(cat_dir, plan.items, project_dir=project_dir,
+                                         user_names=member_names)
             else:
                 # 收藏子分类页面深一层，缩略图路径多退一级
                 thumb_prefix = '../../..' if cat_name.startswith(_SAVED_ROOT + '/') else '../..'
                 write_category_gallery(cat_dir, project_dir=project_dir, thumb_prefix=thumb_prefix,
-                                       force=True, dhash_cache=dhash_cache)
+                                       force=True, dhash_cache=dhash_cache,
+                                       user_map=plan.users, user_names=member_names)
         except Exception as exc:
             print(f'gallery generation failed for {cat_name}: {type(exc).__name__}: {exc}')
     if copy_fallbacks:
@@ -1393,7 +1490,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
-        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n',
+        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n\n'
+        '每个图库页面右上角可按用户（发送者）筛选；导出训练数据集用：\n'
+        'python -m qq_onebot_whitelist.export_dataset --user <QQ号> --captions\n',
     )
     write_view_index(view, counts)
     _save_build_state(project_dir, state)
