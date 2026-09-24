@@ -309,8 +309,8 @@ def write_saved_collection_index(root: Path, categories: set[str]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     cards = []
     for category in sorted(categories):
-        href = url_path(category + '/index.html')
-        cards.append(_index_card(href, '🖼️', category, '按分类保存的聊天记录图片', ''))
+        # _index_card 内部会做 url_path 编码，这里传原始路径（提前 quote 会二次编码坏链）
+        cards.append(_index_card(category + '/index.html', '🖼️', category, '按分类保存的聊天记录图片', ''))
     if not cards:
         cards.append('<article class="card"><h2>暂无聊天记录收藏</h2><p class="muted">回复合并聊天记录后发送 /保存图片。</p></article>')
     body = (

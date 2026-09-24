@@ -505,3 +505,39 @@ def test_gallery_embeds_user_filter_with_nickname(tmp_path):
                    'id="dupOnly"', 'id="thumbSel"', 'chunks-res'):
         assert marker in page, marker
     assert (cat / "chunks-res" / "chunk-0001.js").exists()
+
+
+def test_saved_collection_index_links_single_encoded(tmp_path):
+    """06 收藏入口页的子分类链接只编码一次（中文分类名二次编码会坏链）。"""
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT, sha256 TEXT,
+        saved_category TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "saved.png"
+    img.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, format, width, height, retention_reason, kept_path, saved_category) "
+        "VALUES ('group:1', 'u', 'PNG', 64, 64, 'chat_record_saved', ?, '二次元')", (str(img),))
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+    index = (tmp_path / "data" / "view" / "06_聊天记录收藏" / "index.html").read_text(encoding="utf-8")
+    assert "%25" not in index
+    assert "href=\"%E4%BA%8C%E6%AC%A1%E5%85%83/index.html\"" in index
+    assert (tmp_path / "data" / "view" / "06_聊天记录收藏" / "二次元" / "index.html").exists()
