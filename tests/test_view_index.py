@@ -505,6 +505,8 @@ def test_gallery_embeds_user_filter_with_nickname(tmp_path):
                    'id="dupOnly"', 'id="thumbSel"', 'chunks-res'):
         assert marker in page, marker
     assert (cat / "chunks-res" / "chunk-0001.js").exists()
+    # chunk/分组脚本 URL 带构建指纹，防 file:// 缓存旧脚本
+    assert "const buildToken='?v=" in page and "'.js'+buildToken" in page
 
 
 def test_saved_collection_index_links_single_encoded(tmp_path):

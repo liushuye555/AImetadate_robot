@@ -501,6 +501,7 @@ def _gallery_page(
     background: str = '',
     user_options: str = '',
     month_options: str = '',
+    build_token: str = '',
 ) -> str:
     '''生成单页图库壳；图片卡片由滚动/按钮触发的本地 chunk 按需追加。'''
     doc = r'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -614,6 +615,7 @@ __USER_TOOLBAR__
   let nextChunk=0, loading=false, activeRequest=null, currentIndex=-1, errorMessage='';
   let masked=true;
   let chunkBase='';
+  const buildToken='?v=__BUILD_TOKEN__';
   try{masked=localStorage.getItem('maskRestored')!=='0';}catch(e){}
   try{chunkBase=['chunks-size','chunks-name','chunks-res'].includes(localStorage.getItem('gallerySort'))?localStorage.getItem('gallerySort'):'';}catch(e){}
   const sortSel=document.getElementById('sortSel');
@@ -764,7 +766,8 @@ __USER_TOOLBAR__
     const promise=new Promise((resolve,reject)=>{
       const request={index:index,base:chunkBase,resolve:resolve,reject:reject,accepted:false,settled:false};activeRequest=request;
       const script=document.createElement('script');script.async=true;
-      script.src=(chunkBase?chunkBase+'/':'chunks/')+'chunk-'+String(index+1).padStart(4,'0')+'.js';
+      // ?v= 构建指纹：file:// 页面没有缓存校验，不带版本号浏览器会用旧构建的 chunk
+      script.src=(chunkBase?chunkBase+'/':'chunks/')+'chunk-'+String(index+1).padStart(4,'0')+'.js'+buildToken;
       script.onload=()=>{if(request&&!request.accepted&&!request.settled){request.settled=true;reject(new Error('chunk callback missing'));}};
       script.onerror=()=>{if(!request.settled){request.settled=true;reject(new Error('chunk load failed'));}};
       document.head.appendChild(script);
@@ -811,7 +814,7 @@ __USER_TOOLBAR__
     lastGroup=group;
     const token=++groupToken;
     const script=document.createElement('script');
-    script.src=group.page;
+    script.src=group.page+buildToken;
     document.head.appendChild(script);
     window.__galleryGroup=(data)=>{
       if(token!==groupToken)return;
@@ -954,6 +957,7 @@ __THEME_TOGGLE_JS__
         '__THEME_TOGGLE_JS__': THEME_TOGGLE_JS,
         '__USER_TOOLBAR__': user_toolbar,
         '__MONTH_OPTIONS__': month_options,
+        '__BUILD_TOKEN__': build_token,
     }
     for marker, value in replacements.items():
         doc = doc.replace(marker, value)
@@ -1088,6 +1092,8 @@ def write_category_gallery(
     else:
         shutil.rmtree(cat_dir / 'groups', ignore_errors=True)
     chunk_count = _write_gallery_chunk_sets(cat_dir, gallery_items)
+    # 构建指纹进脚本 URL：内容一变浏览器缓存就失效（file:// 无法按 mtime 重校验）
+    build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
     user_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
     for item in gallery_items:
@@ -1101,7 +1107,8 @@ def write_category_gallery(
         _gallery_page(title=cat_dir.name, count=len(gallery_items), chunk_count=chunk_count,
                       background=_gallery_background(cat_dir),
                       user_options=_user_options_html(user_counts, user_names or {}),
-                      month_options=_month_options_html(month_counts)),
+                      month_options=_month_options_html(month_counts),
+                      build_token=build_token),
         encoding='utf-8',
     )
 
@@ -1143,6 +1150,7 @@ def _write_context_gallery(
     if not gallery_items:
         return
     chunk_count = _write_gallery_chunks(cat_dir, gallery_items)
+    build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
     user_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
     for item in gallery_items:
@@ -1156,7 +1164,8 @@ def _write_context_gallery(
         _gallery_page(title=title, count=len(gallery_items), chunk_count=chunk_count,
                       context_mode=True, background=_gallery_background(cat_dir),
                       user_options=_user_options_html(user_counts, user_names or {}),
-                      month_options=_month_options_html(month_counts)),
+                      month_options=_month_options_html(month_counts),
+                      build_token=build_token),
         encoding='utf-8',
     )
 
@@ -1169,7 +1178,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 20  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 21  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
