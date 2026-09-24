@@ -342,6 +342,16 @@ def _user_options_html(user_counts: dict[str, int], names: dict[str, str]) -> st
     return ''.join(parts)
 
 
+def _month_options_html(month_counts: dict[str, int]) -> str:
+    """日期筛选下拉：YYYY-MM 月份倒序，值取 ts 前 7 位。"""
+    if not month_counts:
+        return ''
+    parts = []
+    for month in sorted(month_counts, reverse=True):
+        parts.append(f'<option value="{month}">{month}（{month_counts[month]}张）</option>')
+    return ''.join(parts)
+
+
 def _group_data_file(key: str) -> str:
     """组数据文件名：key 通常已是安全字符（dupNNNNN / pk 十六进制），异常时退哈希。"""
     safe = re.sub(r'[^a-z0-9_-]', '', key.lower())[:40]
@@ -474,9 +484,11 @@ def _write_gallery_chunk_sets(cat_dir: Path, items: list[dict[str, object]]) -> 
     '''按多种排序各写一套 chunks（元数据小文件，图片本身共享），返回 chunk 数。'''
     by_size = sorted(items, key=lambda it: (-int(it.get('bytes') or 0), str(it.get('href') or '')))
     by_name = sorted(items, key=lambda it: str(it.get('href') or ''))
+    by_res = sorted(items, key=lambda it: (-(int(it.get('w') or 0) * int(it.get('h') or 0)), str(it.get('href') or '')))
     _write_gallery_chunks(cat_dir, items, 'chunks')
     _write_gallery_chunks(cat_dir, by_size, 'chunks-size')
     _write_gallery_chunks(cat_dir, by_name, 'chunks-name')
+    _write_gallery_chunks(cat_dir, by_res, 'chunks-res')
     return (len(items) + GALLERY_CHUNK_SIZE - 1) // GALLERY_CHUNK_SIZE
 
 
@@ -488,6 +500,7 @@ def _gallery_page(
     context_mode: bool = False,
     background: str = '',
     user_options: str = '',
+    month_options: str = '',
 ) -> str:
     '''生成单页图库壳；图片卡片由滚动/按钮触发的本地 chunk 按需追加。'''
     doc = r'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -507,10 +520,17 @@ h1{font-size:18px;margin:0 0 4px}.muted{color:var(--muted);font-size:13px}
 #jumpTo{width:74px;padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text)}
 #topBtn,#loadMore{padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer}
 #loadMore:disabled{opacity:.55;cursor:default}
-select#sortSel,select#userSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
-select#sortSel:focus,select#userSel:focus{border-color:var(--accent)}
-select#sortSel option,select#userSel option{background:var(--panel);color:var(--text)}
+select#sortSel,select#userSel,select#sizeSel,select#resSel,select#monthSel,select#thumbSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
+select#sortSel:focus,select#userSel:focus,select#sizeSel:focus,select#resSel:focus,select#monthSel:focus,select#thumbSel:focus{border-color:var(--accent)}
+select#sortSel option,select#userSel option,select#sizeSel option,select#resSel option,select#monthSel option,select#thumbSel option{background:var(--panel);color:var(--text)}
 select#userSel{max-width:300px}
+#searchBox{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;width:170px;outline:0}
+#searchBox:focus{border-color:var(--accent)}
+#searchBox::placeholder{color:var(--muted)}
+.grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+.grid.context-grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.grid.context-grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(380px,1fr))}
 /* 图库网格：横向顺序（从左到右逐行排列），按图片高度自动跨行补齐，无空洞 */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:16px 22px;grid-auto-rows:8px;align-items:start}
 .grid.context-grid{grid-auto-rows:auto;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
@@ -544,8 +564,36 @@ __THEME_TOGGLE__
     <option value="">最新（时间）</option>
     <option value="chunks-size">文件大小</option>
     <option value="chunks-name">文件名称</option>
+    <option value="chunks-res">分辨率</option>
   </select>
 __USER_TOOLBAR__
+  <label class="muted" for="sizeSel">尺寸</label>
+  <select id="sizeSel">
+    <option value="">全部</option>
+    <option value="landscape">横图</option>
+    <option value="portrait">竖图</option>
+    <option value="square">方图</option>
+  </select>
+  <label class="muted" for="resSel">分辨率</label>
+  <select id="resSel">
+    <option value="">全部</option>
+    <option value="512">短边≥512</option>
+    <option value="768">短边≥768</option>
+    <option value="1024">短边≥1024</option>
+    <option value="1536">短边≥1536</option>
+    <option value="2048">短边≥2048</option>
+  </select>
+  <label class="muted" for="monthSel">日期</label>
+  <select id="monthSel"><option value="">全部</option>__MONTH_OPTIONS__</select>
+  <label class="muted" for="searchBox">搜索</label>
+  <input id="searchBox" type="search" placeholder="关键词 / QQ号 / ID" autocomplete="off">
+  <label class="muted" style="cursor:pointer"><input type="checkbox" id="dupOnly"> 只看重复/同批</label>
+  <label class="muted" for="thumbSel">缩略图</label>
+  <select id="thumbSel">
+    <option value="small">小</option>
+    <option value="medium" selected>中</option>
+    <option value="large">大</option>
+  </select>
   <input id="jumpTo" type="number" min="1" max="__COUNT__" placeholder="序号">
   <button id="topBtn" type="button">回顶部</button>
   <span id="collapseInfo" class="muted"></span>
@@ -567,20 +615,61 @@ __USER_TOOLBAR__
   let masked=true;
   let chunkBase='';
   try{masked=localStorage.getItem('maskRestored')!=='0';}catch(e){}
-  try{chunkBase=['chunks-size','chunks-name'].includes(localStorage.getItem('gallerySort'))?localStorage.getItem('gallerySort'):'';}catch(e){}
+  try{chunkBase=['chunks-size','chunks-name','chunks-res'].includes(localStorage.getItem('gallerySort'))?localStorage.getItem('gallerySort'):'';}catch(e){}
   const sortSel=document.getElementById('sortSel');
   if(sortSel)sortSel.value=chunkBase;
   const userSel=document.getElementById('userSel');
-  let userFilter='';
+  const sizeSel=document.getElementById('sizeSel'),resSel=document.getElementById('resSel'),monthSel=document.getElementById('monthSel');
+  const searchBox=document.getElementById('searchBox'),dupBox=document.getElementById('dupOnly'),thumbSel=document.getElementById('thumbSel');
+  let userFilter='',sizeFilter='',minRes=0,monthFilter='',dupOnly=false,searchQuery='';
+
+  function sizeClass(item){
+    const w=Number(item.w||0),h=Number(item.h||0);
+    if(!w||!h)return 'unknown';
+    return w>=h*1.2?'landscape':(h>=w*1.2?'portrait':'square');
+  }
+  function matchesFilters(item){
+    // 所有筛选叠加命中才显示；命中的才建卡，灯箱切换/序号跳转都只在结果集内
+    if(userFilter&&String(item.uid||'')!==userFilter)return false;
+    if(sizeFilter&&sizeClass(item)!==sizeFilter)return false;
+    if(minRes&&Math.min(Number(item.w||0),Number(item.h||0))<minRes)return false;
+    if(monthFilter&&String(item.ts||'').slice(0,7)!==monthFilter)return false;
+    if(dupOnly&&!((item.dup&&Number(item.dup_total||0)>1)||Number(item.batch_total||0)>1))return false;
+    if(searchQuery){
+      let hay=String(item.kw||'')+' '+String(item.href||'')+' '+String(item.id||'')+' '+String(item.uid||'');
+      if(contextMode)hay+=' '+String(item.text||'');
+      if(hay.toLowerCase().indexOf(searchQuery)<0)return false;
+    }
+    return true;
+  }
+  const filtersActive=()=>Boolean(userFilter||sizeFilter||minRes||monthFilter||dupOnly||searchQuery);
+  function resetGrid(){
+    cells.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
+    groupNav=null;groupToken++;closeGroupLayer();hintDefault();
+    overlay.style.display='none';grid.textContent='';
+    updateProgress();void loadNext();
+  }
+  function applyThumb(){
+    if(!thumbSel)return;
+    const cls={small:'grid-small',large:'grid-large'}[thumbSel.value]||'';
+    grid.classList.remove('grid-small','grid-large');
+    if(cls)grid.classList.add(cls);
+    requestAnimationFrame(()=>layoutAll());
+  }
 
   function updateProgress(){
-    progress.textContent=userFilter?('命中 '+cells.length+' / '+total):('已加载 '+cells.length+' / '+total);
+    progress.textContent=filtersActive()?('命中 '+cells.length+' / '+total):('已加载 '+cells.length+' / '+total);
     const done=nextChunk>=chunkCount&&!loading;
     loadMore.disabled=done;
-    hint.textContent=errorMessage||(done?(userFilter&&!cells.length?'该筛选没有命中图片':'已全部加载'):'滚动到底部或点击“继续加载”');
+    hint.textContent=errorMessage||(done?(filtersActive()?(cells.length?'筛选完成':'没有符合条件的图片'):'已全部加载'):'滚动到底部或点击“继续加载”');
     const known=[...groups.values()].filter(g=>g.total>1||g.cells.length>1).length;
     const parts=[];
-    if(userFilter&&userSel)parts.push('筛选用户 '+userSel.options[userSel.selectedIndex].text);
+    if(userFilter&&userSel)parts.push('用户 '+userSel.options[userSel.selectedIndex].text);
+    if(monthFilter)parts.push('日期 '+monthFilter);
+    if(sizeFilter)parts.push(({landscape:'横图',portrait:'竖图',square:'方图'})[sizeFilter]||sizeFilter);
+    if(minRes)parts.push('短边≥'+minRes);
+    if(dupOnly)parts.push('只看重复/同批');
+    if(searchQuery)parts.push('搜索“'+searchQuery+'”');
     if(known)parts.push('已识别 '+known+' 组同批/相似（当前已加载部分）');
     document.getElementById('collapseInfo').textContent=parts.join(' · ');
   }
@@ -653,15 +742,15 @@ __USER_TOOLBAR__
     const fresh=[];
     let added=0;
     for(const item of (Array.isArray(items)?items:[])){
-      // 用户筛选不命中的直接不建卡：cells 只含命中项，灯箱左右切换也只走筛选结果
-      if(userFilter&&String(item.uid||'')!==userFilter)continue;
+      // 筛选不命中的直接不建卡：cells 只含命中项
+      if(!matchesFilters(item))continue;
       const index=cells.length;const card=createCard(item,index);cells.push(card.querySelector('a.cell'));itemCards.push(card);fresh.push(card);fragment.appendChild(card);added++;
     }
     grid.appendChild(fragment);
     requestAnimationFrame(()=>{for(const card of fresh)layoutCard(card);});
     updateProgress();
-    // 筛选后整块都被过滤时哨兵不会重新触发，主动续载下一块
-    if(userFilter&&added===0&&nextChunk<chunkCount)setTimeout(()=>void loadNext(),0);
+    // 筛选后稀疏命中时哨兵不会重新触发：命中不足一屏就主动续载下一块
+    if(filtersActive()&&(added===0||cells.length<24)&&nextChunk<chunkCount)setTimeout(()=>void loadNext(),0);
   }
   window.__galleryAcceptChunk=(index,items)=>{
     const request=activeRequest;
@@ -819,24 +908,27 @@ __USER_TOOLBAR__
   if(sortSel)sortSel.addEventListener('change',()=>{
     chunkBase=sortSel.value;
     try{localStorage.setItem('gallerySort',chunkBase);}catch(e){}
-    // 重置状态后按新排序的分块目录重新加载
-    cells.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
-    groupNav=null;groupToken++;closeGroupLayer();hintDefault();
-    overlay.style.display='none';grid.textContent='';
-    updateProgress();void loadNext();
+    // 其余筛选条件保留：各排序分块都带 uid/ts/kw，重置网格后按新分块目录重建
+    resetGrid();
   });
-  if(userSel)userSel.addEventListener('change',()=>{
-    userFilter=userSel.value;
-    // 用户筛选切换：重置网格后按筛选重建（各排序分块都带 uid，前端过滤即可）
-    cells.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
-    groupNav=null;groupToken++;closeGroupLayer();hintDefault();
-    overlay.style.display='none';grid.textContent='';
-    updateProgress();void loadNext();
-  });
+  if(userSel)userSel.addEventListener('change',()=>{userFilter=userSel.value;resetGrid();});
+  if(sizeSel)sizeSel.addEventListener('change',()=>{sizeFilter=sizeSel.value;resetGrid();});
+  if(resSel)resSel.addEventListener('change',()=>{minRes=Number(resSel.value||0);resetGrid();});
+  if(monthSel)monthSel.addEventListener('change',()=>{monthFilter=monthSel.value;resetGrid();});
+  if(dupBox)dupBox.addEventListener('change',()=>{dupOnly=dupBox.checked;resetGrid();});
+  let searchTimer=0;
+  function applySearch(){const q=searchBox.value.trim().toLowerCase();if(q!==searchQuery){searchQuery=q;resetGrid();}}
+  if(searchBox){
+    searchBox.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(applySearch,300);});
+    searchBox.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();clearTimeout(searchTimer);applySearch();}});
+  }
+  if(thumbSel)thumbSel.addEventListener('change',()=>{try{localStorage.setItem('galleryThumb',thumbSel.value);}catch(e){}applyThumb();});
+  try{const savedThumb=localStorage.getItem('galleryThumb');if(savedThumb&&thumbSel&&thumbSel.querySelector('option[value="'+savedThumb+'"]'))thumbSel.value=savedThumb;}catch(e){}
   let rsTimer=0;
   window.addEventListener('resize',()=>{clearTimeout(rsTimer);rsTimer=setTimeout(()=>{layoutAll();if(groupLayer.style.display==='flex'&&lastGroup)openGroup(lastGroup);},200);});
   loadMore.addEventListener('click',()=>void loadNext());
   if('IntersectionObserver' in window){const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))void loadNext();},{rootMargin:'900px'});observer.observe(sentinel);}
+  applyThumb();
   updateProgress();void loadNext();
   // 壁纸放最后加载：首屏先渲染卡片，空闲时再换上大背景
   const setWallpaper=function(){("requestIdleCallback"in window?requestIdleCallback:function(f){setTimeout(f,200)})(function(){document.body.classList.add("wallpaper-ready")},{timeout:2000})};
@@ -861,6 +953,7 @@ __THEME_TOGGLE_JS__
         '__THEME_TOGGLE__': THEME_TOGGLE_HTML,
         '__THEME_TOGGLE_JS__': THEME_TOGGLE_JS,
         '__USER_TOOLBAR__': user_toolbar,
+        '__MONTH_OPTIONS__': month_options,
     }
     for marker, value in replacements.items():
         doc = doc.replace(marker, value)
@@ -881,7 +974,7 @@ def write_category_gallery(
     thumb_prefix: str = '../..',
     force: bool = False,
     dhash_cache: '_DhashCache | None' = None,
-    user_map: dict[str, str] | None = None,
+    item_meta: dict[str, dict[str, str]] | None = None,
     user_names: dict[str, str] | None = None,
 ) -> None:
     '''为图片分类目录生成单页按需图库；只加载首批，滚动后再追加本地 chunk。'''
@@ -939,10 +1032,13 @@ def write_category_gallery(
             size_bytes = image.stat().st_size
         except OSError:
             size_bytes = 0
+        meta_entry = (item_meta or {}).get(image_key, {})
         gallery_items.append({
             'href': url_path(rel),
             'id': image_key,
-            'uid': (user_map or {}).get(image_key, ''),
+            'uid': str(meta_entry.get('uid') or ''),
+            'ts': str(meta_entry.get('ts') or ''),
+            'kw': str(meta_entry.get('kw') or ''),
             'masked': '还原' in image.name,
             'batch': batch,
             'batch_total': batch_totals.get(batch, 0),
@@ -993,14 +1089,19 @@ def write_category_gallery(
         shutil.rmtree(cat_dir / 'groups', ignore_errors=True)
     chunk_count = _write_gallery_chunk_sets(cat_dir, gallery_items)
     user_counts: dict[str, int] = {}
+    month_counts: dict[str, int] = {}
     for item in gallery_items:
         uid = str(item.get('uid') or '')
         if uid:
             user_counts[uid] = user_counts.get(uid, 0) + 1
+        month = str(item.get('ts') or '')[:7]
+        if month:
+            month_counts[month] = month_counts.get(month, 0) + 1
     (cat_dir / 'index.html').write_text(
         _gallery_page(title=cat_dir.name, count=len(gallery_items), chunk_count=chunk_count,
                       background=_gallery_background(cat_dir),
-                      user_options=_user_options_html(user_counts, user_names or {})),
+                      user_options=_user_options_html(user_counts, user_names or {}),
+                      month_options=_month_options_html(month_counts)),
         encoding='utf-8',
     )
 
@@ -1030,6 +1131,7 @@ def _write_context_gallery(
             'href': url_path(str(item['image_rel'])),
             'masked': bool(item.get('deobfuscated')),
             'uid': str(item.get('uid') or ''),
+            'ts': str(item.get('ts') or ''),
             'label': f"#{item['id']} · {item['meta']}",
             'text': str(item.get('text') or ''),
             'batch': '',
@@ -1042,14 +1144,19 @@ def _write_context_gallery(
         return
     chunk_count = _write_gallery_chunks(cat_dir, gallery_items)
     user_counts: dict[str, int] = {}
+    month_counts: dict[str, int] = {}
     for item in gallery_items:
         uid = str(item.get('uid') or '')
         if uid:
             user_counts[uid] = user_counts.get(uid, 0) + 1
+        month = str(item.get('ts') or '')[:7]
+        if month:
+            month_counts[month] = month_counts.get(month, 0) + 1
     (cat_dir / 'index.html').write_text(
         _gallery_page(title=title, count=len(gallery_items), chunk_count=chunk_count,
                       context_mode=True, background=_gallery_background(cat_dir),
-                      user_options=_user_options_html(user_counts, user_names or {})),
+                      user_options=_user_options_html(user_counts, user_names or {}),
+                      month_options=_month_options_html(month_counts)),
         encoding='utf-8',
     )
 
@@ -1062,7 +1169,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 19  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 20  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -1077,8 +1184,8 @@ class _CatPlan:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.items: list[dict[str, object]] = []
-        # 记录 id -> 发送者 uid（uid 进 chunk 供页面按用户筛选）
-        self.users: dict[str, str] = {}
+        # 记录 id -> {uid, ts, kw}：进 chunk 供页面按用户/日期筛选与关键词搜索
+        self.meta: dict[str, dict[str, str]] = {}
 
     def signature(self) -> str:
         h = hashlib.sha1()
@@ -1087,10 +1194,11 @@ class _CatPlan:
             h.update(b'\x1f')
             h.update(self.files[rel].encode('utf-8'))
             h.update(b'\x1e')
-        for key in sorted(self.users):
+        for key in sorted(self.meta):
+            entry = self.meta[key]
             h.update(key.encode('utf-8'))
             h.update(b'\x1f')
-            h.update(self.users[key].encode('utf-8'))
+            h.update('\x1f'.join(entry.get(k, '') for k in ('uid', 'ts', 'kw')).encode('utf-8'))
             h.update(b'\x1e')
         for item in self.items:
             h.update(repr(sorted((k, str(v)) for k, v in item.items())).encode('utf-8'))
@@ -1324,7 +1432,11 @@ def build_view(project_dir: Path) -> dict[str, int]:
             filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
             saved_plan = plans.setdefault(saved_key, _CatPlan())
             saved_plan.files[filename] = str(src)
-            saved_plan.users[str(row['id'])] = str(row['user_id'] or '')
+            saved_plan.meta[str(row['id'])] = {
+                'uid': str(row['user_id'] or ''),
+                'ts': str(row['seen_at'] or '')[:10],
+                'kw': str(row['text_excerpt'] or '')[:160].lower(),
+            }
             continue
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
@@ -1357,7 +1469,11 @@ def build_view(project_dir: Path) -> dict[str, int]:
         ) + ext
         plan = plans.setdefault(cat, _CatPlan())
         plan.files[f'{size_class}/{filename}'] = str(src)
-        plan.users[str(row['id'])] = str(row['user_id'] or '')
+        plan.meta[str(row['id'])] = {
+            'uid': str(row['user_id'] or ''),
+            'ts': str(row['seen_at'] or '')[:10],
+            'kw': (str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
+        }
         if reason in ('prompt_bound', 'params_discussion'):
             plan.items.append({
                 'id': str(row['id']),
@@ -1365,6 +1481,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                 'text': str(row['bound_prompt'] or ''),
                 'uid': str(row['user_id'] or ''),
+                'ts': str(row['seen_at'] or '')[:10],
                 'deobfuscated': is_deobfuscated,
                 'w': row['width'] or 0,
                 'h': row['height'] or 0,
@@ -1387,6 +1504,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                         'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
                         'text': str(row['bound_prompt'] or ''),
                         'uid': str(row['user_id'] or ''),
+                        'ts': str(row['seen_at'] or '')[:10],
                         'deobfuscated': True,
                         'w': row['width'] or 0,
                         'h': row['height'] or 0,
@@ -1449,7 +1567,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 thumb_prefix = '../../..' if cat_name.startswith(_SAVED_ROOT + '/') else '../..'
                 write_category_gallery(cat_dir, project_dir=project_dir, thumb_prefix=thumb_prefix,
                                        force=True, dhash_cache=dhash_cache,
-                                       user_map=plan.users, user_names=member_names)
+                                       item_meta=plan.meta, user_names=member_names)
         except Exception as exc:
             print(f'gallery generation failed for {cat_name}: {type(exc).__name__}: {exc}')
     if copy_fallbacks:
@@ -1491,7 +1609,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n\n'
-        '每个图库页面右上角可按用户（发送者）筛选；导出训练数据集用：\n'
+        '每个图库页面支持按用户（发送者）、尺寸（横/竖/方）、分辨率短边、月份、\n'
+        '关键词（元数据文本/QQ号/ID）与"只看重复/同批"组合筛选；可切换缩略图大小、\n'
+        '按分辨率/大小/名称排序。导出训练数据集用：\n'
         'python -m qq_onebot_whitelist.export_dataset --user <QQ号> --captions\n',
     )
     write_view_index(view, counts)

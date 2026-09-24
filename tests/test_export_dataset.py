@@ -16,18 +16,20 @@ SCHEMA = """CREATE TABLE images (
 
 
 def make_db(tmp_path, rows):
-    """rows: (user_id, retention_reason, kept_path, ai_source, sha256[, width, height])。"""
+    """rows: (user_id, retention_reason, kept_path, ai_source, sha256[, width, height[, text_excerpt]])。"""
     data = tmp_path / 'data'
     data.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(data / 'bot.db')
     conn.execute(SCHEMA)
     for r in rows:
-        w, h = (r[5], r[6]) if len(r) > 6 else (640, 640)
+        w = r[5] if len(r) > 5 else 640
+        h = r[6] if len(r) > 6 else 640
+        excerpt = r[7] if len(r) > 7 else ''
         conn.execute(
             "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, "
-            "kept_path, ai_source, has_ai_metadata, sha256) "
-            "VALUES ('group:1', ?, '2026-09-01 10:00:00', 'PNG', ?, ?, ?, ?, ?, 1, ?)",
-            (r[0], w, h, r[1], r[2], r[3], r[4]))
+            "kept_path, ai_source, has_ai_metadata, sha256, text_excerpt) "
+            "VALUES ('group:1', ?, '2026-09-01 10:00:00', 'PNG', ?, ?, ?, ?, ?, 1, ?, ?)",
+            (r[0], w, h, r[1], r[2], r[3], r[4], excerpt))
     conn.commit()
     conn.close()
 
@@ -182,3 +184,28 @@ def test_novelai_comment_caption_and_exclude_user(tmp_path):
     caption = (out_dir / (images[0].stem + '.txt')).read_text(encoding='utf-8').strip()
     assert caption == 'masterpiece, 1girl'
     assert stats['manifest']['by_user'] == {'100': 1}
+
+
+def test_orientation_and_keyword_filters(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset, main as export_main
+
+    wide = tmp_path / 'wide.png'
+    Image.new('RGB', (1200, 600)).save(wide)
+    tall = tmp_path / 'tall.png'
+    Image.new('RGB', (600, 1200)).save(tall)
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(wide), 'A1111', 'sha-w', 1200, 600, 'shiroko beach scene'),
+        ('100', 'ai_metadata', str(tall), 'A1111', 'sha-t', 600, 1200),
+    ])
+    stats = export_dataset(tmp_path, orientation='landscape', out='land')
+    assert stats['exported'] == 1
+    assert stats['manifest']['counts']['skipped_filter'] == 1
+
+    # 关键词不区分大小写，命中元数据文本
+    stats_kw = export_dataset(tmp_path, keyword='SHIROKO', out='kw', dry_run=True)
+    assert stats_kw['manifest']['counts']['selected'] == 1
+
+    # 中文别名经 CLI 归一化
+    assert export_main(['--project-dir', str(tmp_path), '--orientation', '竖图',
+                        '--out', 'pt', '--no-captions']) == 0
+    assert len(list((tmp_path / 'data' / 'export' / 'pt').glob('*.png'))) == 1

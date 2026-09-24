@@ -192,6 +192,8 @@ def export_dataset(
     min_side: int | None = None,
     min_w: int | None = None,
     min_h: int | None = None,
+    orientation: str | None = None,
+    keyword: str | None = None,
     since: str | None = None,
     until: str | None = None,
     limit: int | None = None,
@@ -209,9 +211,10 @@ def export_dataset(
     sha_sel = 'sha256, ' if 'sha256' in cols else "'' AS sha256, "
     merged_filter = 'AND merged_into IS NULL ' if 'merged_into' in cols else ''
     saved_sel = 'saved_category, ' if 'saved_category' in cols else "'' AS saved_category, "
+    bound_sel = ', bound_prompt' if 'bound_prompt' in cols else ", '' AS bound_prompt"
     rows = conn.execute(
         'SELECT id, ' + sha_sel + saved_sel + 'scope, user_id, seen_at, width, height, '
-        'ai_source, retention_reason, kept_path FROM images '
+        'ai_source, retention_reason, kept_path, text_excerpt' + bound_sel + ' FROM images '
         'WHERE kept_path IS NOT NULL ' + merged_filter + 'ORDER BY id DESC'
     ).fetchall()
     conn.close()
@@ -255,6 +258,19 @@ def export_dataset(
         if min_h and h < min_h:
             stats['skipped_filter'] += 1
             continue
+        if orientation:
+            if not (w and h):
+                stats['skipped_filter'] += 1
+                continue
+            actual = 'landscape' if w >= h * 1.2 else ('portrait' if h >= w * 1.2 else 'square')
+            if actual != orientation:
+                stats['skipped_filter'] += 1
+                continue
+        if keyword:
+            hay = (str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).lower()
+            if keyword.lower() not in hay:
+                stats['skipped_filter'] += 1
+                continue
         seen_at = str(row['seen_at'] or '')
         if (since and (not seen_at or seen_at[:len(since)] < since)) or (
                 until and (not seen_at or seen_at[:len(until)] > until)):
@@ -315,6 +331,7 @@ def export_dataset(
             'users': sorted(user_set), 'exclude_users': sorted(exclude_set),
             'sources': sorted(source_set), 'categories': cat_list,
             'min_side': min_side, 'min_w': min_w, 'min_h': min_h,
+            'orientation': orientation, 'keyword': keyword,
             'since': since, 'until': until, 'limit': limit,
             'captions': captions, 'link': link,
         },
@@ -367,6 +384,14 @@ def _readme(manifest: dict) -> str:
     return '\n'.join(lines) + '\n'
 
 
+# 方向别名：命令行中英文都可写
+_ORIENT_ALIASES = {
+    'landscape': 'landscape', '横图': 'landscape', '横': 'landscape',
+    'portrait': 'portrait', '竖图': 'portrait', '竖': 'portrait',
+    'square': 'square', '方图': 'square', '方': 'square',
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='按用户/来源/尺寸导出 LoRA 训练数据集')
     parser.add_argument('--project-dir', default='.')
@@ -377,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--min-side', type=int, help='宽高都不小于该值')
     parser.add_argument('--min-w', type=int)
     parser.add_argument('--min-h', type=int)
+    parser.add_argument('--orientation', help='画面方向：landscape/横图、portrait/竖图、square/方图')
+    parser.add_argument('--keyword', help='关键词：匹配元数据文本/绑定提示词（不区分大小写）')
     parser.add_argument('--since', help='seen_at 起始日期 YYYY-MM-DD')
     parser.add_argument('--until', help='seen_at 截止日期 YYYY-MM-DD')
     parser.add_argument('--limit', type=int, help='最多导出多少张')
@@ -386,11 +413,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dry-run', action='store_true', help='只统计不写文件')
     args = parser.parse_args(argv)
 
+    orientation = _ORIENT_ALIASES.get((args.orientation or '').strip().lower()) if args.orientation else None
+    if args.orientation and not orientation:
+        parser.error(f'未知方向 {args.orientation!r}：可用 landscape/横图、portrait/竖图、square/方图')
+
     stats = export_dataset(
         Path(args.project_dir).resolve(),
         users=args.user, exclude_users=args.exclude_user, sources=args.source,
         categories=args.category, min_side=args.min_side, min_w=args.min_w,
-        min_h=args.min_h, since=args.since, until=args.until, limit=args.limit,
+        min_h=args.min_h, orientation=orientation, keyword=args.keyword,
+        since=args.since, until=args.until, limit=args.limit,
         captions=not args.no_captions, link=args.link, out=args.out, dry_run=args.dry_run,
     )
     manifest = stats['manifest']

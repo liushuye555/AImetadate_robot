@@ -476,11 +476,13 @@ def test_gallery_embeds_user_filter_with_nickname(tmp_path):
     img2 = tmp_path / "img2.png"
     img2.write_bytes(b"y" * 10)
     conn.execute(
-        "INSERT INTO images (scope, user_id, format, width, height, retention_reason, kept_path) "
-        "VALUES ('group:1', '100', 'PNG', 64, 64, 'positive_feedback', ?)", (str(img1),))
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '100', '2026-09-24 10:00:00', 'PNG', 64, 64, 'positive_feedback', ?, 'shiroko beach')",
+        (str(img1),))
     conn.execute(
-        "INSERT INTO images (scope, user_id, format, width, height, retention_reason, kept_path) "
-        "VALUES ('group:1', '200', 'PNG', 64, 64, 'positive_feedback', ?)", (str(img2),))
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '200', '2026-08-01 10:00:00', 'PNG', 64, 64, 'positive_feedback', ?, '')",
+        (str(img2),))
     conn.execute(
         "INSERT INTO messages (scope, user_id, raw_json) VALUES ('group:1', '100', ?)",
         ('{"sender":{"card":"阿熊","nickname":"bear"}}',))
@@ -495,3 +497,11 @@ def test_gallery_embeds_user_filter_with_nickname(tmp_path):
     assert '200 · 1张' in page  # 无昵称消息可查时退回 uid
     chunk = (cat / "chunks" / "chunk-0001.js").read_text(encoding="utf-8")
     assert '"uid":"100"' in chunk and '"uid":"200"' in chunk
+    # 日期/关键词进 chunk，页面有完整筛选控件和月份下拉、分辨率排序分块
+    assert '"ts":"2026-09-24"' in chunk
+    assert '"kw":"shiroko beach"' in chunk
+    assert '2026-09（1张）' in page and '2026-08（1张）' in page
+    for marker in ('id="sizeSel"', 'id="resSel"', 'id="monthSel"', 'id="searchBox"',
+                   'id="dupOnly"', 'id="thumbSel"', 'chunks-res'):
+        assert marker in page, marker
+    assert (cat / "chunks-res" / "chunk-0001.js").exists()
