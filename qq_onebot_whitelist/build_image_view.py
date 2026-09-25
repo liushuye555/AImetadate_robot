@@ -765,7 +765,7 @@ __USER_TOOLBAR__
   function resetGrid(){
     cells.length=0;itemData.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
     groupNav=null;groupToken++;closeGroupLayer();hintDefault();
-    overlay.style.display='none';grid.textContent='';
+    overlay.style.display='none';grid.textContent='';syncInfoVisibility();
     updateProgress();void loadNext();
   }
   function applyThumb(){
@@ -1000,7 +1000,7 @@ __USER_TOOLBAR__
   });
   overlay.addEventListener('click',event=>{
     // 大图阶段点背景：返回缩略图浮层
-    if(event.target===overlay){overlay.style.display='none';groupNav=null;hintDefault();}
+    if(event.target===overlay){overlay.style.display='none';groupNav=null;hintDefault();syncInfoVisibility();}
   });
   groupLayer.addEventListener('click',event=>{
     // 缩略图阶段点图片交给图片处理；点其余任何地方（空白/缝隙）返回主图库
@@ -1009,7 +1009,7 @@ __USER_TOOLBAR__
   });
   document.addEventListener('keydown',event=>{
     if(event.key==='Escape'){
-      if(overlay.style.display==='flex'){overlay.style.display='none';groupNav=null;hintDefault();return;}
+      if(overlay.style.display==='flex'){overlay.style.display='none';groupNav=null;hintDefault();syncInfoVisibility();return;}
       if(groupLayer.style.display==='flex'){closeGroupLayer();return;}
       return;
     }
@@ -1069,7 +1069,7 @@ __USER_TOOLBAR__
     else if(kind==='size'&&sizeSel){sizeSel.value=value;sizeFilter=value;}
     else return;
     resetGrid();
-    overlay.style.display='none';groupNav=null;hintDefault();
+    overlay.style.display='none';groupNav=null;hintDefault();syncInfoVisibility();
   }
   function renderInfo(info){
     const rows=[];
@@ -1464,7 +1464,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 24  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 25  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
