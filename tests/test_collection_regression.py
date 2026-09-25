@@ -234,11 +234,39 @@ def test_novelai_stego_verified(tmp_path):
 
 
 def test_novelai_stego_uncompressed_verified(tmp_path):
+    """未压缩 stealth 载荷可解出；但容器不是来源证据，只有弱证据 → 保持疑似。"""
     p = tmp_path / 'stego_plain.png'
     write_stealth_png(p, '1girl\nSteps: 28, Sampler: Euler a', compressed=False)
     meta = parse_image_metadata(p)
     assert meta.stego_state == 'verified'
-    assert meta.ai_source == 'NovelAI'
+    assert meta.has_ai_metadata
+    assert meta.ai_source == 'suspect:NovelAI'
+
+
+def test_novelai_stego_plain_a1111_parameters_not_labeled_novelai(tmp_path):
+    """验收：stealth 容器里的普通 A1111 参数文本不得判成 NovelAI。"""
+    p = tmp_path / 'stego_a1111.png'
+    write_stealth_png(
+        p,
+        '[ichika \\(ichika87\\)], miao style\n'
+        'Negative prompt: blurry\n'
+        'Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 123, Model: Miao2.0',
+        compressed=True,
+    )
+    meta = parse_image_metadata(p)
+    assert meta.stego_state == 'verified'
+    assert meta.has_ai_metadata
+    assert meta.ai_source == 'A1111'
+
+
+def test_novelai_stego_unverifiable_payload_keeps_unknown_source(tmp_path):
+    """验收：载荷验证不出工具（空 JSON/纯文本）→ 来源保留未知。"""
+    p = tmp_path / 'stego_empty.png'
+    write_stealth_png(p, '{}', compressed=True)
+    meta = parse_image_metadata(p)
+    assert meta.stego_state == 'verified'
+    assert meta.has_ai_metadata  # 载荷存在 = 有生成元数据
+    assert meta.ai_source is None  # 但工具来源未知
 
 
 def test_novelai_stego_truncated_is_suspected_only(tmp_path):

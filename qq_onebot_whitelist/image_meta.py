@@ -279,11 +279,17 @@ def _check_alpha_stego(path: Path, meta: ImageMetadata) -> None:
         meta.text_excerpt = meta.text_excerpt or meta.stego_excerpt[:500]
         meta.text_by_key.setdefault('stealth_pnginfo', meta.stego_excerpt)
         meta.full_text = meta.full_text or meta.stego_excerpt
-        # 隐写载荷本身就是生成参数：据此提升 AI 判定
+        # 隐写容器本身不是来源证据：载荷文本是什么格式，来源才按什么算。
+        # 普通 A1111/WebUI 参数块不因此判成 NovelAI；载荷验证不出工具时
+        # 保留未知（ai_source=None），只确认"存在生成元数据"。
+        payload_has_ai, payload_source = classify_ai_source(meta.stego_excerpt)
         if not meta.has_ai_metadata:
-            meta.has_ai_metadata, meta.ai_source = True, 'NovelAI'
+            meta.has_ai_metadata = True
+            meta.ai_source = payload_source or None
         elif meta.ai_source and meta.ai_source.startswith(SUSPECT_PREFIX):
-            meta.ai_source = 'NovelAI'
+            # 已有文本元数据只给出"疑似"：载荷里有强证据才升级，否则维持疑似
+            if payload_source and not payload_source.startswith(SUSPECT_PREFIX):
+                meta.ai_source = payload_source
 
 
 def _classify_ai(meta: ImageMetadata, text: str) -> None:

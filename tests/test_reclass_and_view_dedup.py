@@ -117,7 +117,7 @@ def test_reclass_historical_parameters_to_a1111(tmp_path):
         return m
 
     with patch('qq_onebot_whitelist.reclass_historical.parse_image_metadata', fake_parse):
-        result = reclass_historical(tmp_path / 'data' / 'bot.db')
+        result = reclass_historical(tmp_path / 'data' / 'bot.db', dry_run=False)
 
     assert result['changed: NovelAI -> A1111'] == 1
     conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
@@ -128,7 +128,7 @@ def test_reclass_historical_parameters_to_a1111(tmp_path):
 
 
 def test_reclass_stego_verified_wins_over_text(tmp_path):
-    """隐写 verified 优先于文本弱证据，直接确认 NovelAI。"""
+    """隐写 verified 时来源按载荷强证据算：无强证据不再硬标 NovelAI。"""
     from unittest.mock import patch
 
     from qq_onebot_whitelist.image_meta import ImageMetadata
@@ -140,14 +140,43 @@ def test_reclass_stego_verified_wins_over_text(tmp_path):
     def fake_parse(path):
         m = ImageMetadata(format='PNG')
         m.metadata_keys = ['parameters']
+        # 载荷文本没有强证据（classify 只给 suspect/None）：重判不得硬标 NovelAI
         m.has_ai_metadata, m.ai_source = True, 'suspect:NovelAI'
-        m.stego_state, m.stego_excerpt = 'verified', '{"prompt":"x","ucPreset":0}'
+        m.stego_state, m.stego_excerpt = 'verified', '{"prompt":"x"}'
         return m
 
     with patch('qq_onebot_whitelist.reclass_historical.parse_image_metadata', fake_parse):
-        result = reclass_historical(tmp_path / 'data' / 'bot.db')
+        result = reclass_historical(tmp_path / 'data' / 'bot.db', dry_run=False)
 
     conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
     src = conn.execute('SELECT ai_source FROM images').fetchone()[0]
     conn.close()
-    assert src == 'NovelAI'
+    assert src == ''  # 验证不出工具 → 保留未知
+
+
+def test_reclass_stego_payload_strong_evidence_decides(tmp_path):
+    """隐写载荷有强证据（如 A1111 参数块）时按载荷来源重判。"""
+    from unittest.mock import patch
+
+    from qq_onebot_whitelist.image_meta import ImageMetadata
+    from qq_onebot_whitelist.reclass_historical import reclass_historical
+
+    img = make_image(tmp_path / 'stego-params.png')
+    make_db(tmp_path, [('group:1', 'ai_metadata', str(img), 'NovelAI')])
+
+    def fake_parse(path):
+        m = ImageMetadata(format='PNG')
+        m.metadata_keys = ['stealth_pnginfo']
+        # 新版 parse：载荷是普通参数块 → A1111（不再因容器判 NovelAI）
+        m.has_ai_metadata, m.ai_source = True, 'A1111'
+        m.stego_state, m.stego_excerpt = 'verified', '1girl\nNegative prompt: blurry'
+        return m
+
+    with patch('qq_onebot_whitelist.reclass_historical.parse_image_metadata', fake_parse):
+        result = reclass_historical(tmp_path / 'data' / 'bot.db', dry_run=False)
+
+    assert result['changed: NovelAI -> A1111'] == 1
+    conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
+    src = conn.execute('SELECT ai_source FROM images').fetchone()[0]
+    conn.close()
+    assert src == 'A1111'
