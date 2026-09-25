@@ -275,3 +275,17 @@ def test_keyword_matches_filename(tmp_path):
     make_db(tmp_path, [('100', 'ai_metadata', str(img), 'A1111', 'sha-x', 640, 640, 'no hint here')])
     stats = export_dataset(tmp_path, keyword='SHIROKO-BEACH', dry_run=True)
     assert stats['manifest']['counts']['selected'] == 1
+
+
+def test_out_dir_exports_to_absolute_folder(tmp_path, capsys):
+    from qq_onebot_whitelist.export_dataset import main as export_main
+
+    img = tmp_path / 'a.png'
+    Image.new('RGB', (640, 640)).save(img)
+    make_db(tmp_path, [('100', 'ai_metadata', str(img), 'A1111', 'sha-x', 640, 640)])
+    target = tmp_path.parent / 'out_dir_dest_test'  # 项目目录之外
+    assert export_main(['--project-dir', str(tmp_path), '--out-dir', str(target), '--json']) == 0
+    assert len(list(target.glob('*.png'))) == 1
+    line = [l for l in capsys.readouterr().out.splitlines() if l.startswith('EXPORT_JSON ')][0]
+    manifest = json.loads(line[len('EXPORT_JSON '):])
+    assert manifest['out'] == str(target)

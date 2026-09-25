@@ -53,6 +53,14 @@ def accepted_tokens(project_dir: Path) -> set[str]:
 
 def _validate_params(payload: dict) -> tuple[list[str], str | None]:
     argv = ['--json']
+    out_dir = str(payload.get('out_dir') or '').strip().strip('"').strip()
+    if out_dir:
+        # 用户指定绝对路径（资源管理器"复制文件地址"会带引号，上面已剥掉）
+        if not re.match(r'^([A-Za-z]:[\\/]|\\\\)', out_dir):
+            return [], '目标文件夹需要绝对路径，如 D:\\datasets\\my-lora'
+        if len(out_dir) > 240:
+            return [], '路径过长'
+        argv += ['--out-dir', out_dir]
     out = str(payload.get('out') or '').strip()
     if out:
         if not _OUT_NAME_RE.match(out):
@@ -240,7 +248,8 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
                              'dry_run': bool(payload.get('dry_run')),
                              'params': {k: payload.get(k) for k in
                                         ('user', 'category', 'orientation', 'min_side',
-                                         'since', 'until', 'keyword', 'dup_only')
+                                         'since', 'until', 'keyword', 'dup_only',
+                                         'out_dir', 'out')
                                         if payload.get(k) is not None}})
             argv = [sys.executable, '-m', 'qq_onebot_whitelist.export_dataset',
                     '--project-dir', str(project_dir)] + argv

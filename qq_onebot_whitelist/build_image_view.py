@@ -650,7 +650,10 @@ __USER_TOOLBAR__
 <div id="exportPanel"><div id="exportCard">
   <h3>导出训练数据集<button id="exportClose" type="button" title="关闭">×</button></h3>
   <div id="exportFilters" class="muted"></div>
-  <label>导出目录名（data/export/ 下，留空按时间生成）
+  <label>目标文件夹（自己指定，绝对路径，复制粘贴即可；留空则存到 data/export/）
+    <input id="exportTarget" type="text" placeholder="D:\\datasets\\my-lora" autocomplete="off">
+  </label>
+  <label>目录名（仅在目标文件夹留空时使用）
     <input id="exportOut" type="text" placeholder="dataset-__EXPORT_DATE__" autocomplete="off">
   </label>
   <label class="chk"><input type="checkbox" id="exportDry" checked> 只统计（预演，不写文件）</label>
@@ -996,7 +999,8 @@ __USER_TOOLBAR__
   const CATEGORY=__CATEGORY_JSON__, VIEW_URL='__VIEW_URL__', PAGE_TOKEN='__BUILD_TOKEN__';
   const exportBtn=document.getElementById('exportBtn'),exportPanel=document.getElementById('exportPanel');
   if(exportBtn&&exportPanel){
-    const exportOut=document.getElementById('exportOut'),exportDry=document.getElementById('exportDry');
+    const exportTarget=document.getElementById('exportTarget'),exportOut=document.getElementById('exportOut');
+    const exportDry=document.getElementById('exportDry');
     const exportLink=document.getElementById('exportLink'),exportNoCap=document.getElementById('exportNoCap');
     const exportRun=document.getElementById('exportRun'),exportStatus=document.getElementById('exportStatus');
     const setStatus=t=>{exportStatus.textContent=t;};
@@ -1024,7 +1028,8 @@ __USER_TOOLBAR__
       if(monthFilter){p.since=monthFilter+'-01';p.until=lastDayOfMonth(monthFilter);}
       if(searchQuery)p.keyword=searchQuery;
       if(dupOnly)p.dup_only=true;
-      if(out)p.out=out;
+      const target=exportTarget.value.trim();
+      if(target){p.out_dir=target;}else if(out){p.out=out;}
       return p;
     }
     async function postExport(p){
@@ -1046,8 +1051,9 @@ __USER_TOOLBAR__
       const c=st.summary&&st.summary.counts;
       if(!c)return '完成\n'+(st.log_tail||[]).join('\n');
       if(st.summary.dry_run)return '预演：命中 '+c.selected+' 张（内容去重 '+c.deduped+'，条件过滤 '+c.skipped_filter+'）\n取消勾选“只统计”再点开始即真正导出。';
-      return '完成：导出 '+c.exported+' 张，caption '+c.captioned+' 张\n目录：data/'+(st.summary.out||'export/');
+      return '完成：导出 '+c.exported+' 张，caption '+c.captioned+' 张\n目录：'+(st.summary.out||'data/export/');
     }
+    try{const savedTarget=localStorage.getItem('exportTarget');if(savedTarget)exportTarget.value=savedTarget;}catch(e){}
     exportBtn.addEventListener('click',()=>{
       if(location.protocol==='file:'){
         alert('导出需要本地图库服务：bot 运行时用 '+VIEW_URL+' 打开本页后再试。');
@@ -1063,6 +1069,7 @@ __USER_TOOLBAR__
       const dry=exportDry.checked;
       exportRun.disabled=true;
       try{
+        try{const t=exportTarget.value.trim();if(t)localStorage.setItem('exportTarget',t);}catch(e){}
         await postExport(exportParams(exportOut.value.trim(),dry));
         setStatus(dry?'统计中…':'导出中…（图片多时可能需要几分钟）');
         const st=await pollJob();
@@ -1323,7 +1330,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 22  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 23  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'

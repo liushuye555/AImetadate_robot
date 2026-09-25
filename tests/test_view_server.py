@@ -128,3 +128,34 @@ def test_param_validation():
     assert argv[argv.index('--user') + 1] == '100'
     assert argv[argv.index('--min-side') + 1] == '768'
     assert argv[argv.index('--keyword') + 1] == 'shiroko'
+
+
+def test_out_dir_param_validation():
+    argv, err = view_server._validate_params({'out_dir': 'D:\\datasets\\lora'})
+    assert err is None
+    assert argv[argv.index('--out-dir') + 1] == 'D:\\datasets\\lora'
+    _, err = view_server._validate_params({'out_dir': 'relative/path'})
+    assert err and '绝对路径' in err
+    argv, err = view_server._validate_params({'out_dir': '"E:\\data\\set"'})
+    assert err is None
+    assert 'E:\\data\\set' in argv
+
+
+def test_export_to_absolute_folder_via_api(tmp_path):
+    project = _make_project(tmp_path)
+    target = tmp_path.parent / 'api_out_dir_dest_test'  # 项目目录之外
+    httpd, base = _server(project)
+    try:
+        _post(base, {'token': 'tok123', 'out_dir': str(target)})
+        status = {'status': 'running'}
+        for _ in range(200):
+            status = json.loads(urlopen(base + '/api/export/status').read())
+            if status['status'] != 'running':
+                break
+            time.sleep(0.1)
+        assert status['status'] == 'done'
+        assert status['summary']['counts']['exported'] == 1
+        assert status['summary']['out'] == str(target)
+        assert len(list(target.glob('*.png'))) == 1
+    finally:
+        httpd.shutdown()

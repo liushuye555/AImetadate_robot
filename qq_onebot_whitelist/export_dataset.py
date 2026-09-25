@@ -182,6 +182,14 @@ def row_category(row: sqlite3.Row) -> str:
     return cat
 
 
+def _display_out(out_dir: Path, project_dir: Path) -> str:
+    """manifest/页面展示用的导出位置：项目内用相对路径，外部目录用绝对路径。"""
+    try:
+        return out_dir.resolve().relative_to(Path(project_dir).resolve()).as_posix()
+    except ValueError:
+        return str(out_dir)
+
+
 def export_dataset(
     project_dir: Path,
     *,
@@ -202,6 +210,7 @@ def export_dataset(
     out: str | None = None,
     dry_run: bool = False,
     dup_only: bool = False,
+    out_dir_abs: str | None = None,
 ) -> dict:
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -323,7 +332,10 @@ def export_dataset(
         stats['counts_by_user'][str(row['user_id'] or '?')] += 1
         stats['counts_by_category'][row_category(row)] += 1
 
-    out_dir = project_dir / 'data' / 'export' / (out or time.strftime('dataset-%Y%m%d-%H%M%S'))
+    if out_dir_abs:
+        out_dir = Path(out_dir_abs)          # 用户指定的绝对路径（训练目录等）
+    else:
+        out_dir = project_dir / 'data' / 'export' / (out or time.strftime('dataset-%Y%m%d-%H%M%S'))
     if not dry_run and selected:
         out_dir.mkdir(parents=True, exist_ok=True)
         for index, (row, src) in enumerate(selected, 1):
@@ -366,7 +378,7 @@ def export_dataset(
         'by_source': dict(stats['counts_by_source'].most_common()),
         'by_user': dict(stats['counts_by_user'].most_common()),
         'by_category': dict(stats['counts_by_category'].most_common()),
-        'out': str(out_dir.relative_to(project_dir)) if not dry_run else None,
+        'out': None if dry_run else _display_out(out_dir, project_dir),
     }
     if not dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -432,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--no-captions', action='store_true', help='不写 .txt 提示词文件')
     parser.add_argument('--link', action='store_true', help='硬链接代替复制（省空间，训练时勿删原图）')
     parser.add_argument('--out', help='导出目录名（默认 data/export/dataset-时间戳）')
+    parser.add_argument('--out-dir', help='直接导出到指定绝对路径（如 D:\\\\datasets\\\\my-lora，训练目录）')
     parser.add_argument('--dry-run', action='store_true', help='只统计不写文件')
     parser.add_argument('--dup-only', action='store_true', help='只导出重复内容(同sha256)或同批(同工作流签名)的图')
     parser.add_argument('--json', action='store_true', help='末尾输出一行 EXPORT_JSON 摘要（供本地服务解析）')
@@ -448,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         min_h=args.min_h, orientation=orientation, keyword=args.keyword,
         since=args.since, until=args.until, limit=args.limit,
         captions=not args.no_captions, link=args.link, out=args.out, dry_run=args.dry_run,
-        dup_only=args.dup_only,
+        dup_only=args.dup_only, out_dir_abs=args.out_dir,
     )
     manifest = stats['manifest']
     if args.json:
