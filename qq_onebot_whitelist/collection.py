@@ -17,7 +17,7 @@ from .images import extract_image_segments, is_junk_image, is_probable_sticker_r
 from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
-from .gilbert_obfuscation import analyze_image, restore_image, safe_restore
+from .gilbert_obfuscation import analyze_image, has_tool_encoder_fingerprint, restore_image, safe_restore
 from .load_aware import load_aware_ok
 from .prompt_binding import bind_prompt_for_image
 from .prompt_binding import is_params_message
@@ -395,7 +395,18 @@ def process_event_image(
                     print(f'promote bound image failed: {type(exc).__name__}: {exc}')
         # 小番茄混淆算法级验证（Gilbert 曲线逆置换）：确认后直接标记，
         # 结果缓存到 image_hashes，避免重分类时重复分析。
-        if not result.get('has_ai_metadata') and result.get('kept_path'):
+        # 无元数据的图全量分析；带生成元数据的图以前直接跳过，但混淆工具会
+        # 保留原 tEXt 并用浏览器编码器重写文件——命中该编码指纹（只读文件头，
+        # <10ms，且元数据含正向提示词）的同样送像素确认。
+        meta_keys = set(result.get('metadata_keys') or [])
+        stego_suspect = bool(result.get('kept_path')) and (
+            not result.get('has_ai_metadata')
+            or (
+                ('prompt' in meta_keys or 'parameters' in meta_keys)
+                and has_tool_encoder_fingerprint(result['kept_path'])
+            )
+        )
+        if stego_suspect:
             xfq_result = None
             try:
                 xfq_result = analyze_image(result['kept_path'])

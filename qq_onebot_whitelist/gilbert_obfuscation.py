@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from array import array
 from pathlib import Path
 from typing import Any
@@ -249,6 +250,39 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
 def is_obfuscated(path: str | Path) -> bool:
     result = analyze_image(path)
     return bool(result and result.get('obfuscated'))
+
+
+# 指纹检查只需文件头：IHDR + 首个 IDAT 的头几个字节
+_HEAD_PEEK = 262144
+_TOOL_IDAT_MAX = 8192   # 浏览器端编码器按 ~4KB 切 IDAT；PIL/服务端编码器是 ~64KB 大块
+
+
+def has_tool_encoder_fingerprint(path: str | Path) -> bool:
+    """浏览器端 PNG 编码器指纹（小番茄混淆工具重编码的特征）。
+
+    混淆工具是纯前端实现：像素置换后用浏览器编码器重写 PNG——zlib 快速档
+    （头字节 78 01）+ ~4KB 小块 IDAT；而 ComfyUI/A1111/NAI 原图是
+    785e/789c + ~64KB 大块。混淆不修改元数据本身，但 tEXt 会被工具原样
+    搬回，因此"带生成元数据 + 命中此指纹" = 混淆高危（QQ 转存同指纹但会
+    剥掉全部 tEXt，需由调用方结合元数据条件使用）。
+    只读文件头、不做像素解码，单图 <10ms；仅作预筛，确认仍靠 analyze_image。
+    """
+    try:
+        with open(path, 'rb') as fh:
+            head = fh.read(_HEAD_PEEK)
+    except OSError:
+        return False
+    if head[:8] != b'\x89PNG\r\n\x1a\n':
+        return False
+    pos = 8
+    while pos + 8 <= len(head):
+        length, typ = struct.unpack('>I4s', head[pos:pos + 8])
+        if typ == b'IDAT':
+            if not 2 <= length <= _TOOL_IDAT_MAX or pos + 10 > len(head):
+                return False
+            return head[pos + 8:pos + 10] == b'\x78\x01'
+        pos += 12 + length
+    return False
 
 
 def restore_image(

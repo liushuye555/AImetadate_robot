@@ -260,3 +260,142 @@ def test_plain_png_no_stego(tmp_path):
     rgb = tmp_path / 'rgb.png'
     Image.new('RGB', (64, 64)).save(rgb)
     assert parse_image_metadata(rgb).stego_state is None
+
+
+# ---------- 场景 8：带元数据的混淆图（浏览器编码器指纹预筛） ----------
+
+from qq_onebot_whitelist.gilbert_obfuscation import analyze_image as analyze_image_real
+
+
+def _write_tool_encoded_png(path, width, height, gray):
+    """手工构造 PNG：zlib 快速档 + ~4KB 分块 IDAT（小番茄工具重编码的文件结构）。"""
+    import struct
+    import zlib
+
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)
+    raw = b''.join(b'\x00' + gray[y * width:(y + 1) * width] for y in range(height))
+
+    def chunk(typ, data):
+        return (struct.pack('>I', len(data)) + typ + data
+                + struct.pack('>I', zlib.crc32(typ + data) & 0xffffffff))
+
+    packed = zlib.compress(raw, 1)
+    idats = b''.join(chunk(b'IDAT', packed[i:i + 4096]) for i in range(0, len(packed), 4096))
+    path.write_bytes(
+        b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + idats + chunk(b'IEND', b'')
+    )
+
+
+def _permuted_gradient(width=128, height=96):
+    """真混淆像素：渐变灰度图按小番茄算法做一层置换。"""
+    import math
+
+    from qq_onebot_whitelist.gilbert_obfuscation import curve_order
+    raw = bytes((x * 255 // max(1, width - 1) + y * 40) % 256
+                for y in range(height) for x in range(width))
+    n = width * height
+    order = curve_order(width, height)
+    shift = round((math.sqrt(5) - 1) / 2 * n)
+    enc = bytearray(n)
+    for s in range(n):
+        enc[order[(s + shift) % n]] = raw[order[s]]
+    return raw, bytes(enc)
+
+
+def _metadata_result(url, sha, kept_path):
+    result = fake_image_result(url, sha, kept_path=str(kept_path),
+                               retention_reason='ai_metadata')
+    result.update({'metadata_keys': ['prompt', 'workflow'],
+                   'has_ai_metadata': True, 'ai_source': 'ComfyUI',
+                   'format': 'PNG', 'width': 128, 'height': 96})
+    return result
+
+
+def test_metadata_with_tool_fingerprint_confirmed_obfuscated(tmp_path, monkeypatch):
+    """带元数据 + 工具编码指纹的混淆图：不再盲信元数据，像素确认后归 05 并自动还原。"""
+    store, config, data = make_store_config(tmp_path)
+    _, enc = _permuted_gradient()
+    kept = make_image_file(data / 'images' / 'ai' / 'cc' / 'c1.png')
+    _write_tool_encoded_png(kept, 128, 96, enc)
+
+    monkeypatch.setattr(
+        collection, 'process_image_url',
+        lambda url, **kw: _metadata_result(url, 'sha-obf', kept))
+    monkeypatch.setattr(collection, 'analyze_image', analyze_image_real)
+
+    from qq_onebot_whitelist.collection import collect_event
+    collect_event(store, image_event(2001), config)
+
+    conn = sqlite3.connect(store.path)
+    try:
+        row = conn.execute(
+            "SELECT retention_reason, context_reason, deobfuscated FROM images "
+            "WHERE scope='group:9'").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 'xiaofanqie_obfuscated'
+    assert row[1] is None  # ai_metadata 不是上下文分类，不记交叉原因
+    assert row[2] == 1     # 确认档自动还原替换
+
+
+def test_metadata_fingerprint_but_natural_pixels_stays(tmp_path, monkeypatch):
+    """指纹命中但像素是自然图：负结果，保持 ai_metadata（误报路径）。"""
+    store, config, data = make_store_config(tmp_path)
+    raw, _ = _permuted_gradient()
+    kept = make_image_file(data / 'images' / 'ai' / 'cc' / 'c2.png')
+    _write_tool_encoded_png(kept, 128, 96, raw)  # 未置换的自然渐变
+
+    monkeypatch.setattr(
+        collection, 'process_image_url',
+        lambda url, **kw: _metadata_result(url, 'sha-clean', kept))
+    monkeypatch.setattr(collection, 'analyze_image', analyze_image_real)
+
+    from qq_onebot_whitelist.collection import collect_event
+    collect_event(store, image_event(2002), config)
+
+    conn = sqlite3.connect(store.path)
+    try:
+        row = conn.execute(
+            "SELECT retention_reason FROM images WHERE scope='group:9'").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 'ai_metadata'
+
+
+def test_metadata_without_fingerprint_skips_pixel_scan(tmp_path, monkeypatch):
+    """无指纹的带元数据图：不触发像素分析（成本闸门），维持原分类。"""
+    store, config, data = make_store_config(tmp_path)
+    import struct
+    import zlib
+
+    # 用 PIL 默认参数存一张混淆像素图（789c + 大块 IDAT，无工具指纹）
+    _, enc = _permuted_gradient()
+    kept = make_image_file(data / 'images' / 'ai' / 'cc' / 'c3.png')
+    ihdr = struct.pack('>IIBBBBB', 128, 96, 8, 0, 0, 0, 0)
+    raw_scan = b''.join(b'\x00' + enc[y * 128:(y + 1) * 128] for y in range(96))
+
+    def chunk(typ, d):
+        return (struct.pack('>I', len(d)) + typ + d
+                + struct.pack('>I', zlib.crc32(typ + d) & 0xffffffff))
+
+    kept.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr)
+                     + chunk(b'IDAT', zlib.compress(raw_scan, 6)) + chunk(b'IEND', b''))
+
+    calls = []
+    monkeypatch.setattr(
+        collection, 'process_image_url',
+        lambda url, **kw: _metadata_result(url, 'sha-nofp', kept))
+    monkeypatch.setattr(collection, 'analyze_image',
+                        lambda p: calls.append(p) or None)
+
+    from qq_onebot_whitelist.collection import collect_event
+    collect_event(store, image_event(2003), config)
+
+    assert calls == []  # 指纹未命中，不做像素分析
+    conn = sqlite3.connect(store.path)
+    try:
+        row = conn.execute(
+            "SELECT retention_reason FROM images WHERE scope='group:9'").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 'ai_metadata'

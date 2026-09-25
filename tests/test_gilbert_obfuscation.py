@@ -212,3 +212,68 @@ def test_promote_restored_skips_when_missing(tmp_path):
         raise AssertionError("should raise")
     except FileNotFoundError:
         pass
+
+
+# ---------- 浏览器编码器指纹（混淆工具重编码预筛） ----------
+
+def _write_png_with_level(path, level: int, width: int = 64, height: int = 48,
+                          gray: bytes | None = None) -> None:
+    """手工构造灰度 PNG：扫描线按指定 zlib 等级压缩成单个 IDAT。"""
+    import struct
+    import zlib
+
+    if gray is None:
+        gray = bytes((x * 7 + y * 3) % 256 for y in range(height) for x in range(width))
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)
+    raw = b''.join(b'\x00' + gray[y * width:(y + 1) * width] for y in range(height))
+
+    def chunk(typ: bytes, data: bytes) -> bytes:
+        return (struct.pack('>I', len(data)) + typ + data
+                + struct.pack('>I', zlib.crc32(typ + data) & 0xffffffff))
+
+    path.write_bytes(
+        b'\x89PNG\r\n\x1a\n'
+        + chunk(b'IHDR', ihdr)
+        + chunk(b'IDAT', zlib.compress(raw, level))
+        + chunk(b'IEND', b'')
+    )
+
+
+def test_fingerprint_flags_quick_zlib_small_idat(tmp_path):
+    from qq_onebot_whitelist.gilbert_obfuscation import has_tool_encoder_fingerprint
+
+    path = tmp_path / 'tool.png'
+    _write_png_with_level(path, level=1)
+    assert has_tool_encoder_fingerprint(path) is True
+
+
+def test_fingerprint_ignores_default_and_best_compression(tmp_path):
+    from qq_onebot_whitelist.gilbert_obfuscation import has_tool_encoder_fingerprint
+
+    p6 = tmp_path / 'lvl6.png'
+    _write_png_with_level(p6, level=6)
+    p9 = tmp_path / 'lvl9.png'
+    _write_png_with_level(p9, level=9)
+    assert has_tool_encoder_fingerprint(p6) is False
+    assert has_tool_encoder_fingerprint(p9) is False
+
+
+def test_fingerprint_ignores_large_idat_even_at_quick_level(tmp_path):
+    """zlib 快速档但 IDAT 是大块（如 PIL compress_level=1）→ 不是工具指纹。"""
+    import os
+
+    from qq_onebot_whitelist.gilbert_obfuscation import has_tool_encoder_fingerprint
+
+    path = tmp_path / 'big_idat.png'
+    noise = os.urandom(32 * 1024)  # 随机数据在快速档下仍 >8KB
+    _write_png_with_level(path, level=1, width=1024, height=32, gray=noise[:1024 * 32])
+    assert has_tool_encoder_fingerprint(path) is False
+
+
+def test_fingerprint_rejects_non_png(tmp_path):
+    from qq_onebot_whitelist.gilbert_obfuscation import has_tool_encoder_fingerprint
+
+    path = tmp_path / 'x.bin'
+    path.write_bytes(b'not a png at all')
+    assert has_tool_encoder_fingerprint(path) is False
+    assert has_tool_encoder_fingerprint(tmp_path / 'missing.png') is False
