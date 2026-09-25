@@ -11,7 +11,7 @@ import re
 import shutil
 import sqlite3
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from .view_theme import THEME_INIT_JS, THEME_TOGGLE_HTML, THEME_TOGGLE_JS, THEME_VARS_CSS
 
@@ -331,6 +331,53 @@ def _script_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c')
 
 
+def _write_item_info(info_dir: Path, items: list[dict[str, object]], cat_dir: Path,
+                     category_id: str, user_names: dict[str, str] | None,
+                     project_dir: Path | None) -> None:
+    """每张图一个 info/<id>.js：大图信息面板按需加载完整元数据与提示词。
+
+    记录元数据在归档时已定型，按 id 落盘后跳过已有文件（增量构建只补新图）；
+    历史重判改过来源的极少数图，下次全量重建（版本号+1）时清理后重写。
+    """
+    from .export_dataset import extract_caption
+    info_dir.mkdir(parents=True, exist_ok=True)
+    valid_ids: set[str] = set()
+    for item in items:
+        info_id = str(item.get('id') or '')
+        if not info_id:
+            continue
+        valid_ids.add(info_id)
+        info_file = info_dir / f'{info_id}.js'
+        if info_file.exists():
+            continue
+        href = unquote(str(item.get('href') or ''))
+        src = cat_dir / href
+        try:
+            size_b = src.stat().st_size
+        except OSError:
+            size_b = 0
+        uid = str(item.get('uid') or '')
+        source = ''
+        if category_id.startswith('01_AI元数据_'):
+            source = category_id[len('01_AI元数据_'):]
+        try:
+            prompt = extract_caption(src) if src.exists() else ''
+        except Exception:
+            prompt = ''
+        payload = {
+            'id': info_id, 'f': href.rsplit('/', 1)[-1], 'u': uid,
+            'n': (user_names or {}).get(uid, ''), 't': str(item.get('ts') or ''),
+            'w': int(item.get('w') or 0), 'h': int(item.get('h') or 0), 'b': size_b,
+            'c': category_id, 's': source,
+            'p': prompt[:4000], 'text': str(item.get('text') or '')[:2000],
+        }
+        info_file.write_text(f'window.__galleryInfoPayload={_script_json(payload)};\n',
+                             encoding='utf-8')
+    for stale in info_dir.glob('*.js'):
+        if stale.stem not in valid_ids:
+            stale.unlink(missing_ok=True)
+
+
 def _user_options_html(user_counts: dict[str, int], names: dict[str, str]) -> str:
     """用户筛选下拉：按图片数降序；标签带原始 uid（可直接复制给导出命令）。"""
     if not user_counts:
@@ -570,6 +617,17 @@ select#userSel{max-width:300px}
 #exportRun{padding:6px 18px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-contrast,#fff);cursor:pointer;font-size:13px;margin-top:6px}
 #exportRun:disabled{opacity:.55;cursor:default}
 #exportStatus{white-space:pre-wrap;font-size:12.5px;background:var(--pre-bg);padding:10px;border-radius:8px;max-height:14em;overflow:auto;margin:10px 0 0}
+/* 大图信息面板：右侧栏，懒加载 info/<id>.js；用户/时间/尺寸可点选直接套筛选 */
+#infoBtn{position:fixed;top:14px;right:14px;z-index:14;padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);cursor:pointer;font-size:13px}
+#lightboxInfo{display:none;position:fixed;top:0;right:0;bottom:0;width:min(380px,44vw);background:var(--panel);border-left:1px solid var(--line-strong);padding:16px;overflow:auto;z-index:13;font-size:13px;line-height:1.6}
+#lightboxInfo .kv{display:flex;gap:8px;margin:3px 0}
+#lightboxInfo .k{color:var(--muted);flex:0 0 3.2em}
+#lightboxInfo .v{overflow-wrap:anywhere;min-width:0}
+#lightboxInfo .chip{cursor:pointer;color:var(--accent-soft);border-bottom:1px dashed var(--accent-soft)}
+#lightboxInfo pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--pre-bg);padding:10px;border-radius:8px;max-height:36em;overflow:auto;font-size:12px;margin:6px 0 0}
+.info-prompt-head{margin-top:12px;display:flex;align-items:center;gap:8px}
+.info-prompt-head button{padding:2px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer;font-size:12px}
+#overlay.with-info #lightbox{max-width:min(54vw,92vw)}
 .grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
 .grid.context-grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
@@ -645,7 +703,8 @@ __USER_TOOLBAR__
 </header>
 <main><div id="grid" class="grid __GRID_CLASS__"></div>
 <div id="loader" class="loader"><button id="loadMore" type="button">继续加载</button><span id="loadHint" class="muted">首批加载中…</span><span id="loadSentinel" aria-hidden="true"></span></div></main>
-<div id="overlay"><img id="lightbox" src="" alt=""><span class="overlay-hint" id="overlayHint">Esc 关闭 · ←/→ 切换</span></div>
+<div id="overlay"><img id="lightbox" src="" alt=""><span class="overlay-hint" id="overlayHint">Esc 关闭 · ←/→ 切换 · I 信息</span><button id="infoBtn" type="button" title="信息面板（I）">ℹ 信息</button></div>
+<div id="lightboxInfo"></div>
 <div id="groupOverlay"><div id="groupGrid" class="grid"></div><span class="overlay-hint" id="groupHint"></span></div>
 <div id="exportPanel"><div id="exportCard">
   <h3>导出训练数据集<button id="exportClose" type="button" title="关闭">×</button></h3>
@@ -669,7 +728,7 @@ __USER_TOOLBAR__
   const hint=document.getElementById('loadHint'), loadMore=document.getElementById('loadMore');
   const sentinel=document.getElementById('loadSentinel'), jump=document.getElementById('jumpTo');
   const overlay=document.getElementById('overlay'), lightbox=document.getElementById('lightbox');
-  const cells=[], groups=new Map(), chunkPromises=new Map();
+  const cells=[], itemData=[], groups=new Map(), chunkPromises=new Map();
   let nextChunk=0, loading=false, activeRequest=null, currentIndex=-1, errorMessage='';
   let masked=true;
   let chunkBase='';
@@ -704,7 +763,7 @@ __USER_TOOLBAR__
   }
   const filtersActive=()=>Boolean(userFilter||sizeFilter||minRes||monthFilter||dupOnly||searchQuery);
   function resetGrid(){
-    cells.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
+    cells.length=0;itemData.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
     groupNav=null;groupToken++;closeGroupLayer();hintDefault();
     overlay.style.display='none';grid.textContent='';
     updateProgress();void loadNext();
@@ -804,7 +863,7 @@ __USER_TOOLBAR__
     for(const item of (Array.isArray(items)?items:[])){
       // 筛选不命中的直接不建卡：cells 只含命中项
       if(!matchesFilters(item))continue;
-      const index=cells.length;const card=createCard(item,index);cells.push(card.querySelector('a.cell'));itemCards.push(card);fresh.push(card);fragment.appendChild(card);added++;
+      const index=cells.length;const card=createCard(item,index);cells.push(card.querySelector('a.cell'));itemData.push(item);itemCards.push(card);fresh.push(card);fragment.appendChild(card);added++;
     }
     grid.appendChild(fragment);
     requestAnimationFrame(()=>{for(const card of fresh)layoutCard(card);});
@@ -850,6 +909,7 @@ __USER_TOOLBAR__
     const anchor=cells[index];if(!anchor)return;
     currentIndex=index;groupNav=null;if(overlayHint)hintDefault();
     lightbox.src=anchor.href;overlay.style.display='flex';
+    showInfo(itemData[index]);
   }
   async function showAdjacent(delta){
     if(!total||currentIndex<0)return;
@@ -913,6 +973,7 @@ __USER_TOOLBAR__
           hintGroup();
           lightbox.src=anchor.href;
           overlay.style.display='flex';
+          hideInfoPanel();
         });
         const wrap=document.createElement('div');wrap.className='gallery-item';wrap.appendChild(anchor);
         fragment.appendChild(wrap);
@@ -994,6 +1055,74 @@ __USER_TOOLBAR__
   // 壁纸放最后加载：首屏先渲染卡片，空闲时再换上大背景
   const setWallpaper=function(){("requestIdleCallback"in window?requestIdleCallback:function(f){setTimeout(f,200)})(function(){document.body.classList.add("wallpaper-ready")},{timeout:2000})};
   document.readyState!=="loading"?setWallpaper():document.addEventListener("DOMContentLoaded",setWallpaper);
+
+  // —— 大图信息面板：懒加载 info/<id>.js，完整元数据 + 点选直接套筛选 ——
+  const infoPanel=document.getElementById('lightboxInfo'), infoBtn=document.getElementById('infoBtn');
+  let infoShown=true, infoToken=0;
+  const infoCache=new Map();
+  function fmtBytes(b){b=Number(b||0);return b>=1048576?(b/1048576).toFixed(1)+' MB':(b?Math.max(1,Math.round(b/1024))+' KB':'—');}
+  function escHtml(s){const d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
+  function applyInfoFilter(kind,value){
+    if(!value)return;
+    if(kind==='user'&&userSel){userSel.value=value;userFilter=value;}
+    else if(kind==='month'&&monthSel){monthSel.value=value;monthFilter=value;}
+    else if(kind==='size'&&sizeSel){sizeSel.value=value;sizeFilter=value;}
+    else return;
+    resetGrid();
+    overlay.style.display='none';groupNav=null;hintDefault();
+  }
+  function renderInfo(info){
+    const rows=[];
+    if(info.f)rows.push('<div class="kv"><span class="k">文件</span><span class="v">'+escHtml(info.f)+'</span></div>');
+    if(info.u||info.n)rows.push('<div class="kv"><span class="k">用户</span><span class="v"><span class="chip" data-kind="user" data-value="'+escHtml(info.u)+'">'+escHtml(info.n?info.n+'（'+info.u+'）':info.u)+'</span></span></div>');
+    if(info.t)rows.push('<div class="kv"><span class="k">时间</span><span class="v"><span class="chip" data-kind="month" data-value="'+escHtml(String(info.t).slice(0,7))+'">'+escHtml(info.t)+'</span></span></div>');
+    if(info.w&&info.h)rows.push('<div class="kv"><span class="k">尺寸</span><span class="v"><span class="chip" data-kind="size" data-value="'+sizeClass(info)+'">'+escHtml(info.w)+'×'+escHtml(info.h)+'</span></span></div>');
+    if(info.b)rows.push('<div class="kv"><span class="k">大小</span><span class="v">'+fmtBytes(info.b)+'</span></div>');
+    if(info.s)rows.push('<div class="kv"><span class="k">来源</span><span class="v">'+escHtml(info.s)+'</span></div>');
+    if(info.c)rows.push('<div class="kv"><span class="k">类目</span><span class="v">'+escHtml(info.c)+'</span></div>');
+    let html=rows.join('');
+    if(info.p)html+='<div class="info-prompt-head">提示词<button id="copyPrompt" type="button">复制</button></div><pre id="infoPrompt">'+escHtml(info.p)+'</pre>';
+    if(info.text)html+='<div class="info-prompt-head">上下文</div><pre>'+escHtml(info.text)+'</pre>';
+    infoPanel.innerHTML=html;
+    infoPanel.querySelectorAll('.chip').forEach(ch=>ch.addEventListener('click',()=>applyInfoFilter(ch.dataset.kind,ch.dataset.value)));
+    const copy=document.getElementById('copyPrompt');
+    if(copy)copy.addEventListener('click',()=>{const p=document.getElementById('infoPrompt');if(p&&navigator.clipboard)navigator.clipboard.writeText(p.textContent).then(()=>{copy.textContent='已复制';setTimeout(()=>{copy.textContent='复制';},1200);});});
+  }
+  function syncInfoVisibility(){
+    if(!infoPanel)return;
+    const open=infoShown&&overlay.style.display==='flex';
+    infoPanel.style.display=open?'block':'none';
+    overlay.classList.toggle('with-info',infoShown);
+  }
+  function hideInfoPanel(){
+    if(!infoPanel)return;
+    infoPanel.style.display='none';
+    overlay.classList.remove('with-info');
+  }
+  function showInfo(item){
+    if(!infoPanel)return;
+    syncInfoVisibility();
+    if(!item){infoPanel.innerHTML='<div class="muted">无详情</div>';return;}
+    if(contextMode||!item.id){
+      renderInfo({u:item.uid,n:'',t:item.ts,w:item.w,h:item.h,
+                  f:decodeURIComponent(String(item.href||'').split('/').pop()||''),
+                  p:'',text:item.text});
+      return;
+    }
+    const id=String(item.id);
+    if(infoCache.has(id)){renderInfo(infoCache.get(id));return;}
+    infoPanel.innerHTML='<div class="muted">详情加载中…</div>';
+    const token=++infoToken;
+    const s=document.createElement('script');
+    s.src='info/'+id+'.js'+buildToken;
+    s.onload=()=>{s.remove();if(token!==infoToken)return;const payload=window.__galleryInfoPayload;if(payload){infoCache.set(id,payload);renderInfo(payload);}};
+    s.onerror=()=>{s.remove();if(token===infoToken)infoPanel.innerHTML='<div class="muted">详情加载失败</div>';};
+    document.head.appendChild(s);
+  }
+  if(infoBtn)infoBtn.addEventListener('click',()=>{infoShown=!infoShown;syncInfoVisibility();});
+  document.addEventListener('keydown',e=>{
+    if((e.key==='i'||e.key==='I')&&overlay.style.display==='flex'&&groupLayer.style.display!=='flex'){infoShown=!infoShown;syncInfoVisibility();}
+  });
 
   // —— 导出当前筛选为训练数据集（经本地图库服务 /api/export） ——
   const CATEGORY=__CATEGORY_JSON__, VIEW_URL='__VIEW_URL__', PAGE_TOKEN='__BUILD_TOKEN__';
@@ -1238,6 +1367,8 @@ def write_category_gallery(
     else:
         shutil.rmtree(cat_dir / 'groups', ignore_errors=True)
     chunk_count = _write_gallery_chunk_sets(cat_dir, gallery_items)
+    _write_item_info(cat_dir / 'info', gallery_items, cat_dir,
+                     _db_category_id(cat_dir, project_dir), user_names, project_dir)
     # 构建指纹进脚本 URL：内容一变浏览器缓存就失效（file:// 无法按 mtime 重校验）
     build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
     _TOKENS_SEEN.add(build_token)
@@ -1284,6 +1415,7 @@ def _write_context_gallery(
                 key = Path(str(item['image_rel'])).stem
                 thumb = f'{thumb_prefix}/{THUMBS_DIR}/{url_path(thumb_rel_dir)}/{url_path(key)}.jpg'
         gallery_items.append({
+            'id': str(item.get('id') or ''),
             'href': url_path(str(item['image_rel'])),
             'masked': bool(item.get('deobfuscated')),
             'uid': str(item.get('uid') or ''),
@@ -1299,6 +1431,8 @@ def _write_context_gallery(
     if not gallery_items:
         return
     chunk_count = _write_gallery_chunks(cat_dir, gallery_items)
+    _write_item_info(cat_dir / 'info', gallery_items, cat_dir,
+                     _db_category_id(cat_dir, project_dir), user_names, project_dir)
     build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
     _TOKENS_SEEN.add(build_token)
     user_counts: dict[str, int] = {}
@@ -1330,7 +1464,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 23  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 24  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'

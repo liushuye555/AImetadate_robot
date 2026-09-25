@@ -592,3 +592,47 @@ def test_gallery_page_has_export_dialog_and_token_history(tmp_path):
     assert state["build_token"] in tokens
     token_in_page = page.split("PAGE_TOKEN='", 1)[1].split("'", 1)[0]
     assert token_in_page and token_in_page in tokens
+
+
+def test_gallery_info_files_and_lightbox_panel(tmp_path):
+    """大图信息面板：info/<id>.js 含元数据，页面有面板与一键筛选逻辑。"""
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '100', '2026-09-24 10:00:00', 'PNG', 64, 64, 'positive_feedback', ?, 'beach')",
+        (str(img),))
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+
+    cat = tmp_path / "data" / "view" / "02_群友好评"
+    page = (cat / "index.html").read_text(encoding="utf-8")
+    for marker in ('id="lightboxInfo"', 'id="infoBtn"',
+                   "s.src='info/'+id+'.js'+buildToken", 'applyInfoFilter'):
+        assert marker in page, marker
+    infos = list((cat / "info").glob("*.js"))
+    assert len(infos) == 1
+    body = infos[0].read_text(encoding="utf-8")
+    assert body.startswith("window.__galleryInfoPayload=")
+    assert '"c":"02_群友好评"' in body and '"u":"100"' in body
+    assert '"t":"2026-09-24"' in body and '"b":10' in body
