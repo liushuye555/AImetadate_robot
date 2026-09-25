@@ -183,6 +183,25 @@ def test_restore_image_recovers_original_exactly(tmp_path):
         assert im.convert('L').tobytes() == raw
 
 
+def test_restore_image_preserves_text_metadata(tmp_path):
+    """还原即替换不能抹掉生成元数据：原 tEXt（prompt/workflow）带到还原图。"""
+    from PIL.PngImagePlugin import PngInfo
+
+    w, h = 64, 48
+    raw = _make_gradient(w, h)
+    src = tmp_path / 'obf.png'
+    info = PngInfo()
+    info.add_text('prompt', '{"1": {"inputs": {"text": "1girl"}}}')
+    info.add_text('workflow', 'wf-payload')
+    Image.frombytes('L', (w, h), _permute(raw, w, h, 'enc')).save(src, pnginfo=info)
+
+    out = tmp_path / 'restored.png'
+    restore_image(src, out, layers=1)
+    with Image.open(out) as im:
+        assert im.info.get('prompt') == '{"1": {"inputs": {"text": "1girl"}}}'
+        assert im.info.get('workflow') == 'wf-payload'
+
+
 
 
 def test_promote_restored_replaces_original(tmp_path):

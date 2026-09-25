@@ -428,8 +428,10 @@ def process_event_image(
                 if xfq_result.get('obfuscated'):
                     confidence = xfq_result.get('confidence')
                     current = result.get('retention_reason')
-                    if current in {'prompt_bound', 'params_discussion', 'positive_feedback'} and confidence == 'confirmed':
-                        # 交叉分类：05 为主分类，同时记录上下文分类（报告里 02/03 遮罩显示）
+                    if current in {'prompt_bound', 'params_discussion', 'positive_feedback',
+                                   'ai_metadata'} and confidence == 'confirmed':
+                        # 交叉分类：05 为主分类，同时记录上下文分类
+                        #（02/03 报告遮罩显示；ai_metadata 交叉显示回来源 01 分类）
                         result['context_reason'] = current
                     result['retention_reason'] = (
                         'xiaofanqie_obfuscated' if confidence == 'confirmed'

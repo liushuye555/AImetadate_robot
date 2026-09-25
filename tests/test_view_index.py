@@ -80,6 +80,52 @@ def test_build_view_single_file_with_mask_marker_and_toggle(tmp_path):
     assert '"masked":true' in masked_chunks
 
 
+def test_build_view_confused_metadata_image_shows_in_both_categories(tmp_path):
+    """带元数据的确认混淆图：05 为主分类，同时交叉显示回来源 01 分类（不遮罩）。"""
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, bound_prompt TEXT, prompt_key TEXT,
+        context_reason TEXT, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, has_ai_metadata,"
+        " ai_source, retention_reason, kept_path, restored_path, deobfuscated,"
+        " context_reason, text_excerpt) "
+        "VALUES ('group:1', 'u100', '2026-09-25 10:00:00', 'PNG', 64, 64, 1, 'ComfyUI',"
+        " 'xiaofanqie_obfuscated', ?, ?, 1, 'ai_metadata', 'workflow json excerpt')",
+        (str(img), str(img)),
+    )
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+
+    cat05 = tmp_path / "data" / "view" / "05_小番茄混淆"
+    cat01 = tmp_path / "data" / "view" / "01_AI元数据_ComfyUI"
+    names05 = sorted(p.name for p in cat05.rglob("*") if p.suffix.lower() == ".png")
+    names01 = sorted(p.name for p in cat01.rglob("*") if p.suffix.lower() == ".png")
+    assert len(names05) == 1 and len(names01) == 1
+    assert "_还原" not in names01[0]  # 01 里显示还原后图，不遮罩
+    chunk01 = "\n".join(p.read_text(encoding="utf-8") for p in cat01.rglob("chunk-*.js"))
+    assert '"uid":"u100"' in chunk01  # 01 类目 chunk 里有完整的图库项（用户/日期可筛）
+
+
 def test_build_view_batch_folds_12_but_not_31(tmp_path):
     import sqlite3
 

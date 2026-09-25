@@ -299,6 +299,9 @@ def restore_image(
         if width * height > MAX_RESTORE_PIXELS:
             raise ValueError(f'图片过大（{width}x{height}），无法还原')
         rgb = img.convert('RGB')
+        # 混淆不修改元数据：把原文件的 tEXt（prompt/workflow 等）带到还原图上，
+        # 否则"还原即替换"会把生成元数据一起抹掉。
+        text_meta = dict(getattr(img, 'text', None) or {})
     channels = [list(rgb.getchannel(name).tobytes()) for name in ('R', 'G', 'B')]
     order = _curve_order_cached(width, height)
     n = width * height
@@ -310,7 +313,14 @@ def restore_image(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     merged = _Image.merge('RGB', [_Image.frombytes('L', (width, height), c) for c in restored_channels])
-    merged.save(out_path, format='PNG')
+    save_kwargs: dict = {}
+    if text_meta:
+        from PIL.PngImagePlugin import PngInfo
+        pnginfo = PngInfo()
+        for key, value in text_meta.items():
+            pnginfo.add_text(str(key), str(value))
+        save_kwargs['pnginfo'] = pnginfo
+    merged.save(out_path, format='PNG', **save_kwargs)
     return out_path, 1
 
 

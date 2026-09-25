@@ -1781,29 +1781,45 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 'w': row['width'] or 0,
                 'h': row['height'] or 0,
             })
-        # 05 的确认混淆图按 context_reason 交叉显示到 02/03（遮罩标记）
+        # 05 的确认混淆图按 context_reason 交叉显示到原分类
+        #（02/03 遮罩标记；ai_metadata 回到来源 01 分类，显示还原后图，不遮罩）
         context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
         if context_reason and context_reason in CATEGORY_NAMES:
             context_cat = CATEGORY_NAMES[context_reason]
+            if context_reason == 'ai_metadata':
+                source = str(row['ai_source'] or '')
+                if source:
+                    display = SOURCE_DISPLAY.get(source, source)
+                    context_cat = context_cat + '_' + safe_name(display)
             seen_ctx = dedup_seen.setdefault(context_cat, set())
             if not (sha256 and sha256 in seen_ctx):
                 if sha256:
                     seen_ctx.add(sha256)
-                ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
-                ctx_plan = plans.setdefault(context_cat, _CatPlan())
-                ctx_plan.files[f'{size_class}/{ctx_filename}'] = str(src)
-                if context_reason in ('prompt_bound', 'params_discussion'):
-                    ctx_plan.items.append({
-                        'id': str(row['id']),
-                        'image_rel': f'{size_class}/{ctx_filename}',
-                        'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                        'text': str(row['bound_prompt'] or ''),
+                if context_reason == 'ai_metadata':
+                    ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
+                    ctx_plan = plans.setdefault(context_cat, _CatPlan())
+                    ctx_plan.files[f'{size_class}/{ctx_filename}'] = str(src)
+                    ctx_plan.meta[str(row['id'])] = {
                         'uid': str(row['user_id'] or ''),
                         'ts': str(row['seen_at'] or '')[:10],
-                        'deobfuscated': True,
-                        'w': row['width'] or 0,
-                        'h': row['height'] or 0,
-                    })
+                        'kw': str(row['text_excerpt'] or '').strip()[:160].lower(),
+                    }
+                else:
+                    ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
+                    ctx_plan = plans.setdefault(context_cat, _CatPlan())
+                    ctx_plan.files[f'{size_class}/{ctx_filename}'] = str(src)
+                    if context_reason in ('prompt_bound', 'params_discussion'):
+                        ctx_plan.items.append({
+                            'id': str(row['id']),
+                            'image_rel': f'{size_class}/{ctx_filename}',
+                            'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
+                            'text': str(row['bound_prompt'] or ''),
+                            'uid': str(row['user_id'] or ''),
+                            'ts': str(row['seen_at'] or '')[:10],
+                            'deobfuscated': True,
+                            'w': row['width'] or 0,
+                            'h': row['height'] or 0,
+                        })
     state = _load_build_state(project_dir)
     counts: dict[str, int] = {}
     copy_fallbacks: list[tuple[Path, Path]] = []
@@ -1903,7 +1919,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
-        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n\n'
+        '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
+        '带元数据的确认混淆图：还原后元数据保留在文件上，并同时显示回其来源 01 分类。\n\n'
         '每个图库页面支持按用户（发送者）、尺寸（横/竖/方）、分辨率短边、月份、\n'
         '关键词（元数据文本/QQ号/ID）与"只看重复/同批"组合筛选；可切换缩略图大小、\n'
         '按分辨率/大小/名称排序。导出训练数据集用：\n'

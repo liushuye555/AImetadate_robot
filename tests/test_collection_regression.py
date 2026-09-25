@@ -334,7 +334,7 @@ def test_metadata_with_tool_fingerprint_confirmed_obfuscated(tmp_path, monkeypat
     finally:
         conn.close()
     assert row[0] == 'xiaofanqie_obfuscated'
-    assert row[1] is None  # ai_metadata 不是上下文分类，不记交叉原因
+    assert row[1] == 'ai_metadata'  # 交叉分类：同时显示回来源 01 分类
     assert row[2] == 1     # 确认档自动还原替换
 
 

@@ -140,7 +140,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
         return 0
     store = Store(db)
     decisions: list[tuple[int, str, str | None, str | None]] = []
-    context_reasons = ('positive_feedback', 'prompt_bound', 'params_discussion')
+    context_reasons = ('positive_feedback', 'prompt_bound', 'params_discussion', 'ai_metadata')
     with sqlite3.connect(db) as conn:
         confirmed_shas = {
             str(r[0]) for r in conn.execute(
