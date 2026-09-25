@@ -620,6 +620,13 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
 async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
+    if config.view_server_enabled:
+        # 本地图库 http 服务（静态页 + 导出任务），随 bot 常驻
+        from . import view_server
+        threading.Thread(
+            target=view_server.serve,
+            args=(Path(config_path).resolve().parent, config.view_server_port),
+            daemon=True, name='view-server').start()
     from . import control
     retry_delay = 5
     while True:

@@ -209,3 +209,69 @@ def test_orientation_and_keyword_filters(tmp_path):
     assert export_main(['--project-dir', str(tmp_path), '--orientation', '竖图',
                         '--out', 'pt', '--no-captions']) == 0
     assert len(list((tmp_path / 'data' / 'export' / 'pt').glob('*.png'))) == 1
+
+
+def test_dup_only_keeps_repeated_content(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    img = tmp_path / 'a.png'
+    Image.new('RGB', (640, 640)).save(img)
+    other = tmp_path / 'b.png'
+    Image.new('RGB', (640, 640), (1, 2, 3)).save(other)
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(img), 'A1111', 'sha-dup', 640, 640),
+        ('200', 'ai_metadata', str(img), 'A1111', 'sha-dup', 640, 640),
+        ('100', 'ai_metadata', str(other), 'A1111', 'sha-unique', 640, 640),
+    ])
+    stats_all = export_dataset(tmp_path, dry_run=True)
+    assert stats_all['manifest']['counts']['selected'] == 2
+    # 只看重复：唯一内容被条件过滤，重复内容再去重后剩 1
+    stats_dup = export_dataset(tmp_path, dup_only=True, dry_run=True)
+    assert stats_dup['manifest']['counts']['selected'] == 1
+    assert stats_dup['manifest']['counts']['skipped_filter'] == 1
+    assert stats_dup['manifest']['params']['dup_only'] is True
+
+
+def test_dup_only_prompt_key_counts_as_same_batch(tmp_path):
+    import sqlite3
+
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    img = tmp_path / 'a.png'
+    Image.new('RGB', (640, 640)).save(img)
+    img2 = tmp_path / 'c.png'
+    Image.new('RGB', (640, 640), (9, 9, 9)).save(img2)
+    make_db(tmp_path, [
+        ('100', 'ai_metadata', str(img), 'A1111', 'sha-1', 640, 640),
+        ('100', 'ai_metadata', str(img2), 'A1111', 'sha-2', 640, 640),
+    ])
+    conn = sqlite3.connect(tmp_path / 'data' / 'bot.db')
+    conn.execute("UPDATE images SET prompt_key='sig-x' WHERE sha256 IN ('sha-1', 'sha-2')")
+    conn.commit()
+    conn.close()
+    stats = export_dataset(tmp_path, dup_only=True, dry_run=True)
+    assert stats['manifest']['counts']['selected'] == 2
+
+
+def test_json_flag_prints_machine_summary(tmp_path, capsys):
+    from qq_onebot_whitelist.export_dataset import main as export_main
+
+    img = tmp_path / 'a.png'
+    Image.new('RGB', (640, 640)).save(img)
+    make_db(tmp_path, [('100', 'ai_metadata', str(img), 'A1111', 'sha-x', 640, 640)])
+    assert export_main(['--project-dir', str(tmp_path), '--json', '--dry-run']) == 0
+    out = capsys.readouterr().out
+    line = [l for l in out.splitlines() if l.startswith('EXPORT_JSON ')][0]
+    manifest = json.loads(line[len('EXPORT_JSON '):])
+    assert manifest['counts']['selected'] == 1
+    assert manifest['dry_run'] is True
+
+
+def test_keyword_matches_filename(tmp_path):
+    from qq_onebot_whitelist.export_dataset import export_dataset
+
+    img = tmp_path / 'shiroko-beach.png'
+    Image.new('RGB', (640, 640)).save(img)
+    make_db(tmp_path, [('100', 'ai_metadata', str(img), 'A1111', 'sha-x', 640, 640, 'no hint here')])
+    stats = export_dataset(tmp_path, keyword='SHIROKO-BEACH', dry_run=True)
+    assert stats['manifest']['counts']['selected'] == 1

@@ -543,3 +543,52 @@ def test_saved_collection_index_links_single_encoded(tmp_path):
     assert "%25" not in index
     assert "href=\"%E4%BA%8C%E6%AC%A1%E5%85%83/index.html\"" in index
     assert (tmp_path / "data" / "view" / "06_聊天记录收藏" / "二次元" / "index.html").exists()
+
+
+def test_gallery_page_has_export_dialog_and_token_history(tmp_path):
+    """工具栏导出按钮 + 弹层；页面 token 进入构建状态，本地服务按历史接受。"""
+    import json as json_lib
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.view_server import accepted_tokens
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '100', '2026-09-24 10:00:00', 'PNG', 64, 64, 'positive_feedback', ?, 'beach')",
+        (str(img),))
+    conn.commit()
+    conn.close()
+
+    build_view(tmp_path)
+
+    cat = tmp_path / "data" / "view" / "02_群友好评"
+    page = (cat / "index.html").read_text(encoding="utf-8")
+    for marker in ('id="exportBtn"', 'id="exportPanel"', 'id="exportRun"',
+                   "const CATEGORY=", "PAGE_TOKEN='"):
+        assert marker in page, marker
+    # 类目 ID 用数据库口径（收藏子分类是嵌套路径），导出按它过滤
+    assert 'const CATEGORY="02_群友好评"' in page
+    assert "VIEW_URL='http://127.0.0.1:3017/view/'" in page
+    # 构建状态记录本轮 token；服务端按历史接受页面里的 token
+    state = json_lib.loads((tmp_path / "data" / "view-build-state.json").read_text(encoding="utf-8"))
+    tokens = accepted_tokens(tmp_path)
+    assert state["build_token"] in tokens
+    token_in_page = page.split("PAGE_TOKEN='", 1)[1].split("'", 1)[0]
+    assert token_in_page and token_in_page in tokens

@@ -98,6 +98,8 @@ class AppConfig:
     keepalive_mode: str = 'all'
     keepalive_trigger_enabled: bool = False
     keepalive_idle_minutes: int = 60
+    view_server_enabled: bool = True
+    view_server_port: int = 3017
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -123,6 +125,7 @@ def load_config(path: str | Path) -> AppConfig:
     proxy = network.get('proxy') or {}
     relay = raw.get('relay') or {}
     chat = raw.get('chat') or {}
+    view_server = raw.get('view_server') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
@@ -220,4 +223,6 @@ def load_config(path: str | Path) -> AppConfig:
         keepalive_mode=str(keepalive.get('mode') or 'all').lower(),
         keepalive_trigger_enabled=bool(keepalive.get('trigger_enabled', False)),
         keepalive_idle_minutes=int(keepalive.get('idle_minutes') or 60),
+        view_server_enabled=bool(view_server.get('enabled', True)),
+        view_server_port=int(view_server.get('port') or 3017),
     )

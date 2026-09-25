@@ -492,6 +492,31 @@ def _write_gallery_chunk_sets(cat_dir: Path, items: list[dict[str, object]]) -> 
     return (len(items) + GALLERY_CHUNK_SIZE - 1) // GALLERY_CHUNK_SIZE
 
 
+_TOKENS_SEEN: set[str] = set()
+
+
+def _db_category_id(cat_dir: Path, project_dir: Path | None) -> str:
+    """页面在数据库口径下的类目名（收藏子分类是嵌套目录，需相对视图根取全名）。"""
+    if not project_dir:
+        return cat_dir.name
+    try:
+        return str(cat_dir.resolve().relative_to((project_dir / 'data' / 'view').resolve())).replace('\\', '/')
+    except ValueError:
+        return cat_dir.name
+
+
+def _view_server_base(project_dir: Path | None) -> str:
+    """本地图库服务地址（file:// 打开的页面用它提示用户切换）。"""
+    port = 3017
+    try:
+        import yaml
+        raw = yaml.safe_load((project_dir / 'config.yaml').read_text(encoding='utf-8')) or {}
+        port = int((raw.get('view_server') or {}).get('port') or 3017)
+    except Exception:
+        pass
+    return f'http://127.0.0.1:{port}/view/'
+
+
 def _gallery_page(
     *,
     title: str,
@@ -502,6 +527,8 @@ def _gallery_page(
     user_options: str = '',
     month_options: str = '',
     build_token: str = '',
+    category_id: str = '',
+    view_base_url: str = '',
 ) -> str:
     '''生成单页图库壳；图片卡片由滚动/按钮触发的本地 chunk 按需追加。'''
     doc = r'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -528,6 +555,21 @@ select#userSel{max-width:300px}
 #searchBox{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;width:170px;outline:0}
 #searchBox:focus{border-color:var(--accent)}
 #searchBox::placeholder{color:var(--muted)}
+#exportBtn{padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer;font-size:13px}
+#exportBtn:hover{border-color:var(--accent)}
+/* 导出弹层：收集当前筛选提交给本地图库服务 */
+#exportPanel{display:none;position:fixed;inset:0;background:#000b;z-index:13;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+#exportCard{width:min(480px,92vw);background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;padding:18px;box-shadow:0 8px 40px #0008}
+#exportCard h3{margin:0 0 8px;font-size:15px;display:flex;align-items:center}
+#exportClose{margin-left:auto;background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;line-height:1}
+#exportFilters{margin:0 0 10px;line-height:1.7}
+#exportCard label{display:block;margin:8px 0;font-size:13px}
+#exportCard input[type=text]{width:100%;box-sizing:border-box;padding:6px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--bg);color:var(--text);outline:0}
+#exportCard input[type=text]:focus{border-color:var(--accent)}
+#exportCard .chk{display:flex;align-items:center;gap:6px}
+#exportRun{padding:6px 18px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-contrast,#fff);cursor:pointer;font-size:13px;margin-top:6px}
+#exportRun:disabled{opacity:.55;cursor:default}
+#exportStatus{white-space:pre-wrap;font-size:12.5px;background:var(--pre-bg);padding:10px;border-radius:8px;max-height:14em;overflow:auto;margin:10px 0 0}
 .grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
 .grid.context-grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
@@ -589,6 +631,7 @@ __USER_TOOLBAR__
   <label class="muted" for="searchBox">搜索</label>
   <input id="searchBox" type="search" placeholder="关键词 / QQ号 / ID" autocomplete="off">
   <label class="muted" style="cursor:pointer"><input type="checkbox" id="dupOnly"> 只看重复/同批</label>
+  <button id="exportBtn" type="button">导出</button>
   <label class="muted" for="thumbSel">缩略图</label>
   <select id="thumbSel">
     <option value="small">小</option>
@@ -604,6 +647,18 @@ __USER_TOOLBAR__
 <div id="loader" class="loader"><button id="loadMore" type="button">继续加载</button><span id="loadHint" class="muted">首批加载中…</span><span id="loadSentinel" aria-hidden="true"></span></div></main>
 <div id="overlay"><img id="lightbox" src="" alt=""><span class="overlay-hint" id="overlayHint">Esc 关闭 · ←/→ 切换</span></div>
 <div id="groupOverlay"><div id="groupGrid" class="grid"></div><span class="overlay-hint" id="groupHint"></span></div>
+<div id="exportPanel"><div id="exportCard">
+  <h3>导出训练数据集<button id="exportClose" type="button" title="关闭">×</button></h3>
+  <div id="exportFilters" class="muted"></div>
+  <label>导出目录名（data/export/ 下，留空按时间生成）
+    <input id="exportOut" type="text" placeholder="dataset-__EXPORT_DATE__" autocomplete="off">
+  </label>
+  <label class="chk"><input type="checkbox" id="exportDry" checked> 只统计（预演，不写文件）</label>
+  <label class="chk"><input type="checkbox" id="exportLink"> 用硬链接代替复制（省空间，训练时勿删原图）</label>
+  <label class="chk"><input type="checkbox" id="exportNoCap"> 不生成 .txt 提示词文件</label>
+  <button id="exportRun" type="button">开始</button>
+  <pre id="exportStatus">尚未开始</pre>
+</div></div>
 <script>
 (() => {
   const total=__COUNT__, chunkCount=__CHUNK_COUNT__, contextMode=__CONTEXT_MODE__;
@@ -936,6 +991,87 @@ __USER_TOOLBAR__
   // 壁纸放最后加载：首屏先渲染卡片，空闲时再换上大背景
   const setWallpaper=function(){("requestIdleCallback"in window?requestIdleCallback:function(f){setTimeout(f,200)})(function(){document.body.classList.add("wallpaper-ready")},{timeout:2000})};
   document.readyState!=="loading"?setWallpaper():document.addEventListener("DOMContentLoaded",setWallpaper);
+
+  // —— 导出当前筛选为训练数据集（经本地图库服务 /api/export） ——
+  const CATEGORY=__CATEGORY_JSON__, VIEW_URL='__VIEW_URL__', PAGE_TOKEN='__BUILD_TOKEN__';
+  const exportBtn=document.getElementById('exportBtn'),exportPanel=document.getElementById('exportPanel');
+  if(exportBtn&&exportPanel){
+    const exportOut=document.getElementById('exportOut'),exportDry=document.getElementById('exportDry');
+    const exportLink=document.getElementById('exportLink'),exportNoCap=document.getElementById('exportNoCap');
+    const exportRun=document.getElementById('exportRun'),exportStatus=document.getElementById('exportStatus');
+    const setStatus=t=>{exportStatus.textContent=t;};
+    function lastDayOfMonth(ym){
+      const p=ym.split('-'),d=new Date(Number(p[0]),Number(p[1]),0).getDate();
+      return ym+'-'+String(d).padStart(2,'0');
+    }
+    function filterSummary(){
+      const s=[];
+      if(CATEGORY)s.push('类目 '+CATEGORY);
+      if(userFilter&&userSel)s.push('用户 '+userSel.options[userSel.selectedIndex].text);
+      if(sizeFilter&&sizeSel)s.push('方向 '+sizeSel.options[sizeSel.selectedIndex].text);
+      if(minRes)s.push('短边≥'+minRes);
+      if(monthFilter)s.push('月份 '+monthFilter);
+      if(searchQuery)s.push('关键词「'+searchQuery+'」');
+      if(dupOnly)s.push('只看重复/同批');
+      return s.length?s.join('，'):'（当前页全部图片）';
+    }
+    function exportParams(out,dry){
+      const p={token:PAGE_TOKEN,dry_run:!!dry,link:exportLink.checked,no_captions:exportNoCap.checked};
+      if(CATEGORY)p.category=[CATEGORY];
+      if(userFilter)p.user=[userFilter];
+      if(sizeFilter)p.orientation=sizeFilter;
+      if(minRes)p.min_side=minRes;
+      if(monthFilter){p.since=monthFilter+'-01';p.until=lastDayOfMonth(monthFilter);}
+      if(searchQuery)p.keyword=searchQuery;
+      if(dupOnly)p.dup_only=true;
+      if(out)p.out=out;
+      return p;
+    }
+    async function postExport(p){
+      const res=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok)throw new Error(data.error||('HTTP '+res.status));
+      return data;
+    }
+    async function pollJob(){
+      for(let i=0;i<1200;i++){
+        await new Promise(r=>setTimeout(r,1500));
+        const st=await(await fetch('/api/export/status')).json();
+        if(st.status==='running')continue;
+        return st;
+      }
+      throw new Error('等待超时，请稍后查看 data/export/');
+    }
+    function describeJob(st){
+      const c=st.summary&&st.summary.counts;
+      if(!c)return '完成\n'+(st.log_tail||[]).join('\n');
+      if(st.summary.dry_run)return '预演：命中 '+c.selected+' 张（内容去重 '+c.deduped+'，条件过滤 '+c.skipped_filter+'）\n取消勾选“只统计”再点开始即真正导出。';
+      return '完成：导出 '+c.exported+' 张，caption '+c.captioned+' 张\n目录：data/'+(st.summary.out||'export/');
+    }
+    exportBtn.addEventListener('click',()=>{
+      if(location.protocol==='file:'){
+        alert('导出需要本地图库服务：bot 运行时用 '+VIEW_URL+' 打开本页后再试。');
+        return;
+      }
+      exportPanel.style.display='flex';
+      document.getElementById('exportFilters').textContent=filterSummary();
+    });
+    document.getElementById('exportClose').addEventListener('click',()=>{exportPanel.style.display='none';});
+    exportPanel.addEventListener('click',e=>{if(e.target===exportPanel)exportPanel.style.display='none';});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'&&exportPanel.style.display==='flex')exportPanel.style.display='none';});
+    exportRun.addEventListener('click',async()=>{
+      const dry=exportDry.checked;
+      exportRun.disabled=true;
+      try{
+        await postExport(exportParams(exportOut.value.trim(),dry));
+        setStatus(dry?'统计中…':'导出中…（图片多时可能需要几分钟）');
+        const st=await pollJob();
+        if(st.status==='error')setStatus('失败：\n'+(st.log_tail||[]).join('\n'));
+        else setStatus(describeJob(st));
+      }catch(exc){setStatus('失败：'+exc.message);}
+      finally{exportRun.disabled=false;}
+    });
+  }
 })();
 </script>
 __THEME_TOGGLE_JS__
@@ -958,6 +1094,9 @@ __THEME_TOGGLE_JS__
         '__USER_TOOLBAR__': user_toolbar,
         '__MONTH_OPTIONS__': month_options,
         '__BUILD_TOKEN__': build_token,
+        '__CATEGORY_JSON__': json.dumps(category_id, ensure_ascii=False),
+        '__VIEW_URL__': html.escape(view_base_url),
+        '__EXPORT_DATE__': time.strftime('%Y%m%d'),
     }
     for marker, value in replacements.items():
         doc = doc.replace(marker, value)
@@ -1094,6 +1233,7 @@ def write_category_gallery(
     chunk_count = _write_gallery_chunk_sets(cat_dir, gallery_items)
     # 构建指纹进脚本 URL：内容一变浏览器缓存就失效（file:// 无法按 mtime 重校验）
     build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
+    _TOKENS_SEEN.add(build_token)
     user_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
     for item in gallery_items:
@@ -1108,7 +1248,9 @@ def write_category_gallery(
                       background=_gallery_background(cat_dir),
                       user_options=_user_options_html(user_counts, user_names or {}),
                       month_options=_month_options_html(month_counts),
-                      build_token=build_token),
+                      build_token=build_token,
+                      category_id=_db_category_id(cat_dir, project_dir),
+                      view_base_url=_view_server_base(project_dir)),
         encoding='utf-8',
     )
 
@@ -1151,6 +1293,7 @@ def _write_context_gallery(
         return
     chunk_count = _write_gallery_chunks(cat_dir, gallery_items)
     build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
+    _TOKENS_SEEN.add(build_token)
     user_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
     for item in gallery_items:
@@ -1165,7 +1308,9 @@ def _write_context_gallery(
                       context_mode=True, background=_gallery_background(cat_dir),
                       user_options=_user_options_html(user_counts, user_names or {}),
                       month_options=_month_options_html(month_counts),
-                      build_token=build_token),
+                      build_token=build_token,
+                      category_id=_db_category_id(cat_dir, project_dir),
+                      view_base_url=_view_server_base(project_dir)),
         encoding='utf-8',
     )
 
@@ -1178,7 +1323,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 21  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 22  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -1624,6 +1769,12 @@ def build_view(project_dir: Path) -> dict[str, int]:
         'python -m qq_onebot_whitelist.export_dataset --user <QQ号> --captions\n',
     )
     write_view_index(view, counts)
+    # 本轮用过的页面 token 存进状态：本地服务接受最近几轮 token，容忍未刷新的旧页面
+    if _TOKENS_SEEN:
+        state['build_token'] = sorted(_TOKENS_SEEN)[-1]
+        previous = {str(t) for t in (state.get('build_token_history') or [])}
+        state['build_token_history'] = sorted(previous | _TOKENS_SEEN)[-8:]
+        _TOKENS_SEEN.clear()
     _save_build_state(project_dir, state)
     return counts
 

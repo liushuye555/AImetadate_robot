@@ -201,6 +201,7 @@ def export_dataset(
     link: bool = False,
     out: str | None = None,
     dry_run: bool = False,
+    dup_only: bool = False,
 ) -> dict:
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -212,9 +213,10 @@ def export_dataset(
     merged_filter = 'AND merged_into IS NULL ' if 'merged_into' in cols else ''
     saved_sel = 'saved_category, ' if 'saved_category' in cols else "'' AS saved_category, "
     bound_sel = ', bound_prompt' if 'bound_prompt' in cols else ", '' AS bound_prompt"
+    key_sel = ', prompt_key' if 'prompt_key' in cols else ", '' AS prompt_key"
     rows = conn.execute(
         'SELECT id, ' + sha_sel + saved_sel + 'scope, user_id, seen_at, width, height, '
-        'ai_source, retention_reason, kept_path, text_excerpt' + bound_sel + ' FROM images '
+        'ai_source, retention_reason, kept_path, text_excerpt' + bound_sel + key_sel + ' FROM images '
         'WHERE kept_path IS NOT NULL ' + merged_filter + 'ORDER BY id DESC'
     ).fetchall()
     conn.close()
@@ -223,6 +225,22 @@ def export_dataset(
     exclude_set = {str(u).strip() for u in (exclude_users or []) if str(u).strip()}
     source_set = {normalize_source(s) for s in (sources or []) if str(s).strip()}
     cat_list = [str(c).strip() for c in (categories or []) if str(c).strip()]
+
+    # “只看重复/同批”与图库徽标同一口径：同内容(sha256)或同工作流签名(prompt_key)出现 >1 次
+    dup_shas: set[str] = set()
+    dup_prompt_keys: set[str] = set()
+    if dup_only:
+        sha_counts: Counter = Counter()
+        key_counts: Counter = Counter()
+        for row in rows:
+            sha = str(row['sha256'] or '')
+            if sha:
+                sha_counts[sha] += 1
+            prompt_key = str(row['prompt_key'] or '')
+            if prompt_key:
+                key_counts[prompt_key] += 1
+        dup_shas = {sha for sha, cnt in sha_counts.items() if cnt > 1}
+        dup_prompt_keys = {key for key, cnt in key_counts.items() if cnt > 1}
 
     stats: dict = {
         'scanned': 0, 'deduped': 0, 'skipped_filter': 0, 'skipped_missing': 0,
@@ -268,9 +286,13 @@ def export_dataset(
                 continue
         if keyword:
             hay = (str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).lower()
+            hay += ' ' + Path(str(row['kept_path'] or '')).name.lower()
             if keyword.lower() not in hay:
                 stats['skipped_filter'] += 1
                 continue
+        if dup_only and not (str(row['sha256'] or '') in dup_shas or str(row['prompt_key'] or '') in dup_prompt_keys):
+            stats['skipped_filter'] += 1
+            continue
         seen_at = str(row['seen_at'] or '')
         if (since and (not seen_at or seen_at[:len(since)] < since)) or (
                 until and (not seen_at or seen_at[:len(until)] > until)):
@@ -333,7 +355,7 @@ def export_dataset(
             'min_side': min_side, 'min_w': min_w, 'min_h': min_h,
             'orientation': orientation, 'keyword': keyword,
             'since': since, 'until': until, 'limit': limit,
-            'captions': captions, 'link': link,
+            'captions': captions, 'link': link, 'dup_only': dup_only,
         },
         'counts': {
             'scanned': stats['scanned'], 'deduped': stats['deduped'],
@@ -411,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--link', action='store_true', help='硬链接代替复制（省空间，训练时勿删原图）')
     parser.add_argument('--out', help='导出目录名（默认 data/export/dataset-时间戳）')
     parser.add_argument('--dry-run', action='store_true', help='只统计不写文件')
+    parser.add_argument('--dup-only', action='store_true', help='只导出重复内容(同sha256)或同批(同工作流签名)的图')
+    parser.add_argument('--json', action='store_true', help='末尾输出一行 EXPORT_JSON 摘要（供本地服务解析）')
     args = parser.parse_args(argv)
 
     orientation = _ORIENT_ALIASES.get((args.orientation or '').strip().lower()) if args.orientation else None
@@ -424,8 +448,11 @@ def main(argv: list[str] | None = None) -> int:
         min_h=args.min_h, orientation=orientation, keyword=args.keyword,
         since=args.since, until=args.until, limit=args.limit,
         captions=not args.no_captions, link=args.link, out=args.out, dry_run=args.dry_run,
+        dup_only=args.dup_only,
     )
     manifest = stats['manifest']
+    if args.json:
+        print('EXPORT_JSON ' + json.dumps(manifest, ensure_ascii=False))
     prefix = '[dry-run] ' if manifest['dry_run'] else ''
     print(f"{prefix}筛选命中 {manifest['counts']['selected']} 张"
           f"（扫描 {manifest['counts']['scanned']}，内容去重 {manifest['counts']['deduped']}，"
