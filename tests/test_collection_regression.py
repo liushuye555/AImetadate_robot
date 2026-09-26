@@ -31,7 +31,7 @@ from qq_onebot_whitelist.store import Store
 def make_store_config(tmp_path):
     data = tmp_path / 'data'
     store = Store(data / 'bot.db')
-    config = AppConfig(data_dir=data)
+    config = AppConfig(data_dir=data, load_aware_enabled=False)
     return store, config, data
 
 

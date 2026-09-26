@@ -73,7 +73,7 @@ def test_process_event_image_prompt_bound(tmp_path, monkeypatch):
                 "has_ai_metadata": False, "ai_source": None, "text_excerpt": "",
                 "kept_path": str(img), "retention_reason": "candidate"}
 
-    def fake_bind(records, reply_to=None, own_message_id=None):
+    def fake_bind(records, reply_to=None, own_message_id=None, own_text=None):
         return "prompt", "1girl, solo"
 
     monkeypatch.setattr(collection, "process_image_url", fake_process_image_url)

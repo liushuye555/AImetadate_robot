@@ -377,7 +377,7 @@ async def image_worker_loop(config: AppConfig, store: Store) -> None:
             print(f'load_aware: CPU busy，推迟图片处理（排队 {deferred_image_count()} 张）')
             await asyncio.sleep(load_aware_defer_seconds(config))
             continue
-        scope, user_id, image, nearby_text, message_db_id, message_id = item
+        scope, user_id, image, nearby_text, message_db_id, message_id, own_text = item
         event = {'message_id': message_id} if message_id is not None else None
         await asyncio.to_thread(
             process_event_image,
@@ -389,6 +389,7 @@ async def image_worker_loop(config: AppConfig, store: Store) -> None:
             message_db_id=message_db_id,
             config=config,
             event=event,
+            own_text=own_text,
         )
 
 

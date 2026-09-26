@@ -502,7 +502,7 @@ def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
     monkeypatch.setattr(collection, "extract_image_segments", fake_extract)
     monkeypatch.setattr(collection, "process_image_url", fake_process)
     store = Store(tmp_path / "bot.db")
-    config = AppConfig(sticker_repeat_threshold=3)
+    config = AppConfig(sticker_repeat_threshold=3, load_aware_enabled=False)
     event = text_event("1", "图")
     collection.collect_event(store, event, config)  # 第 1 次：未达阈值
     rows = store.recent_images_all(limit=5)

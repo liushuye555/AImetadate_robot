@@ -1805,7 +1805,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                         'kw': str(row['text_excerpt'] or '').strip()[:160].lower(),
                     }
                 else:
-                    ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}_还原") + ext
+                    ctx_suffix = '_还原' if is_deobfuscated else ''
+                    ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{ctx_suffix}") + ext
                     ctx_plan = plans.setdefault(context_cat, _CatPlan())
                     ctx_plan.files[f'{size_class}/{ctx_filename}'] = str(src)
                     if context_reason in ('prompt_bound', 'params_discussion'):

@@ -20,7 +20,7 @@ from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, has_tool_encoder_fingerprint, restore_image, safe_restore
 from .load_aware import load_aware_ok
 from .prompt_binding import bind_prompt_for_image
-from .prompt_binding import is_params_message
+from .prompt_binding import is_params_message, is_prompt_message
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -28,6 +28,15 @@ _AI_MATCH_CACHE: dict[tuple[str, str], bool] = {}
 _deferred_images: deque[tuple] = deque()
 _deferred_lock = Lock()
 MAX_DEFERRED_IMAGES = 300
+
+# 好评/反向绑定的回看窗口（秒）。历史数据（2026-09）：好评晋升中位间隔 <1 分钟，
+# 30 分钟以上的"迟到好评"多为闲聊误晋升；群内批量发图后单条好评很常见，
+# 因此窗口内所有仍在候选状态的图一起晋升，而不是只晋升最后一张。
+PRAISE_WINDOW_SECONDS = 600
+BIND_BACK_WINDOW_SECONDS = 600
+# 好评落空时（窗内没有候选图）给已归档图补标记上下文的原因集合
+PRAISE_CONTEXT_REASONS = ('ai_metadata', 'prompt_bound', 'params_discussion',
+                          'xiaofanqie_obfuscated', 'xiaofanqie_compressed')
 
 
 COLLECTION_KINDS = ("images", "links", "files", "forwards")
@@ -195,20 +204,65 @@ def collect_custom(store: Store, event: dict[str, Any], text: str, config: AppCo
         )
 
 
-def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig) -> None:
-    if not is_positive_feedback_text(text):
-        return
-    candidate = store.latest_candidate_image(scope)
-    if not candidate:
-        return
+def _promote_candidate_row(store: Store, scope: str, candidate: dict, config: AppConfig, reason: str = 'positive_feedback') -> bool:
+    """把一行候选图晋升到 ai 归档；表情包跳过，失败不抛出。"""
     path = candidate.get('kept_path')
     if not path:
-        return
+        return False
     if is_probable_sticker_result(candidate):
+        return False
+    source = CandidateImage(
+        scope=scope, sha256=str(candidate.get('sha256') or ''), path=Path(path), created_at=0, score=2,
+    )
+    try:
+        dest = promote_candidate(source, config.data_dir / 'images' / 'ai')
+    except Exception as exc:
+        print(f'promote candidate failed: {type(exc).__name__}: {exc}')
+        return False
+    store.update_image_retention(int(candidate['id']), kept_path=str(dest), retention_reason=reason)
+    return True
+
+
+def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig, user_id: str | None = None) -> None:
+    if not is_positive_feedback_text(text):
         return
-    source = CandidateImage(scope=scope, sha256=str(candidate.get('sha256') or ''), path=Path(path), created_at=0, score=2)
-    dest = promote_candidate(source, config.data_dir / 'images' / 'ai')
-    store.update_image_retention(int(candidate['id']), kept_path=str(dest), retention_reason='positive_feedback')
+    if user_id and str(user_id) in config.images_ignore_bot_user_ids:
+        return  # 机器人播报里带好评词不晋升
+    # 批量晋升：窗口内所有仍处候选状态的图（群友一次发多张、一条好评覆盖全部）
+    candidates = store.recent_candidate_images(scope, max_age_seconds=PRAISE_WINDOW_SECONDS)
+    promoted = 0
+    for candidate in candidates:
+        if _promote_candidate_row(store, scope, candidate, config):
+            promoted += 1
+    if promoted:
+        return
+    # 好评落空（窗内没有候选图）：多半指向刚发过、已按元数据/绑定归档的图。
+    # 给最近的已归档图补好评上下文，交叉显示到 02_群友好评，不重复归档。
+    recent = store.recent_image_by_reason(scope, PRAISE_CONTEXT_REASONS, max_age_seconds=PRAISE_WINDOW_SECONDS)
+    if recent:
+        store.mark_image_context(int(recent['id']), 'positive_feedback')
+
+
+def _bind_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig, user_id: str | None = None) -> None:
+    """图后补发的提示词/参数讨论反向绑定到窗口内仍在候选状态的图。
+
+    图片入库时只看"前一条消息"；讨论常发生在图发出之后，这里补上事后方向。
+    """
+    text = (text or '').strip()
+    if not text or (user_id and str(user_id) in config.images_ignore_bot_user_ids):
+        return
+    is_prompt = is_prompt_message(text)
+    if not is_prompt and not is_params_message(text):
+        return
+    candidates = store.recent_candidate_images(scope, max_age_seconds=BIND_BACK_WINDOW_SECONDS)
+    for candidate in candidates:
+        if is_probable_sticker_result(candidate):
+            continue
+        reason = 'prompt_bound' if is_prompt else 'params_discussion'
+        if not _promote_candidate_row(store, scope, candidate, config, reason=reason):
+            continue
+        store.set_bound_prompt(int(candidate['id']), text[:2000])
+        return
 
 
 def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> None:
@@ -243,7 +297,8 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
                     raw={'file': file_item, 'message_text': text},
                 )
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
-    _promote_recent_candidate_if_needed(store, scope, text, config)
+    _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
+    _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
     collect_custom(store, event, text, config)
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return
@@ -251,7 +306,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
     for index, image in enumerate(extract_image_segments(event)):
         image['segment_index'] = index  # 事件幂等键的一部分（scope+消息+段序号）
         if not load_ok:
-            defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id')))
+            defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id'), text))
             continue
         process_event_image(
             store,
@@ -262,6 +317,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
             message_db_id=message_db_id,
             config=config,
             event=event,
+            own_text=text,
         )
 
 
@@ -300,6 +356,7 @@ def process_event_image(
     message_db_id: int | None,
     config: AppConfig,
     event: dict[str, Any] | None = None,
+    own_text: str = '',
 ) -> None:
     """处理单张图片：幂等检查 → 下载 → 归档 → 混淆检测/还原 → 表情包过滤 → 入库。"""
     if str(user_id or '') in config.images_ignore_bot_user_ids:
@@ -332,6 +389,7 @@ def process_event_image(
                 records,
                 reply_to=reply_to_message_id(event or {}),
                 own_message_id=str((event or {}).get('message_id') or '') or None,
+                own_text=own_text,
             )
             if kind == 'prompt':
                 keep = True

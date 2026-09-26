@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
 import sqlite3
@@ -979,24 +980,89 @@ class Store:
             })
         return result
 
-    def latest_candidate_image(self, scope: str) -> dict[str, Any] | None:
+    def latest_candidate_image(self, scope: str, *, max_age_seconds: int | None = None) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
-            row = conn.execute(
-                '''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata FROM images
-                   WHERE scope = ? AND retention_reason = 'candidate' AND kept_path IS NOT NULL
-                   ORDER BY id DESC LIMIT 1''',
-                (scope,),
-            ).fetchone()
+            if max_age_seconds is not None:
+                cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
+                row = conn.execute(
+                    '''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at FROM images
+                       WHERE scope = ? AND retention_reason = 'candidate' AND kept_path IS NOT NULL
+                       AND seen_at >= ? ORDER BY id DESC LIMIT 1''',
+                    (scope, cutoff),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    '''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at FROM images
+                       WHERE scope = ? AND retention_reason = 'candidate' AND kept_path IS NOT NULL
+                       ORDER BY id DESC LIMIT 1''',
+                    (scope,),
+                ).fetchone()
         if not row:
             return None
         return {
             'id': row[0], 'sha256': row[1], 'kept_path': row[2], 'size': row[3],
             'width': row[4], 'height': row[5], 'format': row[6], 'has_ai_metadata': bool(row[7]),
+            'seen_at': row[8],
         }
+
+    def recent_candidate_images(self, scope: str, *, max_age_seconds: int, limit: int = 12) -> list[dict[str, Any]]:
+        """时间窗内仍处于候选状态的图（新→旧），供好评批量晋升。"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                '''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at FROM images
+                   WHERE scope = ? AND retention_reason = 'candidate' AND kept_path IS NOT NULL
+                   AND seen_at >= ? ORDER BY id DESC LIMIT ?''',
+                (scope, cutoff, int(limit)),
+            ).fetchall()
+        return [
+            {
+                'id': row[0], 'sha256': row[1], 'kept_path': row[2], 'size': row[3],
+                'width': row[4], 'height': row[5], 'format': row[6], 'has_ai_metadata': bool(row[7]),
+                'seen_at': row[8],
+            }
+            for row in rows
+        ]
+
+    def recent_image_by_reason(self, scope: str, reasons: tuple[str, ...], *, max_age_seconds: int) -> dict[str, Any] | None:
+        """时间窗内最新一张指定保留原因的图（新→旧取第一个有文件的），供好评标记上下文。"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
+        placeholders = ','.join('?' for _ in reasons)
+        with closing(sqlite3.connect(self.path)) as conn:
+            rows = conn.execute(
+                f'''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at, context_reason FROM images
+                    WHERE scope = ? AND retention_reason IN ({placeholders}) AND kept_path IS NOT NULL
+                    AND seen_at >= ? ORDER BY id DESC LIMIT 6''',
+                (scope, *reasons, cutoff),
+            ).fetchall()
+        for row in rows:
+            if row[9]:  # context_reason 已占用（如混淆图的 ai_metadata 交叉显示）不覆盖
+                continue
+            return {
+                'id': row[0], 'sha256': row[1], 'kept_path': row[2], 'size': row[3],
+                'width': row[4], 'height': row[5], 'format': row[6], 'has_ai_metadata': bool(row[7]),
+                'seen_at': row[8],
+            }
+        return None
+
+    def mark_image_context(self, image_id: int, context_reason: str) -> bool:
+        """给图补一个交叉显示原因（仅当 context_reason 为空时不覆盖已有值）。"""
+        with closing(sqlite3.connect(self.path)) as conn:
+            cur = conn.execute(
+                'UPDATE images SET context_reason = ? WHERE id = ? AND (context_reason IS NULL OR context_reason = \'\')',
+                (str(context_reason), int(image_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     def update_image_retention(self, image_id: int, *, kept_path: str | None, retention_reason: str) -> None:
         with closing(sqlite3.connect(self.path)) as conn:
             conn.execute('UPDATE images SET kept_path = ?, retention_reason = ? WHERE id = ?', (kept_path, retention_reason, int(image_id)))
+            conn.commit()
+
+    def set_bound_prompt(self, image_id: int, bound_prompt: str) -> None:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.execute('UPDATE images SET bound_prompt = ? WHERE id = ?', (str(bound_prompt or '')[:2000], int(image_id)))
             conn.commit()
 
     def clear_image_path(self, kept_path: str | Path) -> None:
