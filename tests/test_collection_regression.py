@@ -485,3 +485,43 @@ def test_metadata_without_fingerprint_skips_pixel_scan(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert row[0] == 'ai_metadata'
+
+
+# ---------- 场景 9：编辑器把原工具工作流裹进 XMP ----------
+
+def _insert_itxt_chunk(png_path, key: str, text: str) -> None:
+    """往已生成的 PNG 里插入一个 iTXt 块（IEND 前）。"""
+    import struct
+    data = bytearray(png_path.read_bytes())
+    payload = key.encode('latin1') + b'\x00\x00\x00' + b'\x00\x00' + text.encode('utf-8')
+    chunk = struct.pack('>I', len(payload)) + b'iTXt' + payload
+    chunk += struct.pack('>I', zlib.crc32(b'iTXt' + payload) & 0xffffffff)
+    idx = data.find(b'IEND') - 4
+    data[idx:idx] = chunk
+    png_path.write_bytes(bytes(data))
+
+
+def test_xmp_embedded_comfyui_prompt_confirmed(tmp_path):
+    """Affinity 等编辑器重存时把原工具的 Prompt:/Workflow: JSON 裹进 XMP 属性
+    （引号转义成 &quot;）→ 仍应结构确认 ComfyUI，而不是 suspect。"""
+    import html as html_mod
+    from qq_onebot_whitelist.image_meta import parse_image_metadata
+
+    p = tmp_path / 'xmp_comfy.png'
+    Image.new('RGB', (8, 8)).save(p)
+    workflow = json.dumps({
+        '1': {'inputs': {'unet_name': 'Anima\miaomiaoHarem.safetensors', 'weight_dtype': 'default'},
+              'class_type': 'UNETLoader', '_meta': {'title': 'UNet 加载器'}},
+        '3': {'inputs': {'seed': 1, 'steps': 20}, 'class_type': 'KSampler'},
+    })
+    xmp = ('<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+           '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+           '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+           '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"'
+           f' tiff:Make="Prompt:{html_mod.escape(workflow, quote=True)}" softwareAgent="Affinity 3.2.0">'
+           '</rdf:Description></rdf:RDF></x:xmpmeta>')
+    _insert_itxt_chunk(p, 'XML:com.adobe.xmp', xmp)
+
+    meta = parse_image_metadata(p)
+    assert meta.has_ai_metadata
+    assert meta.ai_source == 'ComfyUI'

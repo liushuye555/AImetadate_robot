@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import gzip
+import html
 import json
 import re
 import struct
@@ -124,24 +125,36 @@ def _json_payloads(text_by_key: dict[str, str]):
 
 
 def _embedded_workflow_payloads(text_by_key: dict[str, str]):
-    """抠出二进制前缀污染文本里的内嵌 JSON（'Workflow:{...}'，EXIF UserComment 等）。"""
+    """抠出污染文本里的内嵌 JSON（'Workflow:{...}'/'Prompt:{...}'）。
+
+    覆盖 EXIF UserComment（前面是 TIFF 二进制）和 XMP 属性（引号被转义成
+    &quot;，如 Affinity 重存时把原工具的 prompt/工作流裹进 tiff:Make）。
+    """
+    decoder = json.JSONDecoder()
     for value in text_by_key.values():
-        start = 0
-        while True:
-            idx = value.find('Workflow:', start)
-            if idx == -1:
-                return
-            brace = value.find('{', idx)
-            if brace == -1:
-                return
-            try:
-                data, end = json.JSONDecoder().raw_decode(value[brace:])
-            except ValueError:
-                start = idx + len('Workflow:')
-                continue
-            if isinstance(data, dict):
-                yield data
-            start = brace + max(1, end)
+        if not value:
+            continue
+        texts = [value]
+        if '&' in value:
+            texts.append(html.unescape(value))
+        for text in texts:
+            for prefix in ('Workflow:', 'Prompt:'):
+                start = 0
+                while True:
+                    idx = text.find(prefix, start)
+                    if idx == -1:
+                        break
+                    brace = text.find('{', idx)
+                    if brace == -1:
+                        break
+                    try:
+                        data, end = decoder.raw_decode(text[brace:])
+                    except ValueError:
+                        start = idx + len(prefix)
+                        continue
+                    if isinstance(data, dict):
+                        yield data
+                    start = brace + max(1, end)
 
 
 def _novelai_structural(text_by_key: dict[str, str]) -> bool:

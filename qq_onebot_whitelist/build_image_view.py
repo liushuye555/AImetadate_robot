@@ -627,7 +627,9 @@ select#userSel{max-width:300px}
 #lightboxInfo pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--pre-bg);padding:10px;border-radius:8px;max-height:36em;overflow:auto;font-size:12px;margin:6px 0 0}
 .info-prompt-head{margin-top:12px;display:flex;align-items:center;gap:8px}
 .info-prompt-head button{padding:2px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer;font-size:12px}
-#overlay.with-info #lightbox{max-width:min(54vw,92vw)}
+/* 信息面板打开时给右侧栏预留空间：图片在剩余区域居中，不再被面板盖住 */
+#overlay.with-info{padding-right:min(380px,44vw)}
+#overlay.with-info #lightbox{max-width:calc(100vw - min(380px,44vw) - 32px);max-height:100vh}
 .grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
 .grid.context-grid.grid-small{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
@@ -969,11 +971,11 @@ __USER_TOOLBAR__
         anchor.addEventListener('click',event=>{
           event.preventDefault();
           if(masked&&anchor.dataset.masked==='1'){const im=anchor.querySelector('img');if(im)im.style.filter='none';delete anchor.dataset.masked;return;}
-          groupNav={kind:kind,count:members.length,index:i,cells:cells};
+          groupNav={kind:kind,count:members.length,index:i,cells:cells,members:members};
           hintGroup();
           lightbox.src=anchor.href;
           overlay.style.display='flex';
-          hideInfoPanel();
+          showInfo(item);  // 组内大图同样带详情面板
         });
         const wrap=document.createElement('div');wrap.className='gallery-item';wrap.appendChild(anchor);
         fragment.appendChild(wrap);
@@ -1022,6 +1024,7 @@ __USER_TOOLBAR__
         groupNav.index=((groupNav.index+delta)%groupNav.cells.length+groupNav.cells.length)%groupNav.cells.length;
         lightbox.src=groupNav.cells[groupNav.index];
         hintGroup();
+        showInfo(groupNav.members[groupNav.index]);
       }else{void showAdjacent(delta);}
     }
   });
@@ -1093,11 +1096,6 @@ __USER_TOOLBAR__
     const open=infoShown&&overlay.style.display==='flex';
     infoPanel.style.display=open?'block':'none';
     overlay.classList.toggle('with-info',infoShown);
-  }
-  function hideInfoPanel(){
-    if(!infoPanel)return;
-    infoPanel.style.display='none';
-    overlay.classList.remove('with-info');
   }
   function showInfo(item){
     if(!infoPanel)return;
@@ -1523,7 +1521,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 26  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 27  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
