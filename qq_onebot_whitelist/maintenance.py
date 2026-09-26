@@ -352,6 +352,23 @@ def reclassify_historical_03(project_dir: str | Path) -> int:
     return len(decisions)
 
 
+def propagate_deobfuscated(project_dir: str | Path) -> int:
+    """还原是原地替换存档文件：同内容其他行（重发/merged）也指向还原图，补齐标记。
+
+    没有这步，02/03 里通过同内容行显示的还原图会缺 _还原 遮罩标记。
+    """
+    db = Path(project_dir) / 'data' / 'bot.db'
+    if not db.exists():
+        return 0
+    with sqlite3.connect(db) as conn:
+        cur = conn.execute(
+            "UPDATE images SET deobfuscated=1 WHERE deobfuscated=0 AND sha256 IN "
+            "(SELECT DISTINCT sha256 FROM images WHERE deobfuscated=1 AND sha256 IS NOT NULL AND sha256 != '')"
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def backfill_prompt_keys(project_dir: str | Path) -> int:
     """为存量 01 图按 text_excerpt 回填 prompt_key（sha1 前 16 位）。"""
     import hashlib
@@ -544,6 +561,7 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     candidates_removed = cleanup_expired_candidates(project_dir, ttl_hours=ttl_hours)
     obfuscation_reclassified = reclassify_possible_obfuscation(project_dir)
     obfuscation_restored = restore_confirmed_obfuscation(project_dir)
+    deobfuscated_propagated = propagate_deobfuscated(project_dir)
     historical_03 = reclassify_historical_03(project_dir)
     prompt_keys_backfilled = backfill_prompt_keys(project_dir)
     prompt_judge_reclassified = reclassify_prompt_judge(project_dir, mode=config.prompt_judge_mode)
@@ -567,7 +585,7 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
     except Exception as exc:
         print(f'style links refresh failed: {type(exc).__name__}: {exc}')
     counts.update(vision_stats)
-    return {'archive_budget_removed': archive_budget_removed, 'stale_tmp_removed': stale_tmp_removed, 'event_images_merged': event_images_merged, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, 'style_links_new': style_stats.get('linked', 0), 'style_links_stale_removed': style_stats.get('stale_removed', 0), **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'stale_tmp_removed': stale_tmp_removed, 'event_images_merged': event_images_merged, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'deobfuscated_propagated': deobfuscated_propagated, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, 'style_links_new': style_stats.get('linked', 0), 'style_links_stale_removed': style_stats.get('stale_removed', 0), **counts, **resource_counts}
 
 
 def main() -> int:

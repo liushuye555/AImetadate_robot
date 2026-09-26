@@ -81,7 +81,7 @@ def test_build_view_single_file_with_mask_marker_and_toggle(tmp_path):
 
 
 def test_build_view_confused_metadata_image_shows_in_both_categories(tmp_path):
-    """带元数据的确认混淆图：05 为主分类，同时交叉显示回来源 01 分类（不遮罩）。"""
+    """带元数据的确认混淆图：05 为主分类，同时交叉显示回来源 01 分类（同样遮罩）。"""
     import sqlite3
 
     from qq_onebot_whitelist.build_image_view import build_view
@@ -121,7 +121,7 @@ def test_build_view_confused_metadata_image_shows_in_both_categories(tmp_path):
     names05 = sorted(p.name for p in cat05.rglob("*") if p.suffix.lower() == ".png")
     names01 = sorted(p.name for p in cat01.rglob("*") if p.suffix.lower() == ".png")
     assert len(names05) == 1 and len(names01) == 1
-    assert "_还原" not in names01[0]  # 01 里显示还原后图，不遮罩
+    assert "_还原" in names01[0]  # 01 里同样遮罩，点击/关闭遮罩开关才显示还原内容
     chunk01 = "\n".join(p.read_text(encoding="utf-8") for p in cat01.rglob("chunk-*.js"))
     assert '"uid":"u100"' in chunk01  # 01 类目 chunk 里有完整的图库项（用户/日期可筛）
 
@@ -682,3 +682,56 @@ def test_gallery_info_files_and_lightbox_panel(tmp_path):
     assert body.startswith("window.__galleryInfoPayload=")
     assert '"c":"02_群友好评"' in body and '"u":"100"' in body
     assert '"t":"2026-09-24"' in body and '"b":10' in body
+
+
+def test_build_view_masks_sibling_rows_and_merged_context(tmp_path):
+    """还原是原地替换存档文件：同内容的兄弟行与 merged 行都要遮罩、能落位。
+
+    - 兄弟行（好评/绑定等与还原图同 sha）：propagate_deobfuscated 补标记后
+      主展示带 _还原 遮罩；
+    - merged 行（kept_path 为空、只剩 context_reason）：用同 sha 现存文件
+      兜底完成交叉显示，不再丢失。
+    """
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.maintenance import propagate_deobfuscated
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        sha256 TEXT, ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, bound_prompt TEXT, prompt_key TEXT,
+        context_reason TEXT, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    base = ("INSERT INTO images (scope, user_id, seen_at, format, width, height, sha256,"
+            " retention_reason, kept_path, deobfuscated, context_reason, bound_prompt) "
+            "VALUES ('group:1', 'u1', '2026-09-25 10:00:00', 'PNG', 64, 64, 'abc', ?, ?, ?, ?, ?)")
+    conn.execute(base, ("xiaofanqie_obfuscated", str(img), 1, "positive_feedback", None))
+    conn.execute(base, ("positive_feedback", str(img), 0, None, None))
+    conn.execute(base, ("xiaofanqie_obfuscated", None, 1, "prompt_bound", "1girl, solo"))
+    conn.commit()
+    conn.close()
+
+    assert propagate_deobfuscated(tmp_path) == 1  # 好评兄弟行补上 deobfuscated 标记
+
+    build_view(tmp_path)
+
+    cat02 = tmp_path / "data" / "view" / "02_群友好评"
+    cat03 = tmp_path / "data" / "view" / "03_提示词绑定"
+    names02 = [p.name for p in cat02.rglob("*") if p.suffix.lower() == ".png"]
+    names03 = [p.name for p in cat03.rglob("*") if p.suffix.lower() == ".png"]
+    assert any("_还原" in n for n in names02), names02  # 兄弟行主展示遮罩
+    assert any("_还原" in n for n in names03), names03  # merged 行经 sha 兜底落位
+    chunk03 = "\n".join(p.read_text(encoding="utf-8") for p in cat03.rglob("chunk-*.js"))
+    assert '"masked":true' in chunk03
