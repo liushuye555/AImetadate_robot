@@ -123,12 +123,38 @@ def _json_payloads(text_by_key: dict[str, str]):
             yield data
 
 
+def _embedded_workflow_payloads(text_by_key: dict[str, str]):
+    """抠出二进制前缀污染文本里的内嵌 JSON（'Workflow:{...}'，EXIF UserComment 等）。"""
+    for value in text_by_key.values():
+        start = 0
+        while True:
+            idx = value.find('Workflow:', start)
+            if idx == -1:
+                return
+            brace = value.find('{', idx)
+            if brace == -1:
+                return
+            try:
+                data, end = json.JSONDecoder().raw_decode(value[brace:])
+            except ValueError:
+                start = idx + len('Workflow:')
+                continue
+            if isinstance(data, dict):
+                yield data
+            start = brace + max(1, end)
+
+
 def _novelai_structural(text_by_key: dict[str, str]) -> bool:
     for key in ('Software', 'Source'):
         if 'novelai' in str(text_by_key.get(key, '')).lower():
             return True
-    if any(_is_novelai_comment(data) for data in _json_payloads(text_by_key)):
-        return True
+    for data in _json_payloads(text_by_key):
+        if _is_novelai_comment(data):
+            return True
+        # NovelAI V5 导出形状：JSON 内的 Software/Source 值指名 NovelAI
+        head = (str(data.get('Software') or '') + str(data.get('Source') or '')).lower()
+        if 'novelai' in head:
+            return True
     # NovelAI 官方导出的键集指纹：Title+Software 必有，且带 Source/Comment/
     # Generation time 之一。Civitai 等第三方也写 Title/Software/Description，
     # 但没有后三个键，不能仅凭 Title+Software 判 NovelAI。
@@ -142,10 +168,15 @@ def _comfyui_structural(text_by_key: dict[str, str]) -> bool:
     for key in ('Software', 'Source'):
         if 'comfyui' in str(text_by_key.get(key, '')).lower():
             return True
-    return any(
-        _is_comfy_node_payload(data) or _is_comfy_graph_payload(data)
-        for data in _json_payloads(text_by_key)
-    )
+    for data in _json_payloads(text_by_key):
+        if _is_comfy_node_payload(data) or _is_comfy_graph_payload(data):
+            return True
+    # SwarmUI 等前端把 ComfyUI 图塞在 EXIF UserComment（'Workflow:{...}'，前面
+    # 是 TIFF 二进制）——抠出来做同样的图结构校验
+    for data in _embedded_workflow_payloads(text_by_key):
+        if _is_comfy_node_payload(data) or _is_comfy_graph_payload(data):
+            return True
+    return False
 
 
 def _a1111_structural(text_by_key: dict[str, str]) -> bool:
@@ -375,7 +406,9 @@ def _decode_stego_bits(img) -> tuple[str, str] | None:
     printable = sum(ch.isprintable() or ch in '\r\n\t' for ch in text)
     if printable / max(1, len(text)) < 0.9:
         return 'suspected', ''
-    return 'verified', text[:2000]
+    # 保留足够长的载荷做结构判定：截断会切断 JSON，V5 导出（Software/Source
+    # 在尾部）会因此验不出来源；展示路径另行截断到 500。
+    return 'verified', text[:20000]
 
 
 def _check_alpha_stego(path: Path, meta: ImageMetadata) -> None:

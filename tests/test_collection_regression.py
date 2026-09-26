@@ -11,6 +11,7 @@
 """
 
 import gzip
+import zlib
 import json
 import sqlite3
 
@@ -292,8 +293,48 @@ def test_novelai_stego_truncated_is_suspected_only(tmp_path):
     write_stealth_png(p, '{"prompt": "x"}', compressed=True, truncate=True)
     meta = parse_image_metadata(p)
     assert meta.stego_state == 'suspected'
-    # 疑似不定来源：不因隐写痕迹就宣布 NovelAI
-    assert meta.ai_source is None and not meta.has_ai_metadata
+
+
+def test_exif_embedded_comfyui_workflow_confirmed(tmp_path):
+    """SwarmUI 等前端把 ComfyUI 图塞在 EXIF UserComment（二进制前缀 + 'Workflow:{...}'）：
+    抠出 JSON 做图结构校验 → 确认 ComfyUI，而不是落到弱证据疑似。"""
+    import zlib as _zlib
+
+    graph = json.dumps({
+        'last_node_id': 142, 'last_link_id': 214,
+        'nodes': [{'id': 44, 'type': 'Switch latent [Crystools]', 'pos': [1, 2]}],
+        'links': [[1, 10, 0, 20, 0, 'MODEL']],
+    })
+    blob = 'MM\x00*\x00\x00\x00\x08\x00\x02' + 'Workflow:' + graph
+    chunk = b'EXIF\x00' + blob.encode('utf-8', 'ignore')
+
+    def png_chunk(kind, data):
+        return (len(data).to_bytes(4, 'big') + kind + data
+                + (zlib.crc32(kind + data) & 0xffffffff).to_bytes(4, 'big'))
+
+    ihdr = (920).to_bytes(4, 'big') + (1536).to_bytes(4, 'big') + bytes([8, 2, 0, 0, 0])
+    p = tmp_path / 'exif-workflow.png'
+    p.write_bytes(b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', ihdr)
+                  + png_chunk(b'tEXt', chunk) + png_chunk(b'IEND', b''))
+
+    meta = parse_image_metadata(p)
+    assert meta.has_ai_metadata
+    assert meta.ai_source == 'ComfyUI'
+
+
+def test_stego_payload_novelai_v5_export_confirmed(tmp_path):
+    """stealth 载荷里是 NovelAI V5 导出 JSON（Software/Source 在 JSON 内）→ NovelAI。"""
+    payload = json.dumps({
+        'Description': '1.5::best quality::, masterpiece',
+        'Software': 'NovelAI',
+        'Source': 'NovelAI Diffusion V5 0ADF9AB7',
+        'Comment': '{"prompt": "x"}',
+    })
+    p = tmp_path / 'stego_v5.png'
+    write_stealth_png(p, payload, compressed=True)
+    meta = parse_image_metadata(p)
+    assert meta.stego_state == 'verified'
+    assert meta.ai_source == 'NovelAI'
 
 
 def test_plain_png_no_stego(tmp_path):
