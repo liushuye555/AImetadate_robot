@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 import gzip
 import json
+import re
 import struct
 import zlib
 
@@ -26,15 +28,15 @@ class ImageMetadata:
     stego_excerpt: str = ''
 
 
-# 来源判定分级：
-# - strong：来源专有的结构/签名，命中即可确认（ucPreset 是 NovelAI 软件专有键，
-#   class_type/ksampler 是 ComfyUI 工作流专有）；
-# - weak：通用参数词（steps/scale 同样见于 A1111/WebUI 参数块），单独命中
-#   只给"疑似"（ai_source 前缀 suspect:），不直接定来源——旧规则里
-#   NovelAI 排在 A1111 之前，纯 WebUI 参数图曾被误标为 NovelAI。
+# 来源判定分两级：
+# - 结构判定（classify_structural）：三种主流格式的专有结构，键/值位置裁决，
+#   不扫提示词正文——NovelAI 是 Software/Source 值 + Comment 的 NAI 专有 JSON
+#   （ucPreset/v4_prompt/uc）+ 导出键集；ComfyUI 是 prompt/workflow 的
+#   class_type+inputs 节点结构；A1111/WebUI 是 parameters 参数块形状。
+# - 文本标记（classify_ai_source）：结构不中时的兜底。强标记只保留没有结构
+#   解析的来源；'novelai' 等不再是全文子串标记——提示词里提到工具名不构成
+#   来源证据。弱标记只给"疑似"（suspect: 前缀），永不直接定来源。
 AI_MARKERS_STRONG = {
-    'ComfyUI': ['comfyui', 'class_type', 'ksampler'],
-    'NovelAI': ['novelai', 'ucpreset'],
     'A1111': ['negative prompt'],
     'Civitai': ['civitai'],
     'DALL-E/OpenAI': ['dall-e', 'dalle', 'openai'],
@@ -42,7 +44,8 @@ AI_MARKERS_STRONG = {
     'Firefly': ['firefly'],
 }
 AI_MARKERS_WEAK = {
-    'NovelAI': ['steps', 'scale'],
+    # JSON 键形态（带引号），裸子串会把 "Postprocess upscale by" 误判成 scale
+    'NovelAI': ['"steps"', '"scale"'],
     'ComfyUI': ['workflow'],
     'A1111': ['cfg scale', 'sampler:', 'steps:', 'seed:'],
 }
@@ -65,6 +68,119 @@ def classify_ai_source(text: str) -> tuple[bool, str | None]:
         if any(marker.lower() in lower for marker in markers):
             return True, SUSPECT_PREFIX + source
     return False, None
+
+
+# ---------- 结构判定：三种主流格式的专有结构，键/值位置裁决 ----------
+
+def _is_comfy_node_payload(data: Any) -> bool:
+    """ComfyUI 节点结构：标准 API prompt 是 {节点id: {class_type, inputs}}，
+    个别前端也直接写单个节点对象——两种都按结构认。"""
+    if not isinstance(data, dict):
+        return False
+    if (isinstance(data.get('class_type'), str) and data['class_type'].strip()
+            and isinstance(data.get('inputs'), dict)):
+        return True
+    return any(
+        isinstance(node, dict)
+        and isinstance(node.get('class_type'), str)
+        and bool(node['class_type'].strip())
+        and isinstance(node.get('inputs'), dict)
+        for node in data.values()
+    )
+
+
+def _is_comfy_graph_payload(data: Any) -> bool:
+    """ComfyUI UI 导出的 workflow 图：nodes/links 形状。"""
+    if not isinstance(data, dict) or not isinstance(data.get('links'), list):
+        return False
+    nodes = data.get('nodes')
+    if isinstance(nodes, list):
+        return any(isinstance(node, dict) and isinstance(node.get('type'), str) for node in nodes)
+    return isinstance(nodes, dict) and _is_comfy_node_payload(nodes)
+
+
+def _is_novelai_comment(data: Any) -> bool:
+    """NovelAI 的 Comment JSON：ucPreset/v4_* 专有键，或 uc+steps 的 NAI 形状。"""
+    if not isinstance(data, dict):
+        return False
+    if data.keys() & {'ucPreset', 'v4_prompt', 'v4_negative_prompt'}:
+        return True
+    return 'uc' in data and 'steps' in data
+
+
+def _is_a1111_block(text: str) -> bool:
+    """A1111/WebUI 参数块：提示词行 + （可选 Negative prompt 行 +）Steps 设置行。"""
+    return bool(re.search(r'\bSteps: \d', text))
+
+
+def _json_payloads(text_by_key: dict[str, str]):
+    for value in text_by_key.values():
+        try:
+            data = json.loads(value)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            yield data
+
+
+def _novelai_structural(text_by_key: dict[str, str]) -> bool:
+    for key in ('Software', 'Source'):
+        if 'novelai' in str(text_by_key.get(key, '')).lower():
+            return True
+    if any(_is_novelai_comment(data) for data in _json_payloads(text_by_key)):
+        return True
+    # NovelAI 官方导出的键集指纹：Title+Software 必有，且带 Source/Comment/
+    # Generation time 之一。Civitai 等第三方也写 Title/Software/Description，
+    # 但没有后三个键，不能仅凭 Title+Software 判 NovelAI。
+    keys = {k.lower() for k in text_by_key}
+    if {'software', 'title'} <= keys and keys & {'source', 'comment', 'generation time', 'generation_time'}:
+        return True
+    return False
+
+
+def _comfyui_structural(text_by_key: dict[str, str]) -> bool:
+    for key in ('Software', 'Source'):
+        if 'comfyui' in str(text_by_key.get(key, '')).lower():
+            return True
+    return any(
+        _is_comfy_node_payload(data) or _is_comfy_graph_payload(data)
+        for data in _json_payloads(text_by_key)
+    )
+
+
+def _a1111_structural(text_by_key: dict[str, str]) -> bool:
+    return _is_a1111_block(str(text_by_key.get('parameters') or ''))
+
+
+def classify_structural(meta: 'ImageMetadata') -> tuple[bool, str] | None:
+    """按键/值结构判来源；返回 None 表示结构证据不足，交回文本标记兜底。"""
+    if _novelai_structural(meta.text_by_key):
+        return True, 'NovelAI'
+    if _comfyui_structural(meta.text_by_key):
+        return True, 'ComfyUI'
+    if _a1111_structural(meta.text_by_key):
+        return True, 'A1111'
+    return None
+
+
+def classify_payload_source(text: str) -> tuple[bool, str | None]:
+    """stealth 载荷的来源判定：容器不是证据，载荷文本按同样的结构规则算。
+
+    结构不中时不走强子串标记（载荷是参数容器，正文提到工具名不是来源证据），
+    只落到弱证据疑似或未知。
+    """
+    text_by_key = {'payload': text}
+    if _novelai_structural(text_by_key):
+        return True, 'NovelAI'
+    if _comfyui_structural(text_by_key):
+        return True, 'ComfyUI'
+    if _is_a1111_block(text):
+        return True, 'A1111'
+    lower = text.lower()
+    for source, markers in AI_MARKERS_WEAK.items():
+        if any(marker.lower() in lower for marker in markers):
+            return True, SUSPECT_PREFIX + source
+    return True, None  # 载荷可解出 = 存在生成元数据；工具来源未知
 
 
 def parse_image_metadata(path: str | Path) -> ImageMetadata:
@@ -118,7 +234,7 @@ def _parse_png(path: Path) -> ImageMetadata:
             elif kind == b'IEND':
                 break
     meta.full_text = '\n'.join(texts)
-    _classify_ai(meta, meta.full_text)
+    _classify_ai(meta)
     _check_alpha_stego(path, meta)
     return meta
 
@@ -149,7 +265,7 @@ def _parse_jpeg(path: Path) -> ImageMetadata:
             elif marker in {b'\xc0', b'\xc1', b'\xc2', b'\xc3', b'\xc5', b'\xc6', b'\xc7', b'\xc9', b'\xca', b'\xcb', b'\xcd', b'\xce', b'\xcf'} and len(data) >= 5:
                 meta.height, meta.width = struct.unpack('>HH', data[1:5])
     meta.full_text = '\n'.join(texts)
-    _classify_ai(meta, meta.full_text)
+    _classify_ai(meta)
     return meta
 
 
@@ -172,7 +288,7 @@ def _parse_webp(path: Path) -> ImageMetadata:
             if kind in {b'EXIF', b'XMP '}:
                 _add_text(meta, texts, kind, data.decode('utf-8', 'ignore'))
     meta.full_text = '\n'.join(texts)
-    _classify_ai(meta, meta.full_text)
+    _classify_ai(meta)
     return meta
 
 
@@ -282,18 +398,22 @@ def _check_alpha_stego(path: Path, meta: ImageMetadata) -> None:
         # 隐写容器本身不是来源证据：载荷文本是什么格式，来源才按什么算。
         # 普通 A1111/WebUI 参数块不因此判成 NovelAI；载荷验证不出工具时
         # 保留未知（ai_source=None），只确认"存在生成元数据"。
-        payload_has_ai, payload_source = classify_ai_source(meta.stego_excerpt)
+        payload_has_ai, payload_source = classify_payload_source(meta.stego_excerpt)
         if not meta.has_ai_metadata:
-            meta.has_ai_metadata = True
-            meta.ai_source = payload_source or None
+            meta.has_ai_metadata, meta.ai_source = payload_has_ai, payload_source
         elif meta.ai_source and meta.ai_source.startswith(SUSPECT_PREFIX):
             # 已有文本元数据只给出"疑似"：载荷里有强证据才升级，否则维持疑似
             if payload_source and not payload_source.startswith(SUSPECT_PREFIX):
                 meta.ai_source = payload_source
 
 
-def _classify_ai(meta: ImageMetadata, text: str) -> None:
-    meta.has_ai_metadata, meta.ai_source = classify_ai_source(text)
+def _classify_ai(meta: ImageMetadata) -> None:
+    """来源判定：三种主流格式按键/值结构裁决，其余来源退回文本标记。"""
+    structural = classify_structural(meta)
+    if structural is not None:
+        meta.has_ai_metadata, meta.ai_source = structural
+        return
+    meta.has_ai_metadata, meta.ai_source = classify_ai_source(meta.full_text)
 
 
 def extract_prompt_signature(path: str | Path) -> str | None:

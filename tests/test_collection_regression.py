@@ -21,6 +21,7 @@ import qq_onebot_whitelist.collection as collection
 from qq_onebot_whitelist.config import AppConfig
 from qq_onebot_whitelist.image_meta import (
     classify_ai_source,
+    classify_payload_source,
     parse_image_metadata,
 )
 from qq_onebot_whitelist.store import Store
@@ -143,15 +144,17 @@ def test_same_image_in_different_messages_both_kept(tmp_path, monkeypatch):
     assert len(rows(store)) == 2  # 跨消息不误拦
 
 
-# ---------- 场景 4：NovelAI 专有键 → 强证据确认 ----------
+# ---------- 场景 4：NovelAI 专有键 → 结构证据确认 ----------
 
-def test_novelai_strong_marker_confirmed():
+def test_novelai_structural_comment_confirmed():
+    """NAI 专有 JSON（ucPreset）→ 结构确认 NovelAI；正文提到工具名不再是证据。"""
     text = json.dumps({'prompt': '1girl', 'ucPreset': 0, 'steps': 28})
-    has_ai, source = classify_ai_source(text)
+    has_ai, source = classify_payload_source(text)
     assert has_ai and source == 'NovelAI'
 
+    # 'novelai' 只是提示词/正文里的一个词：不构成来源证据
     has_ai2, source2 = classify_ai_source('NovelAI v3 生成')
-    assert has_ai2 and source2 == 'NovelAI'
+    assert not has_ai2 or (source2 and source2.startswith('suspect:'))
 
 
 # ---------- 场景 5：纯 WebUI 参数块 → 弱证据只给 suspect ----------
@@ -167,10 +170,14 @@ def test_webui_params_not_misidentified_as_novelai():
 
 
 def test_generic_params_only_give_suspect():
-    # 只有 steps/scale（无任何强证据）→ 疑似而非确认
-    text = 'some settings: steps 28, scale 5, guidance'
+    # 只有 steps/scale 的 JSON 键（无任何强证据）→ 疑似而非确认
+    text = '{"steps": 28, "scale": 5, "guidance": 7}'
     has_ai, source = classify_ai_source(text)
     assert has_ai and source == 'suspect:NovelAI'
+
+    # 裸文本 "upscale" 之类不再误触 NovelAI 弱标记
+    has_ai2, source2 = classify_ai_source('Postprocess upscale by: 1.5, upscaler: R-ESRGAN')
+    assert not has_ai2 and source2 is None
 
 
 def test_no_markers_not_ai():
@@ -181,10 +188,20 @@ def test_no_markers_not_ai():
 # ---------- 场景 6：ComfyUI 工作流有效/无效 ----------
 
 def test_comfyui_workflow_confirmed():
-    workflow = json.dumps({'class_type': 'KSampler',
-                           'inputs': {'seed': 1, 'steps': 20}})
-    has_ai, source = classify_ai_source(workflow)
+    """API 格式节点图（{id: {class_type, inputs}}）→ 结构确认 ComfyUI。"""
+    workflow = json.dumps({'3': {'class_type': 'KSampler',
+                                 'inputs': {'seed': 1, 'steps': 20}}})
+    has_ai, source = classify_payload_source(workflow)
     assert has_ai and source == 'ComfyUI'
+
+    # 单节点对象（个别前端直接写 {class_type, inputs}）也是 ComfyUI 结构
+    flat = json.dumps({'class_type': 'KSampler', 'inputs': {'seed': 1}})
+    has_ai2, source2 = classify_payload_source(flat)
+    assert has_ai2 and source2 == 'ComfyUI'
+
+    # 无关 JSON 不是 ComfyUI 证据
+    has_ai3, source3 = classify_payload_source('{"foo": "bar"}')
+    assert source3 is None  # 载荷可解但验不出工具 → 未知
 
 
 def test_comfyui_weak_wordflow_suspect():
@@ -234,13 +251,13 @@ def test_novelai_stego_verified(tmp_path):
 
 
 def test_novelai_stego_uncompressed_verified(tmp_path):
-    """未压缩 stealth 载荷可解出；但容器不是来源证据，只有弱证据 → 保持疑似。"""
+    """未压缩 stealth 载荷可解出；提示词+Steps 设置行是 A1111 参数块结构。"""
     p = tmp_path / 'stego_plain.png'
     write_stealth_png(p, '1girl\nSteps: 28, Sampler: Euler a', compressed=False)
     meta = parse_image_metadata(p)
     assert meta.stego_state == 'verified'
     assert meta.has_ai_metadata
-    assert meta.ai_source == 'suspect:NovelAI'
+    assert meta.ai_source == 'A1111'
 
 
 def test_novelai_stego_plain_a1111_parameters_not_labeled_novelai(tmp_path):
