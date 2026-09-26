@@ -558,8 +558,16 @@ def sync_image_files(project_dir: str | Path, *, ttl_hours: int = 24) -> dict[st
         print(f'vision recheck failed: {type(exc).__name__}: {exc}')
     counts = build_view(project_dir)
     resource_counts = write_resource_pages(project_dir / 'data' / 'view', store)
+    # 画风选择器等外部工具的稳定导入目录：随视图同步自动刷新
+    style_stats: dict[str, int] = {}
+    try:
+        from .export_style_links import build_links
+        style_stats = build_links(Path(project_dir) / 'data' / 'bot.db',
+                                  project_dir / 'data' / 'style-picker-import')
+    except Exception as exc:
+        print(f'style links refresh failed: {type(exc).__name__}: {exc}')
     counts.update(vision_stats)
-    return {'archive_budget_removed': archive_budget_removed, 'stale_tmp_removed': stale_tmp_removed, 'event_images_merged': event_images_merged, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, **counts, **resource_counts}
+    return {'archive_budget_removed': archive_budget_removed, 'stale_tmp_removed': stale_tmp_removed, 'event_images_merged': event_images_merged, 'image_duplicates_removed': image_duplicates_removed, 'missing_cleared': missing_cleared, 'candidates_removed': candidates_removed, 'obfuscation_reclassified': obfuscation_reclassified, 'obfuscation_restored': obfuscation_restored, 'historical_03_reclassified': historical_03, 'prompt_keys_backfilled': prompt_keys_backfilled, 'prompt_judge_reclassified': prompt_judge_reclassified, 'params_judge_reclassified': params_judge_reclassified, 'empty_candidate_dirs': empty_candidate_dirs, 'style_links_new': style_stats.get('linked', 0), 'style_links_stale_removed': style_stats.get('stale_removed', 0), **counts, **resource_counts}
 
 
 def main() -> int:
