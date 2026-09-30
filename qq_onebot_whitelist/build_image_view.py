@@ -1596,7 +1596,6 @@ def write_all_gallery(
     else:
         shutil.rmtree(all_dir / 'groups', ignore_errors=True)
     chunk_count = _write_gallery_chunk_sets(all_dir, gallery_items)
-    _write_item_info(all_dir / 'info', gallery_items, all_dir, '', user_names, project_dir)
     build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
     _TOKENS_SEEN.add(build_token)
     user_counts: dict[str, int] = {}
@@ -1623,6 +1622,22 @@ def write_all_gallery(
                       view_base_url=_view_server_base(project_dir)),
         encoding='utf-8',
     )
+    # info 面板数据：各分组页的 info/<id>.js 就是同一源文件、同一主落位类目的产物，
+    # 直接复制（extract_caption 约 145ms/张，全量重解析要近一小时）；缺失的才现算。
+    info_dir = all_dir / 'info'
+    info_dir.mkdir(parents=True, exist_ok=True)
+    for item in gallery_items:
+        info_id = str(item.get('id') or '')
+        dst = info_dir / f'{info_id}.js'
+        if not info_id or dst.exists():
+            continue
+        src_info = view / str(item.get('cat') or '') / 'info' / f'{info_id}.js'
+        if src_info.exists():
+            try:
+                shutil.copyfile(src_info, dst)
+            except OSError:
+                pass
+    _write_item_info(info_dir, gallery_items, all_dir, '', user_names, project_dir)
     return len(gallery_items)
 
 
