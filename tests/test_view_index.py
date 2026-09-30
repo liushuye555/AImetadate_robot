@@ -735,3 +735,147 @@ def test_build_view_masks_sibling_rows_and_merged_context(tmp_path):
     assert any("_还原" in n for n in names03), names03  # merged 行经 sha 兜底落位
     chunk03 = "\n".join(p.read_text(encoding="utf-8") for p in cat03.rglob("chunk-*.js"))
     assert '"masked":true' in chunk03
+
+
+def test_build_view_creates_all_group_gallery_with_cat_filter(tmp_path):
+    """跨分组合并图库 00_全部：主落位条目汇成一页，默认不限分组，可按分组筛选与导出。"""
+    import json as json_lib
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        sha256 TEXT, ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img1 = tmp_path / "img1.png"
+    img1.write_bytes(b"x" * 10)
+    img2 = tmp_path / "img2.png"
+    img2.write_bytes(b"y" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, ai_source, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '100', '2026-09-24 10:00:00', 'PNG', 64, 64, 'ComfyUI', 'ai_metadata', ?, 'beach shot')",
+        (str(img1),))
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, retention_reason, kept_path, text_excerpt) "
+        "VALUES ('group:1', '200', '2026-08-01 10:00:00', 'PNG', 64, 64, 'positive_feedback', ?, 'sunset')",
+        (str(img2),))
+    conn.commit()
+    conn.close()
+
+    counts = build_view(tmp_path)
+
+    all_dir = tmp_path / "data" / "view" / ALL_GALLERY_DIR
+    page = (all_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="catSel"' in page
+    assert "不限分组" in page
+    assert '01_AI元数据_ComfyUI（1张）' in page
+    # 合并页导出默认不限类目，选中分组时按该值前缀过滤
+    assert 'const CATEGORY=""' in page
+    # chunk 条目带分组字段，图片/缩略图引用各分组目录
+    chunks = "\n".join(p.read_text(encoding="utf-8") for p in all_dir.rglob("chunk-*.js"))
+    assert '"cat":"01_AI元数据_ComfyUI"' in chunks and '"cat":"02_群友好评"' in chunks
+    assert '"href":"../01_AI%E5%85%83%E6%95%B0%E6%8D%AE_ComfyUI/' in chunks
+    assert '"href":"../02_%E7%BE%A4%E5%8F%8B%E5%A5%BD%E8%AF%84/' in chunks
+    assert '"uid":"100"' in chunks and '"kw":"beach shot"' in chunks
+    assert '"batch":""' in chunks
+    assert counts[ALL_GALLERY_DIR] == 2
+    # info 面板按条目自带分组标注
+    info = "\n".join(p.read_text(encoding="utf-8") for p in (all_dir / "info").glob("*.js"))
+    assert '"c":"02_群友好评"' in info
+    # 总览入口：00_全部 卡片 + 图片总数不重复计数
+    index = (tmp_path / "data" / "view" / "index.html").read_text(encoding="utf-8")
+    assert "00_%E5%85%A8%E9%83%A8/" in index
+    assert "图片 <b>2</b> 张" in index
+    assert "分类 <b>2</b> 个" in index
+    state = json_lib.loads((tmp_path / "data" / "view-build-state.json").read_text(encoding="utf-8"))
+    assert state["all_gallery"]["count"] == 2
+
+    # 签名未变时跳过重建，页面与 chunk 保持完整
+    counts2 = build_view(tmp_path)
+    assert counts2[ALL_GALLERY_DIR] == 2
+    assert (all_dir / "chunks" / "chunk-0001.js").exists()
+
+
+def test_build_view_all_group_gallery_skips_context_duplicates(tmp_path):
+    """合并图库只收主落位：交叉显示副本（context_reason）不重复计入。"""
+    import sqlite3
+
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+
+    data = tmp_path / "data"
+    data.mkdir(parents=True)
+    conn = sqlite3.connect(data / "bot.db")
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT, seen_at TEXT,
+        format TEXT, width INTEGER, height INTEGER, size INTEGER, has_ai_metadata INTEGER,
+        sha256 TEXT, ai_source TEXT, retention_reason TEXT, kept_path TEXT, restored_path TEXT,
+        deobfuscated INTEGER DEFAULT 0, bound_prompt TEXT, prompt_key TEXT,
+        context_reason TEXT, text_excerpt TEXT, raw_json TEXT)""")
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, user_id TEXT,
+        text TEXT, links_json TEXT, raw_json TEXT, message_key TEXT)""")
+    conn.execute("""CREATE TABLE ai_context_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, scope TEXT,
+        start_message_id INTEGER, end_message_id INTEGER, model TEXT, summary TEXT, raw_json TEXT)""")
+    img = tmp_path / "img.png"
+    img.write_bytes(b"x" * 10)
+    conn.execute(
+        "INSERT INTO images (scope, user_id, seen_at, format, width, height, has_ai_metadata,"
+        " ai_source, retention_reason, kept_path, restored_path, deobfuscated,"
+        " context_reason, text_excerpt) "
+        "VALUES ('group:1', 'u100', '2026-09-25 10:00:00', 'PNG', 64, 64, 1, 'ComfyUI',"
+        " 'xiaofanqie_obfuscated', ?, ?, 1, 'ai_metadata', 'workflow json excerpt')",
+        (str(img), str(img)),
+    )
+    conn.commit()
+    conn.close()
+
+    counts = build_view(tmp_path)
+
+    # 05 主落位 + 01 交叉显示各一份，但合并页只有一条（cat=05 主落位）
+    assert counts[ALL_GALLERY_DIR] == 1
+    chunks = "\n".join(p.read_text(encoding="utf-8")
+                       for p in (tmp_path / "data" / "view" / ALL_GALLERY_DIR).rglob("chunk-*.js"))
+    assert '"cat":"05_小番茄混淆"' in chunks
+    assert '"cat":"01_' not in chunks
+
+
+def test_stale_view_counts_fills_all_gallery(tmp_path):
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, stale_view_counts
+
+    view = tmp_path / "view"
+    (view / "02_群友好评").mkdir(parents=True)
+    (view / "02_群友好评" / "a.png").write_bytes(b"x")
+    (view / ALL_GALLERY_DIR).mkdir(parents=True)
+    (view / ALL_GALLERY_DIR / "chunks").mkdir()
+    (view / ALL_GALLERY_DIR / "chunks" / "chunk-0001.js").write_text("[]", encoding="utf-8")
+
+    counts = stale_view_counts(view)
+
+    assert counts == {"02_群友好评": 1, ALL_GALLERY_DIR: 1}
+
+
+def test_category_gallery_page_has_no_cat_filter(tmp_path):
+    """单分组页保持原样：没有分组下拉，搜索串不受影响。"""
+    from qq_onebot_whitelist.build_image_view import write_category_gallery
+
+    category = tmp_path / "01_AI元数据_ComfyUI"
+    category.mkdir()
+    (category / "#1_64x64_ai_metadata.png").write_bytes(b"x")
+
+    write_category_gallery(category)
+
+    page = (category / "index.html").read_text(encoding="utf-8")
+    assert 'id="catSel"' not in page
+    assert "__CAT_TOOLBAR__" not in page

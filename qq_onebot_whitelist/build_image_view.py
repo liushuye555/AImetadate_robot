@@ -25,6 +25,9 @@ CATEGORY_NAMES = {
     'xiaofanqie_compressed': '05_小番茄混淆_压缩',
 }
 
+# 跨分组合并图库目录：所有分组的主落位条目汇成一页，默认"不限分组"，页内可再按分组筛选
+ALL_GALLERY_DIR = '00_全部'
+
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
 
 # 来源 → 目录显示名（存储值保持英文稳定，仅展示层换名）
@@ -43,6 +46,9 @@ def stale_view_counts(view: Path) -> dict[str, int]:
                 n = sum(1 for f in cat.rglob('*') if f.is_file() and f.suffix.lower() in image_exts)
                 if n:
                     counts[cat.name] = n
+        # 合并图库目录不落图片文件：条目数用其余目录之和兜底
+        if (view / ALL_GALLERY_DIR).is_dir():
+            counts[ALL_GALLERY_DIR] = sum(v for k, v in counts.items() if k != ALL_GALLERY_DIR)
     return counts
 
 
@@ -110,8 +116,9 @@ def member_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
     return names
 
 
-CATEGORY_ICONS = {'01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
+CATEGORY_ICONS = {'00': '🌐', '01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
 CATEGORY_DESC = {
+    '00': '全部图片合并浏览；筛选与导出默认不限分组，可再按分组收窄',
     '01': '自带 ComfyUI/Stable Diffusion WebUI/NovelAI 等生成元数据，可信度最高',
     '02': '被引用、好评或求提示词后晋升',
     '03': '图片与提示词/参数成对出现',
@@ -201,10 +208,11 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
     categories = sorted([p for p in view.iterdir() if p.is_dir()], key=lambda p: p.name) if view.exists() else []
     link_total = int(counts.get('resource_links') or 0)
     file_total = int(counts.get('resource_files') or 0)
-    image_total = sum(int(v) for key, v in counts.items() if key not in ('resource_links', 'resource_files'))
+    image_total = sum(int(v) for key, v in counts.items()
+                      if key not in ('resource_links', 'resource_files', ALL_GALLERY_DIR))
     chips = (
         f'<span class="chip">图片 <b>{image_total}</b> 张</span>'
-        f'<span class="chip">分类 <b>{len(categories)}</b> 个</span>'
+        f'<span class="chip">分类 <b>{len(categories) - (1 if ALL_GALLERY_DIR in {c.name for c in categories} else 0)}</b> 个</span>'
     )
     if link_total:
         chips += f'<span class="chip">链接 <b>{link_total}</b> 条</span>'
@@ -357,9 +365,11 @@ def _write_item_info(info_dir: Path, items: list[dict[str, object]], cat_dir: Pa
         except OSError:
             size_b = 0
         uid = str(item.get('uid') or '')
+        # 合并图库条目自带分组（cat），单分组页回落到页面级 category_id
+        info_cat = str(item.get('cat') or category_id)
         source = ''
-        if category_id.startswith('01_AI元数据_'):
-            source = category_id[len('01_AI元数据_'):]
+        if info_cat.startswith('01_AI元数据_'):
+            source = info_cat[len('01_AI元数据_'):]
         try:
             prompt = extract_caption(src) if src.exists() else ''
         except Exception:
@@ -368,7 +378,7 @@ def _write_item_info(info_dir: Path, items: list[dict[str, object]], cat_dir: Pa
             'id': info_id, 'f': href.rsplit('/', 1)[-1], 'u': uid,
             'n': (user_names or {}).get(uid, ''), 't': str(item.get('ts') or ''),
             'w': int(item.get('w') or 0), 'h': int(item.get('h') or 0), 'b': size_b,
-            'c': category_id, 's': source,
+            'c': info_cat, 's': source,
             'p': prompt[:4000], 'text': str(item.get('text') or '')[:2000],
         }
         info_file.write_text(f'window.__galleryInfoPayload={_script_json(payload)};\n',
@@ -438,6 +448,12 @@ def _gallery_batch_key(name: str) -> str:
     return match.group(1).lower() if match else ''
 
 
+def _image_name_wh(p: Path) -> tuple[int, int]:
+    """从文件名里的 _宽x高_ 段解析尺寸；缺失返回 (0, 0)。"""
+    match = re.search(r'_(\d+)x(\d+)_', p.name)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
 def _dhash(path: Path) -> int:
     """64 位感知哈希（dhash）：对视觉相同/高度相似的图给出相近值。"""
     try:
@@ -484,6 +500,7 @@ def _assign_dup_groups(entries: list[tuple[str, int, tuple[int, int], str]]) -> 
         hit = None
         if md5:
             for rep in bucket:
+                # md5 是精确键：即便 rep 的 dhash 退化为 0（纯色图）也应命中
                 if rep[1] and rep[1] == md5:
                     hit = rep
                     break
@@ -572,6 +589,7 @@ def _gallery_page(
     context_mode: bool = False,
     background: str = '',
     user_options: str = '',
+    cat_options: str = '',
     month_options: str = '',
     build_token: str = '',
     category_id: str = '',
@@ -595,9 +613,9 @@ h1{font-size:18px;margin:0 0 4px}.muted{color:var(--muted);font-size:13px}
 #jumpTo{width:74px;padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text)}
 #topBtn,#loadMore{padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--accent-soft);cursor:pointer}
 #loadMore:disabled{opacity:.55;cursor:default}
-select#sortSel,select#userSel,select#sizeSel,select#resSel,select#monthSel,select#thumbSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
-select#sortSel:focus,select#userSel:focus,select#sizeSel:focus,select#resSel:focus,select#monthSel:focus,select#thumbSel:focus{border-color:var(--accent)}
-select#sortSel option,select#userSel option,select#sizeSel option,select#resSel option,select#monthSel option,select#thumbSel option{background:var(--panel);color:var(--text)}
+select#sortSel,select#userSel,select#catSel,select#sizeSel,select#resSel,select#monthSel,select#thumbSel{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;cursor:pointer;outline:0}
+select#sortSel:focus,select#userSel:focus,select#catSel:focus,select#sizeSel:focus,select#resSel:focus,select#monthSel:focus,select#thumbSel:focus{border-color:var(--accent)}
+select#sortSel option,select#userSel option,select#catSel option,select#sizeSel option,select#resSel option,select#monthSel option,select#thumbSel option{background:var(--panel);color:var(--text)}
 select#userSel{max-width:300px}
 #searchBox{padding:4px 10px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);font-size:13px;width:170px;outline:0}
 #searchBox:focus{border-color:var(--accent)}
@@ -670,6 +688,7 @@ __THEME_TOGGLE__
     <option value="chunks-res">分辨率</option>
   </select>
 __USER_TOOLBAR__
+__CAT_TOOLBAR__
   <label class="muted" for="sizeSel">尺寸</label>
   <select id="sizeSel">
     <option value="">全部</option>
@@ -740,9 +759,10 @@ __USER_TOOLBAR__
   const sortSel=document.getElementById('sortSel');
   if(sortSel)sortSel.value=chunkBase;
   const userSel=document.getElementById('userSel');
+  const catSel=document.getElementById('catSel');
   const sizeSel=document.getElementById('sizeSel'),resSel=document.getElementById('resSel'),monthSel=document.getElementById('monthSel');
   const searchBox=document.getElementById('searchBox'),dupBox=document.getElementById('dupOnly'),thumbSel=document.getElementById('thumbSel');
-  let userFilter='',sizeFilter='',minRes=0,monthFilter='',dupOnly=false,searchQuery='';
+  let userFilter='',catFilter='',sizeFilter='',minRes=0,monthFilter='',dupOnly=false,searchQuery='';
 
   function sizeClass(item){
     const w=Number(item.w||0),h=Number(item.h||0);
@@ -752,18 +772,19 @@ __USER_TOOLBAR__
   function matchesFilters(item){
     // 所有筛选叠加命中才显示；命中的才建卡，灯箱切换/序号跳转都只在结果集内
     if(userFilter&&String(item.uid||'')!==userFilter)return false;
+    if(catFilter&&String(item.cat||'')!==catFilter)return false;
     if(sizeFilter&&sizeClass(item)!==sizeFilter)return false;
     if(minRes&&Math.min(Number(item.w||0),Number(item.h||0))<minRes)return false;
     if(monthFilter&&String(item.ts||'').slice(0,7)!==monthFilter)return false;
     if(dupOnly&&!((item.dup&&Number(item.dup_total||0)>1)||Number(item.batch_total||0)>1))return false;
     if(searchQuery){
-      let hay=String(item.kw||'')+' '+String(item.href||'')+' '+String(item.id||'')+' '+String(item.uid||'');
+      let hay=String(item.kw||'')+' '+String(item.href||'')+' '+String(item.cat||'')+' '+String(item.id||'')+' '+String(item.uid||'');
       if(contextMode)hay+=' '+String(item.text||'');
       if(hay.toLowerCase().indexOf(searchQuery)<0)return false;
     }
     return true;
   }
-  const filtersActive=()=>Boolean(userFilter||sizeFilter||minRes||monthFilter||dupOnly||searchQuery);
+  const filtersActive=()=>Boolean(userFilter||catFilter||sizeFilter||minRes||monthFilter||dupOnly||searchQuery);
   function resetGrid(){
     cells.length=0;itemData.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
     groupNav=null;groupToken++;closeGroupLayer();hintDefault();
@@ -786,6 +807,7 @@ __USER_TOOLBAR__
     const known=[...groups.values()].filter(g=>g.total>1||g.cells.length>1).length;
     const parts=[];
     if(userFilter&&userSel)parts.push('用户 '+userSel.options[userSel.selectedIndex].text);
+    if(catFilter&&catSel)parts.push('分组 '+catSel.options[catSel.selectedIndex].text);
     if(monthFilter)parts.push('日期 '+monthFilter);
     if(sizeFilter)parts.push(({landscape:'横图',portrait:'竖图',square:'方图'})[sizeFilter]||sizeFilter);
     if(minRes)parts.push('短边≥'+minRes);
@@ -1037,6 +1059,7 @@ __USER_TOOLBAR__
     resetGrid();
   });
   if(userSel)userSel.addEventListener('change',()=>{userFilter=userSel.value;resetGrid();});
+  if(catSel)catSel.addEventListener('change',()=>{catFilter=catSel.value;resetGrid();});
   if(sizeSel)sizeSel.addEventListener('change',()=>{sizeFilter=sizeSel.value;resetGrid();});
   if(resSel)resSel.addEventListener('change',()=>{minRes=Number(resSel.value||0);resetGrid();});
   if(monthSel)monthSel.addEventListener('change',()=>{monthFilter=monthSel.value;resetGrid();});
@@ -1068,6 +1091,7 @@ __USER_TOOLBAR__
   function applyInfoFilter(kind,value){
     if(!value)return;
     if(kind==='user'&&userSel){userSel.value=value;userFilter=value;}
+    else if(kind==='cat'&&catSel){catSel.value=value;catFilter=value;}
     else if(kind==='month'&&monthSel){monthSel.value=value;monthFilter=value;}
     else if(kind==='size'&&sizeSel){sizeSel.value=value;sizeFilter=value;}
     else return;
@@ -1082,7 +1106,7 @@ __USER_TOOLBAR__
     if(info.w&&info.h)rows.push('<div class="kv"><span class="k">尺寸</span><span class="v"><span class="chip" data-kind="size" data-value="'+sizeClass(info)+'">'+escHtml(info.w)+'×'+escHtml(info.h)+'</span></span></div>');
     if(info.b)rows.push('<div class="kv"><span class="k">大小</span><span class="v">'+fmtBytes(info.b)+'</span></div>');
     if(info.s)rows.push('<div class="kv"><span class="k">来源</span><span class="v">'+escHtml(info.s)+'</span></div>');
-    if(info.c)rows.push('<div class="kv"><span class="k">类目</span><span class="v">'+escHtml(info.c)+'</span></div>');
+    if(info.c)rows.push('<div class="kv"><span class="k">类目</span><span class="v">'+(catSel?'<span class="chip" data-kind="cat" data-value="'+escHtml(info.c)+'">'+escHtml(info.c)+'</span>':escHtml(info.c))+'</span></div>');
     let html=rows.join('');
     if(info.p)html+='<div class="info-prompt-head">提示词<button id="copyPrompt" type="button">复制</button></div><pre id="infoPrompt">'+escHtml(info.p)+'</pre>';
     if(info.text)html+='<div class="info-prompt-head">上下文</div><pre>'+escHtml(info.text)+'</pre>';
@@ -1138,6 +1162,7 @@ __USER_TOOLBAR__
     function filterSummary(){
       const s=[];
       if(CATEGORY)s.push('类目 '+CATEGORY);
+      if(catFilter&&catSel)s.push('分组 '+catSel.options[catSel.selectedIndex].text);
       if(userFilter&&userSel)s.push('用户 '+userSel.options[userSel.selectedIndex].text);
       if(sizeFilter&&sizeSel)s.push('方向 '+sizeSel.options[sizeSel.selectedIndex].text);
       if(minRes)s.push('短边≥'+minRes);
@@ -1149,6 +1174,7 @@ __USER_TOOLBAR__
     function exportParams(out,dry){
       const p={token:PAGE_TOKEN,dry_run:!!dry,link:exportLink.checked,no_captions:exportNoCap.checked};
       if(CATEGORY)p.category=[CATEGORY];
+      if(catFilter)p.category=[catFilter];
       if(userFilter)p.user=[userFilter];
       if(sizeFilter)p.orientation=sizeFilter;
       if(minRes)p.min_side=minRes;
@@ -1214,6 +1240,10 @@ __THEME_TOGGLE_JS__
         '  <label class="muted" for="userSel">用户</label>\n'
         f'  <select id="userSel">{user_options}</select>\n'
     ) if user_options else ''
+    cat_toolbar = (
+        '  <label class="muted" for="catSel">分组</label>\n'
+        f'  <select id="catSel">{cat_options}</select>\n'
+    ) if cat_options else ''
     replacements = {
         '__TITLE__': html.escape(title),
         '__COUNT__': str(int(count)),
@@ -1226,6 +1256,7 @@ __THEME_TOGGLE_JS__
         '__THEME_TOGGLE__': THEME_TOGGLE_HTML,
         '__THEME_TOGGLE_JS__': THEME_TOGGLE_JS,
         '__USER_TOOLBAR__': user_toolbar,
+        '__CAT_TOOLBAR__': cat_toolbar,
         '__MONTH_OPTIONS__': month_options,
         '__BUILD_TOKEN__': build_token,
         '__CATEGORY_JSON__': json.dumps(category_id, ensure_ascii=False),
@@ -1268,9 +1299,7 @@ def write_category_gallery(
         except (ValueError, IndexError):
             return 0
 
-    def image_wh(p: Path) -> tuple[int, int]:
-        match = re.search(r'_(\d+)x(\d+)_', p.name)
-        return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+    image_wh = _image_name_wh
 
     images = sorted(
         (p for p in cat_dir.rglob('*') if p.is_file() and p.suffix.lower() in image_exts),
@@ -1454,6 +1483,149 @@ def _write_context_gallery(
     )
 
 
+def _cat_options_html(cat_counts: dict[str, int]) -> str:
+    """合并图库的分组筛选下拉：值为数据库类目名（导出按前缀匹配），默认不限分组。"""
+    parts = ['<option value="">不限分组</option>']
+    for cat in sorted(cat_counts):
+        parts.append(f'<option value="{html.escape(cat, quote=True)}">{html.escape(cat)}（{cat_counts[cat]}张）</option>')
+    return ''.join(parts)
+
+
+def write_all_gallery(
+    view: Path,
+    entries: list[dict[str, str]],
+    *,
+    project_dir: Path | None = None,
+    dhash_cache: '_DhashCache | None' = None,
+    user_names: dict[str, str] | None = None,
+) -> int:
+    '''跨分组合并图库（00_全部）：各分组主落位条目汇成一页，默认不限分组。
+
+    entries 由 build_view 采集：{'cat': 类目名, 'rel': 类目内相对路径,
+    'src': 源文件, 'uid'/'ts'/'kw': 筛选元数据}。图片与缩略图仍引用各分组
+    目录（不新增硬链接、不重生成缩略图）；item.cat 供页内分组筛选、搜索与
+    导出前缀过滤。返回合并条目数；无条目时不生成页面。
+    '''
+    if not entries:
+        return 0
+    all_dir = view / ALL_GALLERY_DIR
+    thumbs_root = (project_dir / 'data' / THUMBS_DIR) if project_dir else None
+    batch_totals: dict[str, int] = {}
+    for entry in entries:
+        batch = _gallery_batch_key(entry['rel'].rsplit('/', 1)[-1])
+        if batch:
+            batch_totals[batch] = batch_totals.get(batch, 0) + 1
+    gallery_items: list[dict[str, object]] = []
+    hash_entries: list[tuple[str, int, tuple[int, int], str]] = []
+    for entry in entries:
+        rel = entry['rel']
+        name = rel.rsplit('/', 1)[-1]
+        stem = Path(name).stem
+        image_key = stem.split('_', 1)[0].lstrip('#')
+        batch = _gallery_batch_key(name)
+        width, height = _image_name_wh(Path(rel))
+        src = source_path(project_dir, entry['src'])
+        try:
+            size_bytes = src.stat().st_size
+        except OSError:
+            size_bytes = 0
+        thumb = ''
+        # 缩略图沿用各分组页已生成的缓存（data/view-thumbs/<叶子分组>/<stem>.jpg）
+        if thumbs_root:
+            thumb_leaf = safe_name(entry['cat'].rsplit('/', 1)[-1])
+            thumb_path = thumbs_root / thumb_leaf / (stem + '.jpg')
+            if thumb_path.exists():
+                if dhash_cache is not None:
+                    looked = dhash_cache.lookup(thumb_path)
+                    digest, thumb_md5 = looked if looked is not None else (0, '')
+                else:
+                    digest = _dhash(thumb_path)
+                    thumb_md5 = _thumb_md5(thumb_path)
+                hash_entries.append((image_key, digest, (width, height), thumb_md5))
+                thumb = f'../../{THUMBS_DIR}/{url_path(thumb_leaf)}/{url_path(stem)}.jpg'
+        gallery_items.append({
+            'href': '../' + url_path(entry['cat']) + '/' + url_path(rel),
+            'id': image_key,
+            'cat': entry['cat'],
+            'uid': entry.get('uid', ''),
+            'ts': entry.get('ts', ''),
+            'kw': entry.get('kw', ''),
+            'masked': '还原' in name,
+            'batch': batch,
+            'batch_total': batch_totals.get(batch, 0),
+            'w': width,
+            'h': height,
+            'bytes': size_bytes,
+            'thumb': thumb,
+        })
+    # 视觉相同的图跨分组折叠：口径与单分组页一致（md5 精确 + dhash 近似）；
+    # 交叉显示的同图副本在合并页正好落进同一组，徽标点开可跳转查看。
+    dup_groups = _assign_dup_groups(hash_entries)
+    dup_totals: dict[str, int] = {}
+    if dup_groups:
+        for group_id in dup_groups.values():
+            dup_totals[group_id] = dup_totals.get(group_id, 0) + 1
+        for item in gallery_items:
+            group_id = dup_groups.get(str(item['id']))
+            if group_id:
+                item['dup'] = group_id
+                item['dup_total'] = dup_totals.get(group_id, 0)
+    group_members: dict[str, list[dict[str, object]]] = {}
+    for item in gallery_items:
+        dup_key = str(item.get('dup') or '')
+        if dup_key:
+            group_members.setdefault(dup_key, []).append(item)
+        batch_key = str(item.get('batch') or '')
+        if batch_key and int(item.get('batch_total') or 0) > 1:
+            group_members.setdefault(batch_key, []).append(item)
+    if group_members:
+        groups_dir = all_dir / 'groups'
+        shutil.rmtree(groups_dir, ignore_errors=True)
+        groups_dir.mkdir(parents=True, exist_ok=True)
+        for key, members in sorted(group_members.items()):
+            fname = _group_data_file(key)
+            kind = '相似' if key.startswith('dup') else '同批'
+            payload = {
+                'key': key,
+                'kind': kind,
+                'count': len(members),
+                'members': members,
+            }
+            (groups_dir / (fname + '.js')).write_text(
+                f'window.__galleryGroup({_script_json(payload)});\n', encoding='utf-8')
+    else:
+        shutil.rmtree(all_dir / 'groups', ignore_errors=True)
+    chunk_count = _write_gallery_chunk_sets(all_dir, gallery_items)
+    _write_item_info(all_dir / 'info', gallery_items, all_dir, '', user_names, project_dir)
+    build_token = hashlib.sha1(json.dumps(gallery_items, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:10]
+    _TOKENS_SEEN.add(build_token)
+    user_counts: dict[str, int] = {}
+    month_counts: dict[str, int] = {}
+    cat_counts: dict[str, int] = {}
+    for item in gallery_items:
+        uid = str(item.get('uid') or '')
+        if uid:
+            user_counts[uid] = user_counts.get(uid, 0) + 1
+        month = str(item.get('ts') or '')[:7]
+        if month:
+            month_counts[month] = month_counts.get(month, 0) + 1
+        cat = str(item.get('cat') or '')
+        if cat:
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+    (all_dir / 'index.html').write_text(
+        _gallery_page(title='全部图片（不限分组）', count=len(gallery_items), chunk_count=chunk_count,
+                      background=_gallery_background(all_dir),
+                      user_options=_user_options_html(user_counts, user_names or {}),
+                      cat_options=_cat_options_html(cat_counts),
+                      month_options=_month_options_html(month_counts),
+                      build_token=build_token,
+                      category_id='',
+                      view_base_url=_view_server_base(project_dir)),
+        encoding='utf-8',
+    )
+    return len(gallery_items)
+
+
 def _size_class_of(w: object, h: object) -> str:
     if w and h:
         if w >= h * 1.2:
@@ -1521,7 +1693,7 @@ def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs
     _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 27  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 28  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -1734,6 +1906,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     dhash_cache = _DhashCache(conn)
     member_names = member_name_map_from_conn(conn)
     plans: dict[str, _CatPlan] = {}
+    merged_entries: list[dict[str, str]] = []
     saved_categories: set[str] = set()
     # 同批判定：同一完整工作流签名 且 组大小 2..30 且 时间跨度 ≤ 24 小时
     batch_keys: set[str] = set()
@@ -1794,11 +1967,13 @@ def build_view(project_dir: Path) -> dict[str, int]:
             filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
             saved_plan = plans.setdefault(saved_key, _CatPlan())
             saved_plan.files[filename] = str(src)
-            saved_plan.meta[str(row['id'])] = {
+            saved_meta = {
                 'uid': str(row['user_id'] or ''),
                 'ts': str(row['seen_at'] or '')[:10],
                 'kw': str(row['text_excerpt'] or '')[:160].lower(),
             }
+            saved_plan.meta[str(row['id'])] = saved_meta
+            merged_entries.append({'cat': saved_key, 'rel': filename, 'src': str(src), **saved_meta})
             continue
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
@@ -1823,12 +1998,14 @@ def build_view(project_dir: Path) -> dict[str, int]:
             f"{'_x' + str(occurrences.get(cat, {}).get(sha256, 1)) if sha256 and occurrences.get(cat, {}).get(sha256, 1) > 1 else ''}"
         ) + ext
         plan = plans.setdefault(cat, _CatPlan())
-        plan.files[f'{size_class}/{filename}'] = str(src)
-        plan.meta[str(row['id'])] = {
+        meta_entry = {
             'uid': str(row['user_id'] or ''),
             'ts': str(row['seen_at'] or '')[:10],
             'kw': (str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
         }
+        plan.files[f'{size_class}/{filename}'] = str(src)
+        plan.meta[str(row['id'])] = meta_entry
+        merged_entries.append({'cat': cat, 'rel': f'{size_class}/{filename}', 'src': str(src), **meta_entry})
         if reason in ('prompt_bound', 'params_discussion'):
             plan.items.append({
                 'id': str(row['id']),
@@ -1894,6 +2071,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
     for cat_name in [c for c in state['categories'] if c not in plans]:
         del state['categories'][cat_name]
     planned_roots = {name.split('/', 1)[0] for name in plans}
+    if merged_entries:
+        planned_roots.add(ALL_GALLERY_DIR)
     if view.is_dir():
         for p in list(view.iterdir()):
             if p.is_dir() and p.name not in planned_roots:
@@ -1923,6 +2102,25 @@ def build_view(project_dir: Path) -> dict[str, int]:
                                        item_meta=plan.meta, user_names=member_names)
         except Exception as exc:
             print(f'gallery generation failed for {cat_name}: {type(exc).__name__}: {exc}')
+    # 跨分组合并图库（不限分组浏览/筛选/导出）：条目签名不变且页面骨架完整时跳过
+    if merged_entries:
+        merged_sig = hashlib.sha1(
+            json.dumps(merged_entries, ensure_ascii=False, sort_keys=True).encode('utf-8')
+        ).hexdigest()[:10]
+        prev_all = state.get('all_gallery') or {}
+        all_dir = view / ALL_GALLERY_DIR
+        merged_count = 0
+        if prev_all.get('sig') == merged_sig and _cat_page_intact(all_dir, context=False):
+            merged_count = len(merged_entries)
+        else:
+            try:
+                merged_count = write_all_gallery(view, merged_entries, project_dir=project_dir,
+                                                 dhash_cache=dhash_cache, user_names=member_names)
+                state['all_gallery'] = {'sig': merged_sig, 'count': merged_count}
+            except Exception as exc:
+                print(f'all-gallery generation failed: {type(exc).__name__}: {exc}')
+        if merged_count:
+            counts[ALL_GALLERY_DIR] = merged_count
     if copy_fallbacks:
         remaining = [dst for src, dst in copy_fallbacks if not relink_view_copy(src, dst)]
         if remaining:
@@ -1962,7 +2160,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '04_候选待观察：暂存，等待后续反馈。\n'
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
-        '带元数据的确认混淆图：还原后元数据保留在文件上，并同时显示回其来源 01 分类。\n\n'
+        '带元数据的确认混淆图：还原后元数据保留在文件上，并同时显示回其来源 01 分类。\n'
+        '00_全部：跨分组合并图库，筛选与导出默认不限分组，页内可再按分组收窄。\n\n'
         '每个图库页面支持按用户（发送者）、尺寸（横/竖/方）、分辨率短边、月份、\n'
         '关键词（元数据文本/QQ号/ID）与"只看重复/同批"组合筛选；可切换缩略图大小、\n'
         '按分辨率/大小/名称排序。导出训练数据集用：\n'
