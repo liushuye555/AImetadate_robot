@@ -381,28 +381,65 @@ def test_write_view_index_ignores_generated_chunk_files_in_image_count(tmp_path)
 
 
 def test_context_gallery_uses_incremental_chunks_too(tmp_path):
-    from qq_onebot_whitelist.build_image_view import _write_context_gallery
+    from qq_onebot_whitelist.build_image_view import _gallery_entry, _write_context_gallery
 
     category = tmp_path / '03_提示词绑定'
-    items = [
-        {
-            'id': str(i),
-            'image_rel': f'img/{i}.png',
-            'meta': '2026-09-05 · 64x64',
-            'text': f'prompt-{i}',
-            'deobfuscated': i == 1,
-        }
+    entries = [
+        _gallery_entry(row_id=i, cat='03_提示词绑定', rel=f'img/{i}.png', src='',
+                       w=64, h=64, uid='', seen_at='2026-09-05', kw='',
+                       masked=(i == 1), text=f'prompt-{i}')
         for i in range(1, 126)
     ]
 
-    _write_context_gallery(category, items, '03 提示词绑定')
+    _write_context_gallery(category, entries, '03 提示词绑定')
 
     page = (category / 'index.html').read_text(encoding='utf-8')
     chunks = sorted((category / 'chunks').glob('chunk-*.js'))
     assert len(chunks) == 2
     assert 'context-grid' in page
     assert 'prompt-125' not in page
-    assert 'prompt-125' in chunks[1].read_text(encoding='utf-8')
+    # 统一条目按 id 倒序：最新在前
+    assert 'prompt-125' in chunks[0].read_text(encoding='utf-8')
+    assert 'prompt-1' in chunks[1].read_text(encoding='utf-8')
+    assert '"masked":true' in chunks[1].read_text(encoding='utf-8')
+
+
+def test_category_gallery_entries_path_matches_disk_fallback(tmp_path):
+    """统一条目直供与磁盘回退两条路径产出完全一致的 chunk（同源字段）。"""
+    import shutil
+
+    from qq_onebot_whitelist.build_image_view import _gallery_entry, write_category_gallery
+
+    category = tmp_path / '01_AI元数据_ComfyUI'
+    category.mkdir()
+    (category / '#1_64x64_ai_metadata.png').write_bytes(b'x')
+    (category / '#2_64x64_ai_metadata_pk12345678.png').write_bytes(b'x')
+
+    entries = [
+        _gallery_entry(row_id=1, cat='01_AI元数据_ComfyUI', rel='#1_64x64_ai_metadata.png',
+                       src=category / '#1_64x64_ai_metadata.png', w=64, h=64,
+                       uid='u1', seen_at='2026-09-24 10:00:00', kw='beach',
+                       masked=False),
+        _gallery_entry(row_id=2, cat='01_AI元数据_ComfyUI', rel='#2_64x64_ai_metadata_pk12345678.png',
+                       src=category / '#2_64x64_ai_metadata_pk12345678.png', w=64, h=64,
+                       uid='u2', seen_at='2026-09-25 10:00:00', kw='forest',
+                       masked=False, batch='12345678'),
+    ]
+    write_category_gallery(category, force=True, entries=entries)
+    chunk_entries = (category / 'chunks' / 'chunk-0001.js').read_text(encoding='utf-8')
+
+    for sub in ('chunks', 'chunks-size', 'chunks-name', 'chunks-res', 'groups', 'info'):
+        shutil.rmtree(category / sub, ignore_errors=True)
+    (category / 'index.html').unlink()
+    write_category_gallery(category, force=True, item_meta={
+        '1': {'uid': 'u1', 'ts': '2026-09-24', 'kw': 'beach'},
+        '2': {'uid': 'u2', 'ts': '2026-09-25', 'kw': 'forest'},
+    })
+    chunk_fallback = (category / 'chunks' / 'chunk-0001.js').read_text(encoding='utf-8')
+
+    assert chunk_entries == chunk_fallback
+    assert '"batch":"12345678","batch_total":1' in chunk_entries
+    assert '"w":64,"h":64' in chunk_entries
 
 
 def test_category_gallery_embeds_image_ratio_for_aspect_fit(tmp_path):

@@ -449,9 +449,55 @@ def _gallery_batch_key(name: str) -> str:
 
 
 def _image_name_wh(p: Path) -> tuple[int, int]:
-    """从文件名里的 _宽x高_ 段解析尺寸；缺失返回 (0, 0)。"""
+    """从文件名里的 _宽x高_ 段解析尺寸；缺失返回 (0, 0)。仅磁盘回退路径使用。"""
     match = re.search(r'_(\d+)x(\d+)_', p.name)
     return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+
+def _gallery_entry(
+    *,
+    row_id: object,
+    cat: str,
+    rel: str,
+    src: object,
+    w: object,
+    h: object,
+    uid: str,
+    seen_at: str,
+    kw: str,
+    masked: bool,
+    batch: str = '',
+    text: str = '',
+) -> dict[str, object]:
+    """统一图库条目：数据库单次扫描的产物，类目页/合并页/info 都从它投影。
+
+    此前宽高/批键要再从落位文件名反解析一遍（双路径易漂移）；现在数据库行里
+    现成的 width/height/prompt_key 在落位时一并入条目，文件名解析只留在
+    磁盘回退路径（独立调用/测试直接喂目录时）。
+    """
+    return {
+        'id': str(row_id),
+        'cat': cat,
+        'rel': rel,
+        'src': str(src),
+        'w': int(w or 0),
+        'h': int(h or 0),
+        'uid': uid,
+        'seen_at': seen_at,
+        'ts': str(seen_at or '')[:10],
+        'kw': kw,
+        'masked': bool(masked),
+        'batch': batch,
+        'text': text,
+    }
+
+
+def _entry_num(entry: dict[str, object]) -> int:
+    """条目 id 的数值（用于最新优先排序）；非数字退回 0。"""
+    try:
+        return int(str(entry.get('id') or '').lstrip('#') or 0)
+    except ValueError:
+        return 0
 
 
 def _dhash(path: Path) -> int:
@@ -1275,6 +1321,35 @@ def _gallery_background(cat_dir: Path) -> str:
     return background_css('../' + wallpaper if wallpaper else None)
 
 
+def _entries_from_disk(cat_dir: Path, item_meta: dict[str, dict[str, str]] | None) -> list[dict[str, object]]:
+    """磁盘回退：独立调用（无数据库条目）时从已落位文件反推统一条目。
+
+    文件名编码了 id/宽高/批键/遮罩标记，这里只做一次解码；uid/ts/kw 来自
+    可选的 item_meta（旧调用方仍可提供）。
+    """
+    meta = item_meta or {}
+    out: list[dict[str, object]] = []
+    for p in cat_dir.rglob('*'):
+        if not (p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS):
+            continue
+        image_key = p.stem.split('_', 1)[0].lstrip('#')
+        meta_entry = meta.get(image_key, {})
+        out.append(_gallery_entry(
+            row_id=image_key,
+            cat='',
+            rel=os.path.relpath(p, cat_dir).replace(os.sep, '/'),
+            src=p,
+            w=_image_name_wh(p)[0],
+            h=_image_name_wh(p)[1],
+            uid=str(meta_entry.get('uid') or ''),
+            seen_at=str(meta_entry.get('ts') or ''),
+            kw=str(meta_entry.get('kw') or ''),
+            masked='还原' in p.name,
+            batch=_gallery_batch_key(p.name),
+        ))
+    return out
+
+
 def write_category_gallery(
     cat_dir: Path,
     *,
@@ -1284,48 +1359,42 @@ def write_category_gallery(
     dhash_cache: '_DhashCache | None' = None,
     item_meta: dict[str, dict[str, str]] | None = None,
     user_names: dict[str, str] | None = None,
+    entries: list[dict[str, object]] | None = None,
 ) -> None:
-    '''为图片分类目录生成单页按需图库；只加载首批，滚动后再追加本地 chunk。'''
+    '''为图片分类目录生成单页按需图库；只加载首批，滚动后再追加本地 chunk。
+
+    entries 是统一条目（build_view 数据库单次扫描的产物），宽高/批键等字段
+    不再从落位文件名反解析；缺省时走磁盘回退（_entries_from_disk），供独立
+    调用与测试直接喂目录。缩略图缓存在 data/view-thumbs（视图目录重建不清掉）。
+    '''
     if not force and (cat_dir / 'index.html').exists():
         return  # 已有专门页面（如 03_提示词绑定）则不覆盖
-    image_exts = IMAGE_EXTENSIONS
-    # 缩略图缓存在 data/view-thumbs（视图目录重建不清掉），卡片加载小图、点开看原图
+    if entries is None:
+        entries = _entries_from_disk(cat_dir, item_meta)
+    if not entries:
+        return
     thumbs_root = (project_dir / 'data' / THUMBS_DIR) if project_dir else None
     thumb_rel_dir = safe_name(cat_dir.name)
 
-    def image_id(p: Path) -> int:
-        try:
-            return int(p.stem.split('_')[0].lstrip('#'))
-        except (ValueError, IndexError):
-            return 0
-
-    image_wh = _image_name_wh
-
-    images = sorted(
-        (p for p in cat_dir.rglob('*') if p.is_file() and p.suffix.lower() in image_exts),
-        key=lambda p: image_id(p),
-        reverse=True,
-    )
-    if not images:
-        return
+    ordered = sorted(entries, key=lambda e: (-_entry_num(e), str(e.get('rel') or '')))
     batch_totals: dict[str, int] = {}
-    for image in images:
-        key = _gallery_batch_key(image.name)
-        if key:
-            batch_totals[key] = batch_totals.get(key, 0) + 1
+    for entry in ordered:
+        batch = str(entry.get('batch') or '')
+        if batch:
+            batch_totals[batch] = batch_totals.get(batch, 0) + 1
     gallery_items: list[dict[str, object]] = []
-    hash_entries: list[tuple[str, int, tuple[int, int]]] = []
-    for image in images:
-        rel = os.path.relpath(image, cat_dir).replace(os.sep, '/')
-        batch = _gallery_batch_key(image.name)
-        width, height = image_wh(image)
-        image_key = image.stem.split('_', 1)[0].lstrip('#')
+    hash_entries: list[tuple[str, int, tuple[int, int], str]] = []
+    for entry in ordered:
+        rel = str(entry['rel'])
+        name = rel.rsplit('/', 1)[-1]
+        stem = Path(name).stem
+        width, height = int(entry.get('w') or 0), int(entry.get('h') or 0)
+        image_key = str(entry['id'])
         thumb = ''
         if thumbs_root:
-            key = image.stem
-            thumb_path = thumbs_root / thumb_rel_dir / (key + '.jpg')
-            if _thumb_file(image, thumb_path):
-                thumb = f'{thumb_prefix}/{THUMBS_DIR}/{url_path(thumb_rel_dir)}/{url_path(key)}.jpg'
+            thumb_path = thumbs_root / thumb_rel_dir / (stem + '.jpg')
+            if _thumb_file(cat_dir / rel, thumb_path):
+                thumb = f'{thumb_prefix}/{THUMBS_DIR}/{url_path(thumb_rel_dir)}/{url_path(stem)}.jpg'
                 # 视觉去重基于缩略图：md5 精确命中 + dhash 近似命中（原图已解码过一次的成本不必重复）
                 if dhash_cache is not None:
                     looked = dhash_cache.lookup(thumb_path)
@@ -1335,17 +1404,17 @@ def write_category_gallery(
                     thumb_md5 = _thumb_md5(thumb_path) if thumb_path.exists() else ''
                 hash_entries.append((image_key, digest, (width, height), thumb_md5))
         try:
-            size_bytes = image.stat().st_size
+            size_bytes = (cat_dir / rel).stat().st_size
         except OSError:
             size_bytes = 0
-        meta_entry = (item_meta or {}).get(image_key, {})
+        batch = str(entry.get('batch') or '')
         gallery_items.append({
             'href': url_path(rel),
             'id': image_key,
-            'uid': str(meta_entry.get('uid') or ''),
-            'ts': str(meta_entry.get('ts') or ''),
-            'kw': str(meta_entry.get('kw') or ''),
-            'masked': '还原' in image.name,
+            'uid': str(entry.get('uid') or ''),
+            'ts': str(entry.get('ts') or ''),
+            'kw': str(entry.get('kw') or ''),
+            'masked': bool(entry.get('masked')),
             'batch': batch,
             'batch_total': batch_totals.get(batch, 0),
             'w': width,
@@ -1422,37 +1491,44 @@ def write_category_gallery(
 
 def _write_context_gallery(
     cat_dir: Path,
-    items: list[dict[str, object]],
+    entries: list[dict[str, object]],
     title: str,
     *,
     project_dir: Path | None = None,
     thumb_prefix: str = '../..',
     user_names: dict[str, str] | None = None,
 ) -> None:
-    '''上下文分类也使用单页按需加载，文本随对应本地 chunk 追加。'''
+    '''上下文分类也使用单页按需加载，文本随对应本地 chunk 追加。
+
+    entries 为统一条目（build_view 单次扫描产物），正文在 entry['text']；
+    页面元信息（时间 · 尺寸）由 seen_at/宽高投影，不再由调用方拼好传入。
+    '''
     cat_dir.mkdir(parents=True, exist_ok=True)
     thumbs_root = (project_dir / 'data' / THUMBS_DIR) if project_dir else None
     thumb_rel_dir = safe_name(cat_dir.name)
     gallery_items: list[dict[str, object]] = []
-    for item in items:
+    for entry in sorted(entries, key=lambda e: (-_entry_num(e), str(e.get('rel') or ''))):
+        rel = str(entry['rel'])
+        stem = Path(rel.rsplit('/', 1)[-1]).stem
+        w, h = int(entry.get('w') or 0), int(entry.get('h') or 0)
+        seen_at = str(entry.get('seen_at') or '')
         thumb = ''
         if thumbs_root and project_dir:
-            src = project_dir / 'data' / 'view' / cat_dir.name / str(item['image_rel'])
-            if src.exists() and _thumb_file(src, thumbs_root / thumb_rel_dir / (Path(str(item['image_rel'])).stem + '.jpg')):
-                key = Path(str(item['image_rel'])).stem
-                thumb = f'{thumb_prefix}/{THUMBS_DIR}/{url_path(thumb_rel_dir)}/{url_path(key)}.jpg'
+            src = project_dir / 'data' / 'view' / cat_dir.name / rel
+            if src.exists() and _thumb_file(src, thumbs_root / thumb_rel_dir / (stem + '.jpg')):
+                thumb = f'{thumb_prefix}/{THUMBS_DIR}/{url_path(thumb_rel_dir)}/{url_path(stem)}.jpg'
         gallery_items.append({
-            'id': str(item.get('id') or ''),
-            'href': url_path(str(item['image_rel'])),
-            'masked': bool(item.get('deobfuscated')),
-            'uid': str(item.get('uid') or ''),
-            'ts': str(item.get('ts') or ''),
-            'label': f"#{item['id']} · {item['meta']}",
-            'text': str(item.get('text') or ''),
+            'id': str(entry.get('id') or ''),
+            'href': url_path(rel),
+            'masked': bool(entry.get('masked')),
+            'uid': str(entry.get('uid') or ''),
+            'ts': str(entry.get('ts') or ''),
+            'label': f"#{entry.get('id')} · {seen_at} · {w or 'x'}x{h or 'x'}",
+            'text': str(entry.get('text') or ''),
             'batch': '',
             'batch_total': 0,
-            'w': int(item.get('w') or 0),
-            'h': int(item.get('h') or 0),
+            'w': w,
+            'h': h,
             'thumb': thumb,
         })
     if not gallery_items:
@@ -1501,29 +1577,30 @@ def write_all_gallery(
 ) -> int:
     '''跨分组合并图库（00_全部）：各分组主落位条目汇成一页，默认不限分组。
 
-    entries 由 build_view 采集：{'cat': 类目名, 'rel': 类目内相对路径,
-    'src': 源文件, 'uid'/'ts'/'kw': 筛选元数据}。图片与缩略图仍引用各分组
-    目录（不新增硬链接、不重生成缩略图）；item.cat 供页内分组筛选、搜索与
-    导出前缀过滤。返回合并条目数；无条目时不生成页面。
+    entries 是统一条目（build_view 数据库单次扫描产物），宽高/批键/遮罩直接
+    取自条目，不再从落位文件名反解析；默认按 id 倒序 = 全局最新优先。图片与
+    缩略图仍引用各分组目录（不新增硬链接、不重生成缩略图）；item.cat 供页内
+    分组筛选、搜索与导出前缀过滤。返回合并条目数；无条目时不生成页面。
     '''
     if not entries:
         return 0
     all_dir = view / ALL_GALLERY_DIR
     thumbs_root = (project_dir / 'data' / THUMBS_DIR) if project_dir else None
+    ordered = sorted(entries, key=lambda e: (-_entry_num(e), str(e.get('rel') or '')))
     batch_totals: dict[str, int] = {}
-    for entry in entries:
-        batch = _gallery_batch_key(entry['rel'].rsplit('/', 1)[-1])
+    for entry in ordered:
+        batch = str(entry.get('batch') or '')
         if batch:
             batch_totals[batch] = batch_totals.get(batch, 0) + 1
     gallery_items: list[dict[str, object]] = []
     hash_entries: list[tuple[str, int, tuple[int, int], str]] = []
-    for entry in entries:
-        rel = entry['rel']
+    for entry in ordered:
+        rel = str(entry['rel'])
         name = rel.rsplit('/', 1)[-1]
         stem = Path(name).stem
-        image_key = stem.split('_', 1)[0].lstrip('#')
-        batch = _gallery_batch_key(name)
-        width, height = _image_name_wh(Path(rel))
+        image_key = str(entry['id'])
+        batch = str(entry.get('batch') or '')
+        width, height = int(entry.get('w') or 0), int(entry.get('h') or 0)
         src = source_path(project_dir, entry['src'])
         try:
             size_bytes = src.stat().st_size
@@ -1532,7 +1609,7 @@ def write_all_gallery(
         thumb = ''
         # 缩略图沿用各分组页已生成的缓存（data/view-thumbs/<叶子分组>/<stem>.jpg）
         if thumbs_root:
-            thumb_leaf = safe_name(entry['cat'].rsplit('/', 1)[-1])
+            thumb_leaf = safe_name(str(entry['cat']).rsplit('/', 1)[-1])
             thumb_path = thumbs_root / thumb_leaf / (stem + '.jpg')
             if thumb_path.exists():
                 if dhash_cache is not None:
@@ -1544,13 +1621,13 @@ def write_all_gallery(
                 hash_entries.append((image_key, digest, (width, height), thumb_md5))
                 thumb = f'../../{THUMBS_DIR}/{url_path(thumb_leaf)}/{url_path(stem)}.jpg'
         gallery_items.append({
-            'href': '../' + url_path(entry['cat']) + '/' + url_path(rel),
+            'href': '../' + url_path(str(entry['cat'])) + '/' + url_path(rel),
             'id': image_key,
-            'cat': entry['cat'],
-            'uid': entry.get('uid', ''),
-            'ts': entry.get('ts', ''),
-            'kw': entry.get('kw', ''),
-            'masked': '还原' in name,
+            'cat': str(entry['cat']),
+            'uid': str(entry.get('uid') or ''),
+            'ts': str(entry.get('ts') or ''),
+            'kw': str(entry.get('kw') or ''),
+            'masked': bool(entry.get('masked')),
             'batch': batch,
             'batch_total': batch_totals.get(batch, 0),
             'w': width,
@@ -1659,6 +1736,7 @@ def _place_context_display(
 
     还原图统一带 _还原 文件名标记（普通分组的模糊按文件名判定），
     05 混淆分组本体不遮罩。同 sha 在同一类目只落一个位置（与主展示共用去重表）。
+    03 两类的交叉显示沿用既有语义：上下文页条目恒遮罩（原实现硬编码 deobfuscated=True）。
     """
     reason = row['retention_reason'] or 'unknown'
     context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
@@ -1678,69 +1756,67 @@ def _place_context_display(
     w, h = row['width'], row['height']
     ctx_suffix = '_还原' if is_deobfuscated else ''
     ctx_filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{ctx_suffix}") + ext
-    ctx_plan = plans.setdefault(context_cat, _CatPlan())
-    ctx_plan.files[f'{size_class}/{ctx_filename}'] = str(src)
     if context_reason == 'ai_metadata':
-        ctx_plan.meta[str(row['id'])] = {
-            'uid': str(row['user_id'] or ''),
-            'ts': str(row['seen_at'] or '')[:10],
-            'kw': str(row['text_excerpt'] or '').strip()[:160].lower(),
-        }
-    elif context_reason in ('prompt_bound', 'params_discussion'):
-        ctx_plan.items.append({
-            'id': str(row['id']),
-            'image_rel': f'{size_class}/{ctx_filename}',
-            'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-            'text': str(row['bound_prompt'] or ''),
-            'uid': str(row['user_id'] or ''),
-            'ts': str(row['seen_at'] or '')[:10],
-            'deobfuscated': True,
-            'w': row['width'] or 0,
-            'h': row['height'] or 0,
-        })
+        # 01 类是普通图库：筛选元数据进条目（kw 与主落位一致取正文摘录）
+        kw = str(row['text_excerpt'] or '').strip()[:160].lower()
+        text = ''
+        masked = is_deobfuscated
+    else:
+        # 03 上下文页：正文进 text（页面按 text 搜索），kw 不用；恒遮罩
+        kw = ''
+        text = str(row['bound_prompt'] or '')
+        masked = True
+    plans.setdefault(context_cat, _CatPlan()).entries.append(_gallery_entry(
+        row_id=row['id'],
+        cat=context_cat,
+        rel=f'{size_class}/{ctx_filename}',
+        src=src,
+        w=w,
+        h=h,
+        uid=str(row['user_id'] or ''),
+        seen_at=str(row['seen_at'] or ''),
+        kw=kw,
+        masked=masked,
+        batch='',
+        text=text,
+    ))
 
 
-def write_prompt_bound_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs) -> None:
-    _write_context_gallery(cat_dir, items, '03 提示词绑定', **kwargs)
+def write_prompt_bound_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwargs) -> None:
+    _write_context_gallery(cat_dir, entries, '03 提示词绑定', **kwargs)
 
 
-def write_params_gallery(cat_dir: Path, items: list[dict[str, object]], **kwargs) -> None:
-    _write_context_gallery(cat_dir, items, '03 参数讨论', **kwargs)
+def write_params_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwargs) -> None:
+    _write_context_gallery(cat_dir, entries, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 28  # 页面/文件名规则变化时 +1：签名状态作废，下一次构建按全量处理
+GENERATOR_VERSION = 29  # 页面/文件名/签名规则变化时 +1：统一条目模型，旧签名作废，下次构建按全量处理
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
 
 
 class _CatPlan:
-    """一个类目目录的期望状态：应存在的图片（相对路径 -> 源文件）与上下文条目。
+    """一个类目目录的期望状态：统一条目列表（数据库单次扫描产物）。
 
+    落位文件表与签名都由 entries 投影，不再维护 files/meta/items 三份记账；
     完全由数据库推导，与磁盘现状无关；签名一致即认为该类目无需重建。
     """
 
     def __init__(self) -> None:
-        self.files: dict[str, str] = {}
-        self.items: list[dict[str, object]] = []
-        # 记录 id -> {uid, ts, kw}：进 chunk 供页面按用户/日期筛选与关键词搜索
-        self.meta: dict[str, dict[str, str]] = {}
+        self.entries: list[dict[str, object]] = []
+
+    @property
+    def files(self) -> dict[str, str]:
+        return {str(e['rel']): str(e['src']) for e in self.entries}
 
     def signature(self) -> str:
         h = hashlib.sha1()
-        for rel in sorted(self.files):
-            h.update(rel.encode('utf-8'))
-            h.update(b'\x1f')
-            h.update(self.files[rel].encode('utf-8'))
-            h.update(b'\x1e')
-        for key in sorted(self.meta):
-            entry = self.meta[key]
-            h.update(key.encode('utf-8'))
-            h.update(b'\x1f')
-            h.update('\x1f'.join(entry.get(k, '') for k in ('uid', 'ts', 'kw')).encode('utf-8'))
-            h.update(b'\x1e')
-        for item in self.items:
-            h.update(repr(sorted((k, str(v)) for k, v in item.items())).encode('utf-8'))
+        for entry in sorted(self.entries, key=lambda e: str(e.get('rel') or '')):
+            for key in sorted(entry):
+                h.update(key.encode('utf-8'))
+                h.update(str(entry[key]).encode('utf-8'))
+                h.update(b'\x1f')
             h.update(b'\x1e')
         return h.hexdigest()
 
@@ -1921,7 +1997,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     dhash_cache = _DhashCache(conn)
     member_names = member_name_map_from_conn(conn)
     plans: dict[str, _CatPlan] = {}
-    merged_entries: list[dict[str, str]] = []
+    all_entries: list[dict[str, object]] = []  # 合并页条目 = 各分组主落位（交叉显示副本不重复计入）
     saved_categories: set[str] = set()
     # 同批判定：同一完整工作流签名 且 组大小 2..30 且 时间跨度 ≤ 24 小时
     batch_keys: set[str] = set()
@@ -1981,14 +2057,19 @@ def build_view(project_dir: Path) -> dict[str, int]:
             ext = src.suffix or '.img'
             filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
             saved_plan = plans.setdefault(saved_key, _CatPlan())
-            saved_plan.files[filename] = str(src)
-            saved_meta = {
-                'uid': str(row['user_id'] or ''),
-                'ts': str(row['seen_at'] or '')[:10],
-                'kw': str(row['text_excerpt'] or '')[:160].lower(),
-            }
-            saved_plan.meta[str(row['id'])] = saved_meta
-            merged_entries.append({'cat': saved_key, 'rel': filename, 'src': str(src), **saved_meta})
+            saved_plan.entries.append(_gallery_entry(
+                row_id=row['id'],
+                cat=saved_key,
+                rel=filename,
+                src=src,
+                w=w,
+                h=h,
+                uid=str(row['user_id'] or ''),
+                seen_at=str(row['seen_at'] or ''),
+                kw=str(row['text_excerpt'] or '')[:160].lower(),
+                masked=False,
+            ))
+            all_entries.append(saved_plan.entries[-1])
             continue
         cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
         if reason == 'ai_metadata' and row['ai_source']:
@@ -2013,26 +2094,22 @@ def build_view(project_dir: Path) -> dict[str, int]:
             f"{'_x' + str(occurrences.get(cat, {}).get(sha256, 1)) if sha256 and occurrences.get(cat, {}).get(sha256, 1) > 1 else ''}"
         ) + ext
         plan = plans.setdefault(cat, _CatPlan())
-        meta_entry = {
-            'uid': str(row['user_id'] or ''),
-            'ts': str(row['seen_at'] or '')[:10],
-            'kw': (str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
-        }
-        plan.files[f'{size_class}/{filename}'] = str(src)
-        plan.meta[str(row['id'])] = meta_entry
-        merged_entries.append({'cat': cat, 'rel': f'{size_class}/{filename}', 'src': str(src), **meta_entry})
-        if reason in ('prompt_bound', 'params_discussion'):
-            plan.items.append({
-                'id': str(row['id']),
-                'image_rel': f'{size_class}/{filename}',
-                'meta': f"{row['seen_at'] or ''} · {row['width'] or 'x'}x{row['height'] or 'x'}",
-                'text': str(row['bound_prompt'] or ''),
-                'uid': str(row['user_id'] or ''),
-                'ts': str(row['seen_at'] or '')[:10],
-                'deobfuscated': is_deobfuscated,
-                'w': row['width'] or 0,
-                'h': row['height'] or 0,
-            })
+        entry = _gallery_entry(
+            row_id=row['id'],
+            cat=cat,
+            rel=f'{size_class}/{filename}',
+            src=src,
+            w=row['width'],
+            h=row['height'],
+            uid=str(row['user_id'] or ''),
+            seen_at=str(row['seen_at'] or ''),
+            kw=(str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
+            masked=bool(mask_marker),
+            batch=pk,
+            text=str(row['bound_prompt'] or ''),
+        )
+        plan.entries.append(entry)
+        all_entries.append(entry)
         # 交叉显示：05 的确认混淆图按 context_reason 回到原分类
         _place_context_display(row, src, sha256, size_class, ext, is_deobfuscated,
                                plans=plans, dedup_seen=dedup_seen)
@@ -2061,7 +2138,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     for cat_name in sorted(plans):
         plan = plans[cat_name]
         cat_dir = view / cat_name
-        if not plan.files:
+        if not plan.entries:
             if cat_dir.exists():
                 shutil.rmtree(cat_dir, ignore_errors=True)
             state['categories'].pop(cat_name, None)
@@ -2086,7 +2163,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
     for cat_name in [c for c in state['categories'] if c not in plans]:
         del state['categories'][cat_name]
     planned_roots = {name.split('/', 1)[0] for name in plans}
-    if merged_entries:
+    if all_entries:
         planned_roots.add(ALL_GALLERY_DIR)
     if view.is_dir():
         for p in list(view.iterdir()):
@@ -2098,38 +2175,38 @@ def build_view(project_dir: Path) -> dict[str, int]:
         for p in list(saved_root.iterdir()):
             if p.is_dir() and p.name not in planned_subs:
                 shutil.rmtree(p, ignore_errors=True)
-    # 只为有变化的类目重新生成图库页
+    # 只为有变化的类目重新生成图库页（条目直供，不再从磁盘反推）
     for cat_name, plan in dirty:
         cat_dir = view / cat_name
         try:
-            if cat_name in _CONTEXT_CAT_NAMES and plan.items:
+            if cat_name in _CONTEXT_CAT_NAMES and plan.entries:
                 if cat_name == CATEGORY_NAMES['prompt_bound']:
-                    write_prompt_bound_gallery(cat_dir, plan.items, project_dir=project_dir,
+                    write_prompt_bound_gallery(cat_dir, plan.entries, project_dir=project_dir,
                                                user_names=member_names)
                 else:
-                    write_params_gallery(cat_dir, plan.items, project_dir=project_dir,
+                    write_params_gallery(cat_dir, plan.entries, project_dir=project_dir,
                                          user_names=member_names)
             else:
                 # 收藏子分类页面深一层，缩略图路径多退一级
                 thumb_prefix = '../../..' if cat_name.startswith(_SAVED_ROOT + '/') else '../..'
                 write_category_gallery(cat_dir, project_dir=project_dir, thumb_prefix=thumb_prefix,
                                        force=True, dhash_cache=dhash_cache,
-                                       item_meta=plan.meta, user_names=member_names)
+                                       entries=plan.entries, user_names=member_names)
         except Exception as exc:
             print(f'gallery generation failed for {cat_name}: {type(exc).__name__}: {exc}')
     # 跨分组合并图库（不限分组浏览/筛选/导出）：条目签名不变且页面骨架完整时跳过
-    if merged_entries:
+    if all_entries:
         merged_sig = hashlib.sha1(
-            json.dumps(merged_entries, ensure_ascii=False, sort_keys=True).encode('utf-8')
+            json.dumps(all_entries, ensure_ascii=False, sort_keys=True).encode('utf-8')
         ).hexdigest()[:10]
         prev_all = state.get('all_gallery') or {}
         all_dir = view / ALL_GALLERY_DIR
         merged_count = 0
         if prev_all.get('sig') == merged_sig and _cat_page_intact(all_dir, context=False):
-            merged_count = len(merged_entries)
+            merged_count = len(all_entries)
         else:
             try:
-                merged_count = write_all_gallery(view, merged_entries, project_dir=project_dir,
+                merged_count = write_all_gallery(view, all_entries, project_dir=project_dir,
                                                  dhash_cache=dhash_cache, user_names=member_names)
                 state['all_gallery'] = {'sig': merged_sig, 'count': merged_count}
             except Exception as exc:
