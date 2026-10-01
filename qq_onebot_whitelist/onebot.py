@@ -133,7 +133,11 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
         newest_seen: str | None = None
         oldest_seen: str | None = None
         reached_known = False
-        page_limit = config.startup_history_max_pages if config.startup_history_all else config.startup_history_pages
+        # 有游标（断线重连）时动态翻页追平游标，max_pages 只作硬顶——
+        # 固定页数会在停机期刷屏时留下永久缺口（游标却照常前移）；
+        # 无游标（首次运行）仍按 pages 限深，避免首启回填过深
+        dynamic = bool(known_newest) and not config.startup_history_all
+        page_limit = config.startup_history_max_pages if (config.startup_history_all or dynamic) else config.startup_history_pages
         for page in range(max(1, page_limit)):
             params = {
                 'group_id': int(group_id),
@@ -147,6 +151,9 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
                 break
             next_seq = messages[0].get('message_seq') or seq
             for msg in messages:
+                if msg.get('post_type') != 'message':
+                    # 与 history_import 对齐：API 返回的历史消息缺 post_type，直接喂会被采集入口丢掉
+                    msg['post_type'] = 'message'
                 msg_seq = str(msg.get('message_seq') or msg.get('message_id') or '')
                 if known_newest and not config.startup_history_all and msg_seq == known_newest:
                     reached_known = True
@@ -165,6 +172,8 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
             if reached_known or not next_seq or next_seq == seq:
                 break
             seq = next_seq
+        if dynamic and not reached_known and newest_seen:
+            print(f'startup history catch-up: group {group_id} 未追平游标（页数上限 {page_limit}），中间可能有缺口')
         if newest_seen or oldest_seen:
             store.update_history_cursor(group_id, newest_seq=newest_seen, oldest_seq=oldest_seen)
     print(f'startup history catch-up imported {total} messages')
@@ -370,7 +379,8 @@ async def image_worker_loop(config: AppConfig, store: Store) -> None:
     while True:
         item = pop_deferred_image()
         if item is None:
-            await asyncio.sleep(2)
+            # 图片全部入队（事件循环不再同步处理），轮询间隔压短降低首张延迟
+            await asyncio.sleep(0.5)
             continue
         if not load_aware_ok(config):
             requeue_deferred_image(item)
@@ -618,6 +628,28 @@ async def startup_history_catchup_worker(config: AppConfig, store: Store) -> Non
         print(f'startup history catch-up failed: {type(exc).__name__}: {exc}')
 
 
+async def probe_login_info(config: AppConfig) -> dict[str, object]:
+    """登录探测走独立短连接。
+
+    此前在主连接上 call_action 等应答：等待期间推来的实时事件被当噪声丢掉，
+    而探测恰好在 async for 开始之前——这个窗口里的消息会漏采（与
+    _fetch_group_ids 同一模式）。
+    """
+    try:
+        async with websockets.connect(config.onebot_ws_url) as probe_ws:
+            resp = await call_action(probe_ws, 'get_login_info', {})
+            data = resp.get('data') or {}
+            qq_number = str(data.get('user_id') or '')
+            return {
+                'qqLoggedIn': bool(qq_number),
+                'qqNumber': qq_number,
+                'qqNickname': str(data.get('nickname') or ''),
+            }
+    except Exception as exc:
+        print(f'get_login_info failed at startup: {type(exc).__name__}: {exc}')
+        return {}
+
+
 async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(config.data_dir / 'bot.db')
@@ -636,18 +668,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         image_task = asyncio.create_task(image_worker_loop(config, store))
         try:
             async with websockets.connect(config.onebot_ws_url) as ws:
-                login_info = {}
-                try:
-                    resp = await call_action(ws, "get_login_info", {})
-                    data = resp.get("data") or {}
-                    qq_number = str(data.get("user_id") or "")
-                    login_info = {
-                        "qqLoggedIn": bool(qq_number),
-                        "qqNumber": qq_number,
-                        "qqNickname": str(data.get("nickname") or ""),
-                    }
-                except Exception as exc:
-                    print(f"get_login_info failed at startup: {type(exc).__name__}: {exc}")
+                login_info = await probe_login_info(config)
                 startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
                 report_task = asyncio.create_task(daily_report_loop(ws, config, store))
                 ai_task = None

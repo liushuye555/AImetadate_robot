@@ -44,7 +44,12 @@ def test_deferred_image_queue_fifo_and_requeue():
     assert deferred_image_count() == 0
 
 
-def test_collect_event_defers_image_when_cpu_busy(tmp_path, monkeypatch):
+def test_collect_event_always_defers_image(tmp_path, monkeypatch):
+    """图片处理一律走后台队列：collect_event 只入队，不在调用线程处理。
+
+    此前 CPU 空闲时同步处理（下载+解码+像素分析跑在事件循环里），
+    负载感知只决定"是否推迟"；现在推迟由 image_worker_loop 全权负责。
+    """
     from qq_onebot_whitelist import collection
     from qq_onebot_whitelist.store import Store
 
@@ -55,11 +60,15 @@ def test_collect_event_defers_image_when_cpu_busy(tmp_path, monkeypatch):
     store = Store(db)
     config = AppConfig(
         data_dir=tmp_path / 'data',
-        load_aware_enabled=True,
-        load_aware_cpu_threshold=80,
         feature_image_processing=True,
     )
-    monkeypatch.setattr(collection, 'load_aware_ok', lambda cfg: False)
+    calls = []
+
+    def fake_process_image_url(url, **kwargs):
+        calls.append(url)
+        return {'sha256': 'x', 'retention_reason': 'candidate', 'kept_path': None}
+
+    monkeypatch.setattr(collection, 'process_image_url', fake_process_image_url)
     event = {
         'post_type': 'message',
         'message_type': 'group',
@@ -68,7 +77,12 @@ def test_collect_event_defers_image_when_cpu_busy(tmp_path, monkeypatch):
         'message': [{'type': 'image', 'data': {'url': 'http://127.0.0.1:1/x.png'}}],
     }
     collection.collect_event(store, event, config)
+    assert calls == []  # 事件循环内不同步处理
     assert deferred_image_count() == 1
     item = pop_deferred_image()
     assert item is not None and item[2]['url'] == 'http://127.0.0.1:1/x.png'
+    # 同一条处理管线：drain 出口逐张消费
+    collection.defer_event_image(item)
+    collection.drain_deferred_images(store, config)
+    assert len(calls) == 1
     assert deferred_image_count() == 0

@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS images (
   kept_path TEXT,
   retention_reason TEXT,
   saved_category TEXT,
+  message_db_id INTEGER,
+  segment_index INTEGER,
   raw_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_images_scope_id ON images(scope, id);
@@ -280,6 +282,23 @@ class Store:
             conn.execute('ALTER TABLE images ADD COLUMN stego_state TEXT')
         if 'saved_category' not in image_cols:
             conn.execute('ALTER TABLE images ADD COLUMN saved_category TEXT')
+        # 图片段幂等键实体化：此前藏在 raw_json 里，查重靠 LIKE 全表扫描
+        added_msg_col = 'message_db_id' not in image_cols
+        if added_msg_col:
+            conn.execute('ALTER TABLE images ADD COLUMN message_db_id INTEGER')
+        if 'segment_index' not in image_cols:
+            conn.execute('ALTER TABLE images ADD COLUMN segment_index INTEGER')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_images_msg_segment ON images(scope, message_db_id, segment_index)')
+        if added_msg_col:
+            # 一次性回填历史行（键在 raw_json 里），之后查重走索引点查
+            try:
+                conn.execute(
+                    "UPDATE images SET message_db_id = json_extract(raw_json, '$.message_db_id'), "
+                    "segment_index = json_extract(raw_json, '$.segment_index') "
+                    "WHERE message_db_id IS NULL AND raw_json LIKE '%\"message_db_id\": %'"
+                )
+            except sqlite3.OperationalError:
+                pass  # json1 不可用：退回 LIKE 查询路径（image_segment_processed 有兜底）
         conn.execute('CREATE INDEX IF NOT EXISTS idx_images_saved_category ON images(saved_category, id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_images_prompt_key ON images(prompt_key)')
         metadata_cols = {row[1] for row in conn.execute('PRAGMA table_info(link_metadata)').fetchall()}
@@ -339,12 +358,15 @@ class Store:
             kept_path = result.get('kept_path')
             if digest and kept_path and result.get('retention_reason') != 'candidate':
                 conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ? AND kept_path IS NOT NULL AND merged_into IS NULL', (kept_path, digest))
+            message_db_id = raw.get('message_db_id')
+            segment_index = raw.get('segment_index')
             conn.execute(
                 '''INSERT INTO images (
                   scope, user_id, url, sha256, size, format, width, height, metadata_keys_json,
                   has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, saved_category, restored_path,
-                  deobfuscated, bound_prompt, prompt_key, context_reason, stego_state, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  deobfuscated, bound_prompt, prompt_key, context_reason, stego_state,
+                  message_db_id, segment_index, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     scope,
                     str(user_id),
@@ -367,6 +389,8 @@ class Store:
                     result.get('prompt_key'),
                     result.get('context_reason'),
                     result.get('stego_state'),
+                    int(message_db_id) if message_db_id else None,
+                    int(segment_index) if segment_index is not None else None,
                     json.dumps(raw, ensure_ascii=False),
                 ),
             )
@@ -377,23 +401,26 @@ class Store:
 
         历史/实时并发重放同一事件时避免同一张图重复记账；
         不同消息发同一张图不受影响（message_db_id 不同）。
+        幂等键是实体列（idx_images_msg_segment 点查）；列缺失时退回
+        raw_json LIKE（json1 不可用的极端环境兜底），宁可慢不可漏。
         """
         if not message_db_id:
             return False
         with closing(sqlite3.connect(self.path)) as conn:
+            try:
+                row = conn.execute(
+                    'SELECT 1 FROM images WHERE scope = ? AND message_db_id = ? AND segment_index = ? LIMIT 1',
+                    (scope, int(message_db_id), int(segment_index)),
+                ).fetchone()
+                return bool(row)
+            except sqlite3.OperationalError:
+                pass
             row = conn.execute(
-                "SELECT 1 FROM images WHERE scope = ? AND raw_json LIKE ? LIMIT 1",
-                (scope, f'%"message_db_id": {int(message_db_id)}%'),
-            ).fetchone()
-            if not row:
-                return False
-            # 同消息已记过图；再确认该段序号也处理过（多段消息部分失败时可续传）
-            row2 = conn.execute(
-                "SELECT 1 FROM images WHERE scope = ? AND raw_json LIKE ? AND raw_json LIKE ? LIMIT 1",
+                'SELECT 1 FROM images WHERE scope = ? AND raw_json LIKE ? AND raw_json LIKE ? LIMIT 1',
                 (scope, f'%"message_db_id": {int(message_db_id)}%',
                  f'%"segment_index": {int(segment_index)}%'),
             ).fetchone()
-            return bool(row2)
+            return bool(row)
 
     def get_image_record(self, image_id: int) -> dict[str, Any] | None:
         with closing(sqlite3.connect(self.path)) as conn:
@@ -660,35 +687,73 @@ class Store:
                 names[str(scope)] = name
         return names
 
+    @staticmethod
+    def _reply_text_map(conn, scope: str, needed: set[str], before_id: int | None = None) -> dict[str, str]:
+        """被引用消息 id -> 文本（只保留 needed 里出现的引用）。
+
+        此前每条消息都无条件拉 max(limit*5,500) 行并逐行 json.loads 建全量
+        映射；现在无引用直接返回空，有引用时用 SQL json_extract 取三个候选
+        键，不再在 Python 侧解析整包 raw_json。json1 不可用时退回旧解析路径。
+        """
+        if not needed:
+            return {}
+        base = 'FROM messages WHERE scope = ? '
+        params: list[Any] = [scope]
+        if before_id is not None:
+            base += 'AND id <= ? '
+            params.append(int(before_id))
+        base += 'ORDER BY id DESC LIMIT 500'
+        try:
+            rows = conn.execute(
+                "SELECT text, json_extract(raw_json, '$.message_id'), "
+                "json_extract(raw_json, '$.message_seq'), json_extract(raw_json, '$.real_id') " + base,
+                params,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute('SELECT text, raw_json ' + base, params).fetchall()
+            out: dict[str, str] = {}
+            for text, raw_json in rows:
+                try:
+                    raw = json.loads(raw_json or '{}')
+                except Exception:
+                    continue
+                for mid in raw_message_ids(raw) & needed:
+                    out[mid] = text or ''
+            return out
+        by_id: dict[str, str] = {}
+        for text, *ids in rows:
+            for value in ids:
+                if value is None:
+                    continue
+                key = str(value)
+                if key in needed and key not in by_id:
+                    by_id[key] = text or ''
+        return by_id
+
     def recent_records(self, scope: str, limit: int = 100) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, user_id, text, links_json, raw_json FROM messages WHERE scope = ? ORDER BY id DESC LIMIT ?',
                 (scope, int(limit)),
             ).fetchall()
-            context_rows = conn.execute(
-                'SELECT text, raw_json FROM messages WHERE scope = ? ORDER BY id DESC LIMIT ?',
-                (scope, max(int(limit) * 5, 500)),
-            ).fetchall()
-        by_message_id: dict[str, str] = {}
-        for text, raw_json in context_rows:
-            try:
-                raw = json.loads(raw_json or '{}')
-            except Exception:
-                raw = {}
-            for mid in raw_message_ids(raw):
-                by_message_id[mid] = text or ''
+            parsed = []
+            needed: set[str] = set()
+            for msg_id, seen_at, user_id, text, links_json, raw_json in reversed(rows):
+                try:
+                    links = json.loads(links_json or '[]')
+                except Exception:
+                    links = []
+                try:
+                    raw = json.loads(raw_json or '{}')
+                except Exception:
+                    raw = {}
+                reply_id = reply_to_message_id(raw)
+                if reply_id:
+                    needed.add(reply_id)
+                parsed.append((msg_id, seen_at, user_id, text, links, raw, reply_id))
+            by_message_id = self._reply_text_map(conn, scope, needed)
         records = []
-        for msg_id, seen_at, user_id, text, links_json, raw_json in reversed(rows):
-            try:
-                links = json.loads(links_json or '[]')
-            except Exception:
-                links = []
-            try:
-                raw = json.loads(raw_json or '{}')
-            except Exception:
-                raw = {}
-            reply_id = reply_to_message_id(raw)
+        for msg_id, seen_at, user_id, text, links, raw, reply_id in parsed:
             records.append({
                 'id': msg_id,
                 'seen_at': seen_at,
@@ -708,38 +773,32 @@ class Store:
         与 recent_records 结构一致（含 quoted_text / reply_to_message_id），
         供历史图片绑定判定使用——取图片当时附近的窗口，而非当前最新消息。
         """
+        if before_id is None:
+            return self.recent_records(scope, limit=limit)
         with closing(sqlite3.connect(self.path)) as conn:
-            if before_id is not None:
-                rows = conn.execute(
-                    'SELECT id, seen_at, user_id, text, links_json, raw_json '
-                    'FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
-                    (scope, int(before_id), int(limit)),
-                ).fetchall()
-                context_rows = conn.execute(
-                    'SELECT text, raw_json FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
-                    (scope, int(before_id), max(int(limit) * 5, 500)),
-                ).fetchall()
-            else:
-                return self.recent_records(scope, limit=limit)
-        by_message_id: dict[str, str] = {}
-        for text, raw_json in context_rows:
-            try:
-                raw = json.loads(raw_json or '{}')
-            except Exception:
-                raw = {}
-            for mid in raw_message_ids(raw):
-                by_message_id[mid] = text or ''
+            rows = conn.execute(
+                'SELECT id, seen_at, user_id, text, links_json, raw_json '
+                'FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
+                (scope, int(before_id), int(limit)),
+            ).fetchall()
+            parsed = []
+            needed: set[str] = set()
+            for msg_id, seen_at, user_id, text, links_json, raw_json in reversed(rows):
+                try:
+                    links = json.loads(links_json or '[]')
+                except Exception:
+                    links = []
+                try:
+                    raw = json.loads(raw_json or '{}')
+                except Exception:
+                    raw = {}
+                reply_id = reply_to_message_id(raw)
+                if reply_id:
+                    needed.add(reply_id)
+                parsed.append((msg_id, seen_at, user_id, text, links, raw, reply_id))
+            by_message_id = self._reply_text_map(conn, scope, needed, before_id=before_id)
         records = []
-        for msg_id, seen_at, user_id, text, links_json, raw_json in reversed(rows):
-            try:
-                links = json.loads(links_json or '[]')
-            except Exception:
-                links = []
-            try:
-                raw = json.loads(raw_json or '{}')
-            except Exception:
-                raw = {}
-            reply_id = reply_to_message_id(raw)
+        for msg_id, seen_at, user_id, text, links, raw, reply_id in parsed:
             records.append({
                 'id': msg_id,
                 'seen_at': seen_at,

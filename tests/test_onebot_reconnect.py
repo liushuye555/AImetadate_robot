@@ -39,6 +39,12 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
     async def fake_call(ws, action, params):
         return {'data': {'user_id': 1, 'nickname': 'test'}}
 
+    probe_calls = {'count': 0}
+
+    async def fake_probe(config):
+        probe_calls['count'] += 1
+        return {'qqLoggedIn': True, 'qqNumber': '1', 'qqNickname': 'test'}
+
     async def fake_sleep(secs):
         calls['sleep'] += 1
         if calls['sleep'] >= 2:
@@ -49,6 +55,7 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
 
     monkeypatch.setattr(onebot.websockets, 'connect', fake_connect)
     monkeypatch.setattr(onebot, 'call_action', fake_call)
+    monkeypatch.setattr(onebot, 'probe_login_info', fake_probe)
     monkeypatch.setattr(asyncio, 'sleep', fake_sleep)
     monkeypatch.setattr(onebot, 'background_sync_loop', fake_noop)
     monkeypatch.setattr(onebot, 'image_worker_loop', fake_noop)
@@ -67,5 +74,6 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
     with pytest.raises(StopRetry):
         asyncio.run(onebot.run(config))
     assert calls['connect'] == 2  # 首次失败后重试成功
+    assert probe_calls['count'] == 1  # 登录探测在独立连接上完成
     assert calls['status'][-1]['bot'] is False  # 退出状态如实
     assert calls['status'][-1]['onebot'] is False

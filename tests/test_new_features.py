@@ -505,6 +505,7 @@ def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
     config = AppConfig(sticker_repeat_threshold=3, load_aware_enabled=False)
     event = text_event("1", "图")
     collection.collect_event(store, event, config)  # 第 1 次：未达阈值
+    collection.drain_deferred_images(store, config)
     rows = store.recent_images_all(limit=5)
     assert rows and rows[0].get("retention_reason") != "sticker_filtered"
     for _ in range(2):  # 再插入 2 次，累计 3 次达到阈值
@@ -513,5 +514,6 @@ def test_sticker_requires_repeat_count(tmp_path, monkeypatch):
             "kept_path": None, "retention_reason": "candidate",
         }, raw={})
     collection.collect_event(store, event, config)  # 第 4 次：达阈值 → 表情包
+    collection.drain_deferred_images(store, config)
     rows = store.recent_images_all(limit=5)
     assert rows[0].get("retention_reason") == "sticker_filtered"

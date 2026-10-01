@@ -88,9 +88,11 @@ def test_same_event_replay_not_duplicated(tmp_path, monkeypatch):
     monkeypatch.setattr(collection, 'analyze_image', lambda p: None)
 
     event = image_event(1001)
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, event, config)
+    drain_deferred_images(store, config)
     collect_event(store, event, config)  # 重放（如 get_msg 重拉）
+    drain_deferred_images(store, config)
 
     assert len(calls) == 1  # 第二次直接幂等短路，不再下载
     assert len(rows(store)) == 1
@@ -111,8 +113,9 @@ def test_multi_segment_message_each_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(collection, 'analyze_image', lambda p: None)
 
     event = image_event(1002, n_images=3)
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, event, config)
+    drain_deferred_images(store, config)
 
     assert len(calls) == 3
     all_rows = rows(store)
@@ -122,6 +125,7 @@ def test_multi_segment_message_each_recorded(tmp_path, monkeypatch):
 
     # 重放整条消息也不新增
     collect_event(store, event, config)
+    drain_deferred_images(store, config)
     assert len(rows(store)) == 3
 
 
@@ -138,9 +142,11 @@ def test_same_image_in_different_messages_both_kept(tmp_path, monkeypatch):
     monkeypatch.setattr(collection, 'process_image_url', fake_process_image_url)
     monkeypatch.setattr(collection, 'analyze_image', lambda p: None)
 
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, image_event(1003), config)
+    drain_deferred_images(store, config)
     collect_event(store, image_event(1004), config)  # 不同消息，同一张图
+    drain_deferred_images(store, config)
 
     assert len(rows(store)) == 2  # 跨消息不误拦
 
@@ -409,8 +415,9 @@ def test_metadata_with_tool_fingerprint_confirmed_obfuscated(tmp_path, monkeypat
         lambda url, **kw: _metadata_result(url, 'sha-obf', kept))
     monkeypatch.setattr(collection, 'analyze_image', analyze_image_real)
 
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, image_event(2001), config)
+    drain_deferred_images(store, config)
 
     conn = sqlite3.connect(store.path)
     try:
@@ -436,8 +443,9 @@ def test_metadata_fingerprint_but_natural_pixels_stays(tmp_path, monkeypatch):
         lambda url, **kw: _metadata_result(url, 'sha-clean', kept))
     monkeypatch.setattr(collection, 'analyze_image', analyze_image_real)
 
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, image_event(2002), config)
+    drain_deferred_images(store, config)
 
     conn = sqlite3.connect(store.path)
     try:
@@ -474,8 +482,9 @@ def test_metadata_without_fingerprint_skips_pixel_scan(tmp_path, monkeypatch):
     monkeypatch.setattr(collection, 'analyze_image',
                         lambda p: calls.append(p) or None)
 
-    from qq_onebot_whitelist.collection import collect_event
+    from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
     collect_event(store, image_event(2003), config)
+    drain_deferred_images(store, config)
 
     assert calls == []  # 指纹未命中，不做像素分析
     conn = sqlite3.connect(store.path)
@@ -525,3 +534,60 @@ def test_xmp_embedded_comfyui_prompt_confirmed(tmp_path):
     meta = parse_image_metadata(p)
     assert meta.has_ai_metadata
     assert meta.ai_source == 'ComfyUI'
+
+
+# ---------- 图片段幂等键实体化：旧库迁移回填 + 索引点查 ----------
+
+def test_image_segment_idempotency_backfills_legacy_rows(tmp_path):
+    """旧库存量行（幂等键只在 raw_json 里）经迁移回填后走索引点查。"""
+    from pathlib import Path
+
+    from qq_onebot_whitelist.store import Store
+
+    data = tmp_path / 'data'
+    data.mkdir(parents=True)
+    db = data / 'bot.db'
+    conn = sqlite3.connect(db)
+    # 旧 schema：无 message_db_id / segment_index 列
+    conn.execute("""CREATE TABLE images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        scope TEXT, user_id TEXT, url TEXT, sha256 TEXT, size INTEGER, format TEXT,
+        width INTEGER, height INTEGER, metadata_keys_json TEXT, has_ai_metadata INTEGER,
+        ai_source TEXT, text_excerpt TEXT, kept_path TEXT, retention_reason TEXT,
+        saved_category TEXT, raw_json TEXT)""")
+    conn.execute(
+        "INSERT INTO images (scope, raw_json, retention_reason) VALUES ('group:1', ?, 'candidate')",
+        (json.dumps({'image': {'url': 'x'}, 'message_db_id': 7, 'segment_index': 2}),))
+    conn.commit()
+    conn.close()
+
+    Store(db)  # 迁移：加列 + 索引 + 一次性回填
+
+    reopened = Store(db)
+    assert reopened.image_segment_processed('group:1', 7, 2) is True
+    assert reopened.image_segment_processed('group:1', 7, 3) is False  # 段序号隔离
+    assert reopened.image_segment_processed('group:2', 7, 2) is False  # scope 隔离
+
+    # 新行直接写实体列
+    reopened.record_image(scope='group:1', user_id='u', result={
+        'sha256': 's1', 'retention_reason': 'candidate', 'kept_path': None,
+    }, raw={'image': {'url': 'y'}, 'message_db_id': 9, 'segment_index': 0})
+    assert reopened.image_segment_processed('group:1', 9, 0) is True
+    assert reopened.image_segment_processed('group:1', 9, 1) is False
+
+
+# ---------- is_forward_event：按段类型判定，不再做全文子串匹配 ----------
+
+def test_is_forward_event_by_segment_not_substring():
+    assert collection.is_forward_event({'message': [{'type': 'forward', 'data': {'id': 'abc'}}]}) is True
+    # 正文含 forward 一词的普通文本不再被误判（forwards 关闭的群此前会整条丢弃）
+    assert collection.is_forward_event({
+        'message': [{'type': 'text', 'data': {'text': '把这个 forward 给我'}}],
+    }) is False
+    assert collection.is_forward_event({
+        'message_type': 'forward',
+        'message': [{'type': 'text', 'data': {'text': 'hi'}}],
+    }) is True
+    # CQ 码字符串格式兼容
+    assert collection.is_forward_event({'message': '[CQ:forward,id=abc]'}) is True
+    assert collection.is_forward_event({'message': '[CQ:text,text=hello]'}) is False

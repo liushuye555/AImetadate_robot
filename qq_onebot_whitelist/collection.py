@@ -18,7 +18,6 @@ from .image_lifecycle import CandidateImage, promote_candidate
 from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, has_tool_encoder_fingerprint, restore_image, safe_restore
-from .load_aware import load_aware_ok
 from .prompt_binding import bind_prompt_for_image
 from .prompt_binding import is_params_message, is_prompt_message
 
@@ -27,7 +26,9 @@ PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
 _AI_MATCH_CACHE: dict[tuple[str, str], bool] = {}
 _deferred_images: deque[tuple] = deque()
 _deferred_lock = Lock()
-MAX_DEFERRED_IMAGES = 300
+# 图片处理永远走后台队列（image_worker_loop 逐张消费），队列是唯一的缓冲；
+# 历史补采/刷屏突发时一屏几十张，给足余量又防失控
+MAX_DEFERRED_IMAGES = 1500
 
 # 好评/反向绑定的回看窗口（秒）。历史数据（2026-09）：好评晋升中位间隔 <1 分钟，
 # 30 分钟以上的"迟到好评"多为闲聊误晋升；群内批量发图后单条好评很常见，
@@ -51,8 +52,20 @@ def collection_allows(scope: str, kind: str, config: AppConfig) -> bool:
 
 
 def is_forward_event(event: dict[str, Any]) -> bool:
-    """判断消息是否为转发消息（OneBot 转发段或转发类型）。"""
-    return event.get("message_type") == "forward" or "forward" in json.dumps(event, ensure_ascii=False)
+    """判断消息是否为转发消息（OneBot forward 段或转发类型）。
+
+    此前对整个事件 json.dumps 后找 "forward" 子串：正文含 forward 一词的
+    普通消息会被误判（forwards 关闭的群被整条丢弃），且每条消息多一次大
+    JSON 序列化。只看段类型即可。
+    """
+    if event.get('message_type') == 'forward':
+        return True
+    message = event.get('message')
+    if isinstance(message, list):
+        return any(isinstance(segment, dict) and segment.get('type') == 'forward' for segment in message)
+    if isinstance(message, str):
+        return '[CQ:forward' in message
+    return False
 
 
 def forward_ids(event: dict[str, Any]) -> list[str]:
@@ -302,12 +315,29 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
     collect_custom(store, event, text, config)
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return
-    load_ok = load_aware_ok(config)
+    # 图片处理永远走后台队列：同步路径包含最长 30s 的下载 + PIL/phash/Gilbert
+    # 分析，直接跑在 WebSocket 事件循环里会卡住所有消息（负载越低越阻塞）。
+    # 负载感知的推迟/消费由 onebot.image_worker_loop 负责。
     for index, image in enumerate(extract_image_segments(event)):
         image['segment_index'] = index  # 事件幂等键的一部分（scope+消息+段序号）
-        if not load_ok:
-            defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id'), text))
-            continue
+        if not defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id'), text)):
+            # 队列满：此前是无日志静默丢图，至少要让运维看得见
+            print(f'image defer queue full, dropped image: scope={scope} message_db_id={message_db_id} segment={index}')
+
+
+def drain_deferred_images(store: Store, config: AppConfig) -> int:
+    """同步清空图片处理队列，返回处理张数（测试/维护用）。
+
+    生产路径由 onebot.image_worker_loop 在后台线程逐张消费；这里提供同一条
+    处理管线的同步出口，供测试在 collect_event 后立即断言结果。
+    """
+    processed = 0
+    while True:
+        item = pop_deferred_image()
+        if item is None:
+            return processed
+        scope, user_id, image, nearby_text, message_db_id, message_id, own_text = item
+        event = {'message_id': message_id} if message_id is not None else None
         process_event_image(
             store,
             scope=scope,
@@ -317,8 +347,9 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
             message_db_id=message_db_id,
             config=config,
             event=event,
-            own_text=text,
+            own_text=own_text,
         )
+        processed += 1
 
 
 def defer_event_image(item: tuple) -> bool:
