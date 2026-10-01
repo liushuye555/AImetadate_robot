@@ -118,6 +118,10 @@ async def startup_history_groups(ws, config: AppConfig) -> list[str]:
     return sorted(config.startup_history_groups)
 
 
+# 历史补采停滞页数上限：连续多页零新入库即认为游标消息已被清理，提前止损
+STARTUP_HISTORY_STALL_PAGES = 20
+
+
 async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
     if not config.startup_history_enabled or not config.feature_startup_history:
         return
@@ -138,6 +142,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
         # 无游标（首次运行）仍按 pages 限深，避免首启回填过深
         dynamic = bool(known_newest) and not config.startup_history_all
         page_limit = config.startup_history_max_pages if (config.startup_history_all or dynamic) else config.startup_history_pages
+        stall_pages = 0
         for page in range(max(1, page_limit)):
             params = {
                 'group_id': int(group_id),
@@ -150,6 +155,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
             if not messages:
                 break
             next_seq = messages[0].get('message_seq') or seq
+            page_new = 0
             for msg in messages:
                 if msg.get('post_type') != 'message':
                     # 与 history_import 对齐：API 返回的历史消息缺 post_type，直接喂会被采集入口丢掉
@@ -165,11 +171,19 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
                     if newest_seen is None:
                         newest_seen = msg_seq
                 if not is_blocked_event(msg, config):
-                    record_event(store, msg, config)
+                    if record_event(store, msg, config):
+                        page_new += 1
                     total += 1
             if next_seq:
                 oldest_seen = str(next_seq)
+            # 连续多页零新入库：游标消息多半已被 NapCat 历史清理，继续翻只是
+            # 重复去重（数据无害但每次重连都要翻满上限），提前止损
+            stall_pages = stall_pages + 1 if page_new == 0 else 0
             if reached_known or not next_seq or next_seq == seq:
+                break
+            if stall_pages >= STARTUP_HISTORY_STALL_PAGES:
+                print(f'startup history catch-up: group {group_id} 连续 {stall_pages} 页无新入库，'
+                      f'疑似游标消息已被清理，提前停止（中间可能有缺口）')
                 break
             seq = next_seq
         if dynamic and not reached_known and newest_seen:
@@ -456,9 +470,9 @@ async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
         await asyncio.sleep(300)
 
 
-def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None:
-    """采集委托：完整流水线在 collection.collect_event。"""
-    collect_event(store, event, config)
+def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> bool:
+    """采集委托：完整流水线在 collection.collect_event。返回消息行是否新插入。"""
+    return collect_event(store, event, config)
 
 
 def forward_sub_event(event: dict[str, Any], forward_id: str, sub: dict[str, Any], index: int) -> dict[str, Any]:
@@ -518,9 +532,10 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
     if _is_self_message(event):
         return False
     if event.get('post_type') == 'notice' and event.get('notice_type') == 'group_recall':
-        # 撤回审计：只记事件不回滚已采集内容
+        # 撤回审计：只记事件不回滚已采集内容。notice 事件没有 message_type 字段，
+        # is_blocked_event 判不了屏蔽群，这里直接对 group_id 判。
         gid = str(event.get('group_id') or '')
-        if gid and not is_blocked_event(event, config):
+        if gid and gid not in config.blocked_groups:
             try:
                 store.record_group_recall(
                     scope=f'group:{gid}',
@@ -732,12 +747,16 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                 *(t for t in (sync_task, image_task) if not t.done()),
                 return_exceptions=True,
             )
-            control.write_status(
-                {"napcat": control.port_open(control.NAPCAT_PORT),
-                 "onebot": False, "bot": False,
-                 "qqLoggedIn": False, "qqNumber": "", "qqNickname": "",
-                 "manualStop": control.manual_stop_requested()}
-            )
+            try:
+                control.write_status(
+                    {"napcat": control.port_open(control.NAPCAT_PORT),
+                     "onebot": False, "bot": False,
+                     "qqLoggedIn": False, "qqNumber": "", "qqNickname": "",
+                     "manualStop": control.manual_stop_requested()}
+                )
+            except Exception as exc:
+                # 断线兜底状态写失败（如 Windows rename 撞上面板只读句柄）不能炸掉重连循环
+                print(f'status write failed: {type(exc).__name__}: {exc}')
         print(f'OneBot disconnected; reconnecting in {retry_delay}s')
         await asyncio.sleep(retry_delay)
         retry_delay = min(retry_delay * 2, 60)

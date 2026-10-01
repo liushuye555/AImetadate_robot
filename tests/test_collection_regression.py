@@ -89,9 +89,9 @@ def test_same_event_replay_not_duplicated(tmp_path, monkeypatch):
 
     event = image_event(1001)
     from qq_onebot_whitelist.collection import collect_event, drain_deferred_images
-    collect_event(store, event, config)
+    assert collect_event(store, event, config) is True  # 新消息
     drain_deferred_images(store, config)
-    collect_event(store, event, config)  # 重放（如 get_msg 重拉）
+    assert collect_event(store, event, config) is False  # 重放（如 get_msg 重拉）
     drain_deferred_images(store, config)
 
     assert len(calls) == 1  # 第二次直接幂等短路，不再下载
@@ -591,3 +591,35 @@ def test_is_forward_event_by_segment_not_substring():
     # CQ 码字符串格式兼容
     assert collection.is_forward_event({'message': '[CQ:forward,id=abc]'}) is True
     assert collection.is_forward_event({'message': '[CQ:text,text=hello]'}) is False
+
+
+# ---------- 下载体积上限：归档预算生效前防超大 URL 撑爆磁盘 ----------
+
+def test_download_image_aborts_over_size_cap(tmp_path, monkeypatch):
+    from qq_onebot_whitelist import images as images_mod
+
+    monkeypatch.setattr(images_mod, 'MAX_DOWNLOAD_BYTES', 3 * 1024 * 1024)
+
+    class FakeResp:
+        def __init__(self):
+            self._left = 4 * 1024 * 1024
+
+        def read(self, n):
+            if self._left <= 0:
+                return b''
+            chunk = b'x' * min(n, self._left)
+            self._left -= len(chunk)
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(images_mod.urllib.request, 'urlopen', lambda req, timeout: FakeResp())
+
+    tmp_dir = tmp_path / 'dl'
+    with pytest.raises(ValueError):
+        images_mod.download_image('https://x.test/big.png', tmp_dir)
+    assert list(tmp_dir.glob('.download-*')) == []  # 失败后临时文件已清理

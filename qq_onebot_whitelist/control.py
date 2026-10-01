@@ -27,7 +27,9 @@ def write_status(data: dict) -> None:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     payload = dict(data)
     payload["updatedAt"] = datetime.now().astimezone().isoformat(timespec="seconds")
-    tmp = status_path().with_suffix(".json.tmp")
+    # 每个进程用独立 tmp 名：bot 与面板进程共用固定名会互相覆盖，
+    # Windows 上 replace 撞上面板的只读句柄还会抛 PermissionError
+    tmp = status_path().with_suffix(f".json.tmp-{os.getpid()}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.replace(status_path())
 

@@ -102,3 +102,61 @@ def test_store_shared_across_threads(tmp_path):
     thread.start()
     thread.join()
     assert seen['count'] == 2
+
+
+def test_group_recall_audit_skips_blocked_groups(tmp_path):
+    """屏蔽群的撤回不记审计：notice 事件没有 message_type，必须按 group_id 判。"""
+    import asyncio
+
+    from qq_onebot_whitelist.config import AppConfig
+
+    store = Store(tmp_path / 'bot.db')
+    config = AppConfig(data_dir=tmp_path / 'data', blocked_groups={'999'})
+    blocked = {'post_type': 'notice', 'notice_type': 'group_recall',
+               'group_id': 999, 'user_id': 'u', 'operator_id': 'op', 'message_id': '1'}
+    allowed = {'post_type': 'notice', 'notice_type': 'group_recall',
+               'group_id': 1, 'user_id': 'u', 'operator_id': 'op', 'message_id': '2'}
+    asyncio.run(onebot.handle_event(None, blocked, config, store))
+    asyncio.run(onebot.handle_event(None, allowed, config, store))
+    conn = sqlite3.connect(store.path)
+    try:
+        rows = conn.execute('SELECT group_id FROM group_recalls').fetchall()
+    finally:
+        conn.close()
+    assert rows == [('1',)]
+
+
+def test_image_records_with_paths_single_query_matches_get_image_record(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    store.record_image(scope='group:1', user_id='u', result={
+        'sha256': 's1', 'retention_reason': 'candidate', 'kept_path': None,
+        'metadata_keys': ['a'], 'width': 10, 'height': 20,
+    }, raw={'image': {'url': 'x'}, 'message_db_id': 5, 'segment_index': 1})
+    store.record_image(scope='group:1', user_id='u', result={
+        'sha256': 's2', 'retention_reason': 'ai_metadata',
+        'kept_path': str(tmp_path / 'k.png'), 'prompt_key': 'pk', 'saved_category': 'c',
+    }, raw={})
+
+    records = store.image_records_with_paths()
+    assert len(records) == 1  # kept_path 为空的不返回
+    record = records[0]
+    assert record == store.get_image_record(record['id'])  # 两种取法同一结果
+    assert record['sha256'] == 's2' and record['prompt_key'] == 'pk'
+
+
+def test_clear_missing_image_paths_keeps_existing_clears_missing(tmp_path):
+    store = Store(tmp_path / 'bot.db')
+    kept = tmp_path / 'images' / 'ai' / 'ab' / 'k.png'
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b'x')
+    store.record_image(scope='group:1', user_id='u', result={
+        'sha256': 's1', 'retention_reason': 'candidate', 'kept_path': str(kept),
+    }, raw={})
+    store.record_image(scope='group:1', user_id='u', result={
+        'sha256': 's2', 'retention_reason': 'candidate',
+        'kept_path': str(tmp_path / 'images' / 'ai' / 'ab' / 'gone.png'),
+    }, raw={})
+
+    assert store.clear_missing_image_paths(tmp_path) == 1
+    assert store.get_image_record(1)['kept_path'] == str(kept)
+    assert not store.get_image_record(2)['kept_path']  # 缺失文件被清空

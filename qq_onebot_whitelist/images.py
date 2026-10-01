@@ -60,6 +60,10 @@ def verify_image_file(path: str | Path) -> str | None:
     return None
 
 
+# 单图下载上限：归档预算在下载完成后才生效，这里防异常大 URL 撑爆磁盘
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+
+
 def download_image(url: str, tmp_dir: Path, filename_hint: str | None = None, timeout: int = 30) -> Path:
     """下载到每次独占的临时文件，避免相同 QQ 链接并发写入互相覆盖。"""
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +75,15 @@ def download_image(url: str, tmp_dir: Path, filename_hint: str | None = None, ti
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with handle, urllib.request.urlopen(req, timeout=timeout) as resp:
-            shutil.copyfileobj(resp, handle)
+            received = 0
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > MAX_DOWNLOAD_BYTES:
+                    raise ValueError(f'image exceeds {MAX_DOWNLOAD_BYTES // (1024 * 1024)}MB download limit')
+                handle.write(chunk)
         return out
     except Exception:
         out.unlink(missing_ok=True)

@@ -278,17 +278,21 @@ def _bind_recent_candidate_if_needed(store: Store, scope: str, text: str, config
         return
 
 
-def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> None:
-    """按群采集策略记录一条消息及其中的链接、文件与图片。"""
+def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> bool:
+    """按群采集策略记录一条消息及其中的链接、文件与图片。
+
+    返回消息行是否新插入：历史补采靠它做停滞检测（连续多页零新入库即停）。
+    """
     if event.get('post_type') != 'message':
-        return
+        return False
     if is_collection_paused():
-        return
+        return False
     scope = scope_for_event(event)
     user_id = str(event.get('user_id') or '')
     text = extract_text(event)
     if is_forward_event(event) and not collection_allows(scope, 'forwards', config):
-        return
+        return False
+    prior_row_id = store.message_row_id(scope, event)
     store.record_message(
         scope=scope,
         user_id=user_id,
@@ -297,6 +301,8 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
         collect_links=collection_allows(scope, 'links', config),
     )
     message_db_id = store.message_row_id(scope, event)
+    # record_message 的返回值区分不了"未插入"和"插入但无链接"，用前后点查判定
+    inserted = prior_row_id is None and message_db_id is not None
     if collection_allows(scope, 'files', config):
         for file_item in extract_file_segments(event):
             if file_item.get('kind') in {'model', 'archive', 'workflow'}:
@@ -314,7 +320,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
     _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
     collect_custom(store, event, text, config)
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
-        return
+        return inserted
     # 图片处理永远走后台队列：同步路径包含最长 30s 的下载 + PIL/phash/Gilbert
     # 分析，直接跑在 WebSocket 事件循环里会卡住所有消息（负载越低越阻塞）。
     # 负载感知的推迟/消费由 onebot.image_worker_loop 负责。
@@ -323,6 +329,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> Non
         if not defer_event_image((scope, user_id, image, nearby_text, message_db_id, event.get('message_id'), text)):
             # 队列满：此前是无日志静默丢图，至少要让运维看得见
             print(f'image defer queue full, dropped image: scope={scope} message_db_id={message_db_id} segment={index}')
+    return inserted
 
 
 def drain_deferred_images(store: Store, config: AppConfig) -> int:

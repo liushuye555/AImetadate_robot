@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
+import os
 import sqlite3
 import threading
 from typing import Any
@@ -484,15 +485,14 @@ class Store:
             ).fetchone()
             return bool(row)
 
-    def get_image_record(self, image_id: int) -> dict[str, Any] | None:
-        with self._conn() as conn:
-            row = conn.execute(
-                '''SELECT id, scope, url, sha256, size, format, width, height, metadata_keys_json,
-                          has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason,
-                          saved_category, prompt_key, raw_json
-                   FROM images WHERE id = ?''',
-                (int(image_id),),
-            ).fetchone()
+    _IMAGE_RECORD_COLUMNS = (
+        'id, scope, url, sha256, size, format, width, height, metadata_keys_json, '
+        'has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason, '
+        'saved_category, prompt_key, raw_json'
+    )
+
+    @staticmethod
+    def _image_record_from_row(row) -> dict[str, Any] | None:
         if row is None:
             return None
         try:
@@ -510,6 +510,14 @@ class Store:
             'ai_source': row[10] or '', 'text_excerpt': row[11] or '', 'kept_path': row[12] or '',
             'retention_reason': row[13] or '', 'saved_category': row[14] or '', 'prompt_key': row[15] or '', 'raw': raw,
         }
+
+    def get_image_record(self, image_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                f'SELECT {self._IMAGE_RECORD_COLUMNS} FROM images WHERE id = ?',
+                (int(image_id),),
+            ).fetchone()
+        return self._image_record_from_row(row)
 
 
     def same_batch_image_records(self, image_id: int) -> list[dict[str, Any]]:
@@ -1078,9 +1086,18 @@ class Store:
         ]
 
     def image_records_with_paths(self) -> list[dict[str, Any]]:
+        """单条查询取全部带路径图片（此前 1+ N 次查询、每行重复解析 raw_json，
+        1.2 万行要上万次点查，挂在每次 sync_image_files 上）。"""
         with self._conn() as conn:
-            rows = conn.execute('SELECT id FROM images WHERE kept_path IS NOT NULL ORDER BY id').fetchall()
-        return [record for row in rows if (record := self.get_image_record(int(row[0]))) is not None]
+            rows = conn.execute(
+                f'SELECT {self._IMAGE_RECORD_COLUMNS} FROM images WHERE kept_path IS NOT NULL ORDER BY id'
+            ).fetchall()
+        records = []
+        for row in rows:
+            record = self._image_record_from_row(row)
+            if record is not None:
+                records.append(record)
+        return records
 
     def has_saved_image(self, sha256: str, category: str) -> bool:
         if not sha256 or not category:
@@ -1226,17 +1243,39 @@ class Store:
             conn.commit()
 
     def clear_missing_image_paths(self, base_dir: str | Path) -> int:
+        """清掉文件已不存在的 kept_path。
+
+        存在性判定用一次目录遍历（data/images 下 1.2 万文件，替代逐行 stat 的
+        ~1.7s/次同步）；遍历根之外的路径（外部归档等个别情况）仍逐个 stat，
+        行为与旧实现一致。
+        """
         base_dir = Path(base_dir)
-        changed = 0
+        image_root = base_dir / 'images'
+        existing: set[str] = set()
+        if image_root.is_dir():
+            for root, _dirs, files in os.walk(image_root):
+                for name in files:
+                    existing.add(os.path.normcase(os.path.join(root, name)))
+        image_root_prefix = os.path.normcase(str(image_root.absolute()) + os.sep)
         with self._conn() as conn:
             rows = conn.execute('SELECT id, kept_path FROM images WHERE kept_path IS NOT NULL').fetchall()
+            updates = []
             for image_id, kept_path in rows:
                 path = Path(kept_path)
                 if not path.is_absolute():
                     path = base_dir / path
-                if not path.exists():
-                    conn.execute('UPDATE images SET kept_path = NULL WHERE id = ?', (image_id,))
-                    changed += 1
+                absolute = os.path.normcase(str(path.absolute()))
+                if absolute.startswith(image_root_prefix):
+                    ok = absolute in existing
+                else:
+                    ok = path.exists()
+                if not ok:
+                    updates.append((image_id,))
+            if updates:
+                conn.executemany('UPDATE images SET kept_path = NULL WHERE id = ?', updates)
+                changed = len(updates)
+            else:
+                changed = 0
             conn.commit()
         return changed
 
