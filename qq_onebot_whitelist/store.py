@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
 import sqlite3
+import threading
 from typing import Any
 
 from .summary import extract_links
@@ -117,6 +118,25 @@ CREATE TABLE IF NOT EXISTS history_cursors (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 群名缓存：采集时随手 upsert，迁移时从 raw_json 一次性回填；
+-- 日报/资源页/视图构建不再全表扫描 messages.raw_json
+CREATE TABLE IF NOT EXISTS group_names (
+  group_id TEXT PRIMARY KEY,
+  name TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 撤回消息审计：只记事件，不回滚已采集内容（供人工核对）
+CREATE TABLE IF NOT EXISTS group_recalls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  scope TEXT,
+  group_id TEXT,
+  message_id TEXT,
+  user_id TEXT,
+  operator_id TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ai_context_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -221,16 +241,37 @@ class Store:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as conn:
+        self._local = threading.local()
+        with self._conn() as conn:
+            had_group_names = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_names'"
+            ).fetchone() is not None
             # WAL：每笔事务不再创建/删除 journal 文件，读写并发也更好；
             # 持久设置，设一次即生效
             conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA busy_timeout=5000')
             conn.executescript(SCHEMA)
-            self._migrate(conn)
+            self._migrate(conn, backfill_group_names=not had_group_names)
             conn.commit()
 
-    def _migrate(self, conn) -> None:
+    @contextmanager
+    def _conn(self):
+        """线程本地长连接：此前每条消息要新建 3~5 个 sqlite 连接，这里复用。
+
+        异常时回滚未提交事务（等价于旧 closing() 的"关闭即丢弃"语义）；
+        连接随线程存活，asyncio.to_thread 的默认执行器线程池自然复用。
+        """
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.path)
+            conn.execute('PRAGMA busy_timeout=5000')
+            self._local.conn = conn
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _migrate(self, conn, backfill_group_names: bool = False) -> None:
         existing = {row[1] for row in conn.execute('PRAGMA table_info(links)').fetchall()}
         for name, ddl in {
             'message_text': 'ALTER TABLE links ADD COLUMN message_text TEXT',
@@ -304,11 +345,23 @@ class Store:
         metadata_cols = {row[1] for row in conn.execute('PRAGMA table_info(link_metadata)').fetchall()}
         if 'resolved_url' not in metadata_cols:
             conn.execute('ALTER TABLE link_metadata ADD COLUMN resolved_url TEXT')
+        if backfill_group_names:
+            # 仅在 group_names 表刚创建时跑一次：从 raw_json 回填群名（新消息优先）
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO group_names (group_id, name) "
+                    "SELECT CAST(json_extract(raw_json, '$.group_id') AS TEXT), "
+                    "CAST(json_extract(raw_json, '$.group_name') AS TEXT) "
+                    "FROM messages WHERE json_extract(raw_json, '$.group_name') IS NOT NULL "
+                    "ORDER BY id DESC"
+                )
+            except sqlite3.OperationalError:
+                pass  # json1 不可用：group_name_map 会退回 raw_json 扫描兜底
 
     def record_message(self, *, scope: str, user_id: str, text: str, raw: dict[str, Any], collect_links: bool = True) -> list[str]:
         links = extract_links(text)
         message_key = canonical_message_key(raw)
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             # INSERT OR IGNORE：历史消息追赶与实时事件可能并发写入同一消息，
             # 先查后插存在竞态窗口（UNIQUE 约束冲突会让整个 handle_event 失败）
             cur = conn.execute(
@@ -322,6 +375,15 @@ class Store:
                         'INSERT INTO links (scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?)',
                         (scope, str(user_id), url, text, '', 'link'),
                     )
+            group_name = str(raw.get('group_name') or '').strip()
+            if group_name:
+                # 群名随手入缓存表：日报/资源页/视图构建不再扫 raw_json
+                gid = str(scope).split(':', 1)[-1]
+                conn.execute(
+                    'INSERT INTO group_names (group_id, name) VALUES (?, ?) '
+                    'ON CONFLICT(group_id) DO UPDATE SET name = excluded.name, updated_at = CURRENT_TIMESTAMP',
+                    (gid, group_name),
+                )
             conn.commit()
         return links if inserted else []
 
@@ -329,7 +391,7 @@ class Store:
         message_key = canonical_message_key(raw)
         if not message_key:
             return None
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT id FROM messages WHERE scope = ? AND message_key = ?',
                 (scope, message_key),
@@ -337,7 +399,7 @@ class Store:
         return int(row[0]) if row else None
 
     def record_link(self, *, scope: str, user_id: str, url: str, message_text: str = '', quoted_text: str = '', kind: str = 'link') -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO links (scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?)',
                 (scope, str(user_id), url, message_text, quoted_text, kind),
@@ -345,7 +407,7 @@ class Store:
             conn.commit()
 
     def record_file(self, *, scope: str, user_id: str, file_name: str, file_size: int | None, url: str | None, kind: str, raw: dict[str, Any]) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO files (scope, user_id, file_name, file_size, url, kind, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 (scope, str(user_id), file_name, file_size, url, kind, json.dumps(raw, ensure_ascii=False)),
@@ -353,7 +415,7 @@ class Store:
             conn.commit()
 
     def record_image(self, *, scope: str, user_id: str, result: dict[str, Any], raw: dict[str, Any]) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             digest = result.get('sha256')
             kept_path = result.get('kept_path')
             if digest and kept_path and result.get('retention_reason') != 'candidate':
@@ -406,7 +468,7 @@ class Store:
         """
         if not message_db_id:
             return False
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             try:
                 row = conn.execute(
                     'SELECT 1 FROM images WHERE scope = ? AND message_db_id = ? AND segment_index = ? LIMIT 1',
@@ -423,7 +485,7 @@ class Store:
             return bool(row)
 
     def get_image_record(self, image_id: int) -> dict[str, Any] | None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 '''SELECT id, scope, url, sha256, size, format, width, height, metadata_keys_json,
                           has_ai_metadata, ai_source, text_excerpt, kept_path, retention_reason,
@@ -454,7 +516,7 @@ class Store:
         record = self.get_image_record(int(image_id))
         if not record or not record.get('prompt_key'):
             return []
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT id FROM images WHERE scope = ? AND prompt_key = ? AND id <> ?"
                 " AND retention_reason = 'ai_metadata' AND kept_path IS NOT NULL ORDER BY id",
@@ -464,7 +526,7 @@ class Store:
                 if (candidate := self.get_image_record(int(row[0]))) is not None]
 
     def update_repaired_image(self, image_id: int, result: dict[str, Any]) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 '''UPDATE images SET
                    url = ?, sha256 = ?, size = ?, format = ?, width = ?, height = ?,
@@ -485,7 +547,7 @@ class Store:
             conn.commit()
 
     def update_image_restored(self, image_id: int, restored_path: str | None) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'UPDATE images SET restored_path = ? WHERE id = ?',
                 (restored_path, int(image_id)),
@@ -493,7 +555,7 @@ class Store:
             conn.commit()
 
     def mark_image_deobfuscated(self, image_id: int, *, kept_path: str, restored_path: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'UPDATE images SET kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?',
                 (kept_path, restored_path, int(image_id)),
@@ -501,14 +563,14 @@ class Store:
             conn.commit()
 
     def backfill_prompt_key(self, image_id: int, prompt_key: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET prompt_key=? WHERE id=?', (prompt_key, int(image_id)))
             conn.commit()
 
     def get_link_judge(self, url_key: str) -> str | None:
         if not url_key:
             return None
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT purpose FROM link_judges WHERE url_key = ?',
                 (url_key,),
@@ -518,7 +580,7 @@ class Store:
     def set_link_judge(self, url_key: str, purpose: str, tokens: int = 0) -> None:
         if not url_key:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO link_judges (url_key, purpose, tokens) VALUES (?, ?, ?) '
                 'ON CONFLICT(url_key) DO UPDATE SET purpose = excluded.purpose, '
@@ -531,7 +593,7 @@ class Store:
         """搬运去重：key 在最近 hours 小时内已转发过。"""
         if not key:
             return False
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT 1 FROM relay_log WHERE key = ? AND seen_at >= datetime('now', ?)",
                 (key, f'-{max(1, int(hours))} hours'),
@@ -541,7 +603,7 @@ class Store:
     def relay_log(self, key: str, kind: str = '', scope: str = '', text: str = '') -> None:
         if not key:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT OR REPLACE INTO relay_log (key, kind, scope, text) VALUES (?, ?, ?, ?)',
                 (key, str(kind or ''), str(scope or ''), str(text or '')),
@@ -553,7 +615,7 @@ class Store:
         """记录某群出现过该合并消息内容（用于"别人发过的不重复搬"）。"""
         if not content_hash:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO relay_seen (scope, content_hash) VALUES (?, ?) '
                 'ON CONFLICT(scope, content_hash) DO UPDATE SET seen_at = CURRENT_TIMESTAMP',
@@ -566,7 +628,7 @@ class Store:
         """目标群在最近 hours 小时内是否已出现过该合并消息内容。"""
         if not content_hash:
             return False
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT 1 FROM relay_seen WHERE scope = ? AND content_hash = ? "
                 "AND seen_at >= datetime('now', ?)",
@@ -575,7 +637,7 @@ class Store:
         return row is not None
 
     def record_chat_turn(self, scope: str, user_id: str, role: str, text: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO chat_turns (scope, user_id, role, text) VALUES (?, ?, ?, ?)',
                 (str(scope), str(user_id), str(role), str(text or '')),
@@ -583,7 +645,7 @@ class Store:
             conn.commit()
 
     def recent_chat_turns(self, scope: str, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT role, text, seen_at FROM chat_turns '
                 'WHERE scope = ? AND user_id = ? ORDER BY id DESC LIMIT ?',
@@ -599,7 +661,7 @@ class Store:
         """保存私聊收藏；同一用户同一内容不重复存。"""
         if not content_hash:
             return False
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             dup = conn.execute(
                 'SELECT 1 FROM favorites WHERE user_id = ? AND content_hash = ?',
                 (str(user_id), str(content_hash)),
@@ -615,7 +677,7 @@ class Store:
         return True
 
     def list_favorites(self, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, summary, forward_id FROM favorites '
                 'WHERE user_id = ? ORDER BY id DESC LIMIT ?',
@@ -626,7 +688,7 @@ class Store:
     def get_prompt_judge(self, prompt_hash: str) -> bool | None:
         if not prompt_hash:
             return None
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT verdict FROM prompt_judges WHERE prompt_hash = ?',
                 (prompt_hash,),
@@ -636,7 +698,7 @@ class Store:
     def set_prompt_judge(self, prompt_hash: str, verdict: bool, tokens: int = 0) -> None:
         if not prompt_hash:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO prompt_judges (prompt_hash, verdict, tokens) VALUES (?, ?, ?) '
                 'ON CONFLICT(prompt_hash) DO UPDATE SET verdict = excluded.verdict, '
@@ -648,7 +710,7 @@ class Store:
     def get_discussion_judge(self, text_hash: str) -> bool | None:
         if not text_hash:
             return None
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT verdict FROM discussion_judges WHERE text_hash = ?',
                 (text_hash,),
@@ -658,7 +720,7 @@ class Store:
     def set_discussion_judge(self, text_hash: str, verdict: bool, tokens: int = 0) -> None:
         if not text_hash:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO discussion_judges (text_hash, verdict, tokens) VALUES (?, ?, ?) '
                 'ON CONFLICT(text_hash) DO UPDATE SET verdict = excluded.verdict, '
@@ -669,7 +731,20 @@ class Store:
 
     def group_name_map(self) -> dict[str, str]:
         names: dict[str, str] = {}
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
+            rows = conn.execute('SELECT group_id, name FROM group_names').fetchall()
+        for group_id, name in rows:
+            if name:
+                names[str(group_id)] = str(name)
+                names[f'group:{group_id}'] = str(name)
+        if names:
+            return names
+        return self._group_name_map_legacy_scan()
+
+    def _group_name_map_legacy_scan(self) -> dict[str, str]:
+        """兜底：group_names 表为空时退回 raw_json 全表扫描（直插数据/回填不可用）。"""
+        names: dict[str, str] = {}
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT scope, raw_json FROM messages WHERE scope LIKE 'group:%' ORDER BY id DESC"
             ).fetchall()
@@ -686,6 +761,17 @@ class Store:
                 names[group_id] = name
                 names[str(scope)] = name
         return names
+
+    def record_group_recall(self, *, scope: str, group_id: str, message_id: str,
+                            user_id: str, operator_id: str) -> None:
+        """撤回审计：只记事件行，不回滚已采集内容（供人工核对）。"""
+        with self._conn() as conn:
+            conn.execute(
+                'INSERT INTO group_recalls (scope, group_id, message_id, user_id, operator_id) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (scope, group_id, message_id, user_id, operator_id),
+            )
+            conn.commit()
 
     @staticmethod
     def _reply_text_map(conn, scope: str, needed: set[str], before_id: int | None = None) -> dict[str, str]:
@@ -731,7 +817,7 @@ class Store:
         return by_id
 
     def recent_records(self, scope: str, limit: int = 100) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, user_id, text, links_json, raw_json FROM messages WHERE scope = ? ORDER BY id DESC LIMIT ?',
                 (scope, int(limit)),
@@ -775,7 +861,7 @@ class Store:
         """
         if before_id is None:
             return self.recent_records(scope, limit=limit)
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, user_id, text, links_json, raw_json '
                 'FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
@@ -813,7 +899,7 @@ class Store:
         return records
 
     def recent_records_all(self, limit: int = 100) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, scope, user_id, text, links_json, raw_json FROM messages ORDER BY id DESC LIMIT ?',
                 (int(limit),),
@@ -847,7 +933,7 @@ class Store:
         return '\n'.join(str(record.get('text') or '') for record in records if str(record.get('text') or '').strip())
 
     def recent_links(self, scope: str | None = None, limit: int = 20) -> list[str]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if scope:
                 rows = conn.execute('SELECT url FROM links WHERE scope = ? ORDER BY id DESC LIMIT ?', (scope, int(limit))).fetchall()
             else:
@@ -855,7 +941,7 @@ class Store:
         return [row[0] for row in rows]
 
     def recent_link_records(self, limit: int = 20, since: str | None = None) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if since:
                 rows = conn.execute(
                     'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links WHERE seen_at > ? ORDER BY id DESC LIMIT ?',
@@ -870,7 +956,7 @@ class Store:
 
     def recent_link_rows(self, limit: int = 10000) -> list[dict[str, Any]]:
         """轻量链接行（站点画像用）：只取 url 与上下文。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT url, message_text, quoted_text FROM links ORDER BY id DESC LIMIT ?',
                 (int(limit),),
@@ -879,7 +965,7 @@ class Store:
 
     def link_metadata_map(self, limit: int = 20000) -> dict[str, tuple[str, str]]:
         """url_key → (title, description)，一次查询避免逐条连接。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT url_key, title, description FROM link_metadata "
                 "WHERE title IS NOT NULL AND title != '' LIMIT ?",
@@ -888,7 +974,7 @@ class Store:
         return {r[0]: (r[1] or '', r[2] or '') for r in rows}
 
     def get_link_metadata(self, url_key: str) -> dict[str, Any] | None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT url_key, resolved_url, title, description, fetched_at, error FROM link_metadata WHERE url_key = ?',
                 (str(url_key),),
@@ -908,7 +994,7 @@ class Store:
         error: str = '',
         resolved_url: str = '',
     ) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 '''INSERT INTO link_metadata (url_key, resolved_url, title, description, fetched_at, error)
                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
@@ -923,7 +1009,7 @@ class Store:
             conn.commit()
 
     def recent_files(self, limit: int = 20, since: str | None = None) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if since:
                 rows = conn.execute(
                     'SELECT seen_at, scope, user_id, file_name, file_size, url, kind, raw_json FROM files WHERE seen_at > ? ORDER BY id DESC LIMIT ?',
@@ -947,7 +1033,7 @@ class Store:
         return result
 
     def recent_images(self, scope: str, limit: int = 10) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 '''SELECT id, format, width, height, size, has_ai_metadata, ai_source, kept_path, retention_reason
                    FROM images WHERE scope = ? ORDER BY id DESC LIMIT ?''',
@@ -969,7 +1055,7 @@ class Store:
         ]
 
     def recent_images_all(self, limit: int = 10) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 """SELECT id, scope, format, width, height, size, has_ai_metadata, ai_source, kept_path, retention_reason
                    FROM images ORDER BY id DESC LIMIT ?""",
@@ -992,14 +1078,14 @@ class Store:
         ]
 
     def image_records_with_paths(self) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute('SELECT id FROM images WHERE kept_path IS NOT NULL ORDER BY id').fetchall()
         return [record for row in rows if (record := self.get_image_record(int(row[0]))) is not None]
 
     def has_saved_image(self, sha256: str, category: str) -> bool:
         if not sha256 or not category:
             return False
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT 1 FROM images WHERE sha256 = ? AND retention_reason = 'chat_record_saved' AND saved_category = ? LIMIT 1",
                 (str(sha256), str(category)),
@@ -1022,7 +1108,7 @@ class Store:
             args.append(str(category))
         sql += ' ORDER BY id DESC LIMIT ?'
         args.append(int(limit))
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(sql, args).fetchall()
         result = []
         for row in rows:
@@ -1040,7 +1126,7 @@ class Store:
         return result
 
     def latest_candidate_image(self, scope: str, *, max_age_seconds: int | None = None) -> dict[str, Any] | None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if max_age_seconds is not None:
                 cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
                 row = conn.execute(
@@ -1067,7 +1153,7 @@ class Store:
     def recent_candidate_images(self, scope: str, *, max_age_seconds: int, limit: int = 12) -> list[dict[str, Any]]:
         """时间窗内仍处于候选状态的图（新→旧），供好评批量晋升。"""
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 '''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at FROM images
                    WHERE scope = ? AND retention_reason = 'candidate' AND kept_path IS NOT NULL
@@ -1087,7 +1173,7 @@ class Store:
         """时间窗内最新一张指定保留原因的图（新→旧取第一个有文件的），供好评标记上下文。"""
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(max_age_seconds))).strftime('%Y-%m-%d %H:%M:%S')
         placeholders = ','.join('?' for _ in reasons)
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 f'''SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, seen_at, context_reason FROM images
                     WHERE scope = ? AND retention_reason IN ({placeholders}) AND kept_path IS NOT NULL
@@ -1106,7 +1192,7 @@ class Store:
 
     def mark_image_context(self, image_id: int, context_reason: str) -> bool:
         """给图补一个交叉显示原因（仅当 context_reason 为空时不覆盖已有值）。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             cur = conn.execute(
                 'UPDATE images SET context_reason = ? WHERE id = ? AND (context_reason IS NULL OR context_reason = \'\')',
                 (str(context_reason), int(image_id)),
@@ -1115,34 +1201,34 @@ class Store:
             return cur.rowcount > 0
 
     def update_image_retention(self, image_id: int, *, kept_path: str | None, retention_reason: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET kept_path = ?, retention_reason = ? WHERE id = ?', (kept_path, retention_reason, int(image_id)))
             conn.commit()
 
     def set_bound_prompt(self, image_id: int, bound_prompt: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET bound_prompt = ? WHERE id = ?', (str(bound_prompt or '')[:2000], int(image_id)))
             conn.commit()
 
     def clear_image_path(self, kept_path: str | Path) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET kept_path = NULL WHERE kept_path = ?', (str(kept_path),))
             conn.commit()
 
     def replace_image_path(self, old_path: str | Path, new_path: str | Path) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET kept_path = ? WHERE kept_path = ?', (str(new_path), str(old_path)))
             conn.commit()
 
     def set_image_path_for_sha(self, sha256: str, path: str | Path) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('UPDATE images SET kept_path = ? WHERE sha256 = ?', (str(path), str(sha256)))
             conn.commit()
 
     def clear_missing_image_paths(self, base_dir: str | Path) -> int:
         base_dir = Path(base_dir)
         changed = 0
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute('SELECT id, kept_path FROM images WHERE kept_path IS NOT NULL').fetchall()
             for image_id, kept_path in rows:
                 path = Path(kept_path)
@@ -1155,24 +1241,24 @@ class Store:
         return changed
 
     def last_daily_report_sent_at(self) -> str | None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute('SELECT sent_at FROM daily_reports ORDER BY sent_at DESC LIMIT 1').fetchone()
         return str(row[0]) if row and row[0] else None
 
     def mark_daily_report_sent(self, report_date: str, content: str) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute('INSERT OR REPLACE INTO daily_reports (report_date, content) VALUES (?, ?)', (report_date, content))
             conn.commit()
 
     def has_daily_report(self, report_date: str) -> bool:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute('SELECT 1 FROM daily_reports WHERE report_date = ?', (report_date,)).fetchone()
         return bool(row)
 
     def record_custom_collection(self, *, rule: str, scope: str, user_id: str, text: str,
                                  images: list[str] | None = None, links: list[str] | None = None,
                                  files: list[str] | None = None, message_key: str | None = None) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if message_key:
                 existing = conn.execute(
                     'SELECT 1 FROM custom_collections WHERE rule = ? AND message_key = ?',
@@ -1192,7 +1278,7 @@ class Store:
             conn.commit()
 
     def recent_custom_collections(self, rule: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             if rule:
                 rows = conn.execute(
                     'SELECT rule, scope, user_id, text, images_json, links_json, files_json, seen_at '
@@ -1223,7 +1309,7 @@ class Store:
         """统计某群内同一图片（sha256）已出现的次数。"""
         if not sha256:
             return 0
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT COUNT(*) FROM images WHERE scope = ? AND sha256 = ?',
                 (scope, sha256),
@@ -1231,7 +1317,7 @@ class Store:
         return int(row[0]) if row else 0
 
     def save_image_hash(self, sha256: str, phash: int) -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO image_hashes (sha256, phash) VALUES (?, ?) '
                 'ON CONFLICT(sha256) DO UPDATE SET phash = excluded.phash, updated_at = CURRENT_TIMESTAMP',
@@ -1246,7 +1332,7 @@ class Store:
         """缓存小番茄混淆检测结果，避免重分类时重复分析。"""
         if not sha256:
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'INSERT INTO image_hashes (sha256, xfq_ratio, xfq_layers, xfq_obfuscated, xfq_confidence) '
                 'VALUES (?, ?, ?, ?, ?) '
@@ -1262,7 +1348,7 @@ class Store:
         """返回缓存的 (ratio, layers, obfuscated, confidence)；未检测过返回 None。"""
         if not sha256:
             return None
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT xfq_ratio, xfq_layers, xfq_obfuscated, xfq_confidence FROM image_hashes WHERE sha256 = ?',
                 (sha256,),
@@ -1277,7 +1363,7 @@ class Store:
         内容级判定（ok/not_ai）同时按 sha256 写入 image_hashes，
         同一内容的其他副本/转发不再重复花钱；missing 是文件问题，不进内容缓存。
         """
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 'UPDATE images SET vision_verdict = ?, vision_checked = 1 WHERE id = ?',
                 (verdict, int(image_id)),
@@ -1296,7 +1382,7 @@ class Store:
         sha256s = [s for s in sha256s if s]
         if not sha256s:
             return {}
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             placeholders = ', '.join('?' for _ in sha256s)
             rows = conn.execute(
                 f'SELECT sha256, vision_verdict FROM image_hashes '
@@ -1312,7 +1398,7 @@ class Store:
         其余不删除：kept_path 置空（不参与视图/磁盘引用）、merged_into 指向
         代表行 id，可随时审计或还原。
         """
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 '''SELECT json_extract(raw_json, '$.message_db_id') mid, sha256,
                           COUNT(*) c, MIN(id) keep_id
@@ -1338,7 +1424,7 @@ class Store:
 
     def vision_unchecked_images(self, *, categories: tuple[str, ...], limit: int = 20) -> list[tuple]:
         """未做过视觉复核的图：(id, sha256, kept_path, context, category)。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.row_factory = sqlite3.Row
             placeholders = ', '.join('?' for _ in categories)
             rows = conn.execute(
@@ -1354,7 +1440,7 @@ class Store:
 
     def demote_image_to_candidate(self, image_id: int) -> None:
         """视觉判定图不对：降到 04_候选待观察（数据不删，报告可见）。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 "UPDATE images SET retention_reason = 'candidate', "
                 "bound_prompt = NULL, vision_checked = 1 WHERE id = ?",
@@ -1364,7 +1450,7 @@ class Store:
 
     def archive_hashes(self, limit: int = 20000) -> list[tuple[int, str]]:
         """返回 AI 归档图片的 (phash, sha256) 列表。"""
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 'SELECT h.phash, h.sha256 FROM image_hashes h '
                 'JOIN images i ON i.sha256 = h.sha256 AND i.retention_reason = ? '
@@ -1374,7 +1460,7 @@ class Store:
         return [(int(row[0]), str(row[1])) for row in rows if row[0] is not None and str(row[0]).strip()]
 
     def get_history_cursor(self, group_id: str | int) -> dict[str, Any] | None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 'SELECT group_id, newest_seq, oldest_seq, updated_at FROM history_cursors WHERE group_id = ?',
                 (str(group_id),),
@@ -1387,7 +1473,7 @@ class Store:
         current = self.get_history_cursor(group_id) or {'newest_seq': None, 'oldest_seq': None}
         newest = str(newest_seq) if newest_seq is not None else current.get('newest_seq')
         oldest = str(oldest_seq) if oldest_seq is not None else current.get('oldest_seq')
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 '''INSERT INTO history_cursors (group_id, newest_seq, oldest_seq, updated_at)
                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -1400,7 +1486,7 @@ class Store:
             conn.commit()
 
     def record_ai_context_batch(self, *, scope: str, start_message_id: int, end_message_id: int, model: str, summary: str, raw_json: str = '') -> None:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.execute(
                 '''INSERT INTO ai_context_batches (scope, start_message_id, end_message_id, model, summary, raw_json)
                    VALUES (?, ?, ?, ?, ?, ?)''',
@@ -1416,22 +1502,22 @@ class Store:
             args.append(scope)
         sql += ' ORDER BY id DESC LIMIT ?'
         args.append(limit)
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(sql, args).fetchall()
         return [dict(row) for row in rows]
 
     def last_ai_context_end_message_id(self, scope: str) -> int:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute('SELECT COALESCE(MAX(end_message_id), 0) FROM ai_context_batches WHERE scope = ?', (scope,)).fetchone()
         return int(row[0] or 0)
 
     def max_message_id(self, scope: str) -> int:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute('SELECT COALESCE(MAX(id), 0) FROM messages WHERE scope = ?', (scope,)).fetchone()
         return int(row[0] or 0)
 
     def count_messages_after(self, scope: str, after_id: int) -> int:
-        with closing(sqlite3.connect(self.path)) as conn:
+        with self._conn() as conn:
             row = conn.execute('SELECT COUNT(*) FROM messages WHERE scope = ? AND id > ?', (scope, int(after_id))).fetchone()
         return int(row[0] or 0)

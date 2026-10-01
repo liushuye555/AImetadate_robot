@@ -68,7 +68,21 @@ def url_path(path: str) -> str:
 
 
 def group_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
+    """群名映射（id 与 scope 两种键）。优先读 group_names 缓存表；
+    表为空时退回 raw_json 扫描（直插数据/回填不可用的库）。"""
     names: dict[str, str] = {}
+    try:
+        cached = conn.execute('SELECT group_id, name FROM group_names').fetchall()
+    except sqlite3.OperationalError:
+        cached = []
+    for row in cached:
+        group_id = str(row[0])
+        name = str(row[1] or '').strip()
+        if name:
+            names[group_id] = name
+            names[f'group:{group_id}'] = name
+    if names:
+        return names
     try:
         rows = conn.execute("SELECT scope, raw_json FROM messages WHERE scope LIKE 'group:%' ORDER BY id DESC").fetchall()
     except sqlite3.OperationalError:

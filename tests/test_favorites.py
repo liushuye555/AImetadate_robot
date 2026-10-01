@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 
 import websockets
 
@@ -109,8 +110,14 @@ def test_save_replied_forward_images_saves_all_and_deduplicates_by_category(tmp_
         'ok': True, 'category': '旅行收藏', 'found': 4,
         'saved': 3, 'duplicates': 1, 'failed': 0,
     }
-    with store.path.open('rb') as f:
-        assert b'chat_record_saved' in f.read()  # sanity: database is non-empty binary
+    # sanity：数据确实落库（长连接下提交先进 WAL，不读主库文件原始字节）
+    conn = sqlite3.connect(store.path)
+    try:
+        saved_rows = conn.execute(
+            "SELECT COUNT(*) FROM images WHERE retention_reason = 'chat_record_saved'").fetchone()[0]
+    finally:
+        conn.close()
+    assert saved_rows == 3
     rows = store.saved_image_records('2718273234', category='旅行收藏')
     assert len(rows) == 3
     assert {row['saved_category'] for row in rows} == {'旅行收藏'}

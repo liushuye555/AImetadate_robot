@@ -461,6 +461,25 @@ def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> None
     collect_event(store, event, config)
 
 
+def forward_sub_event(event: dict[str, Any], forward_id: str, sub: dict[str, Any], index: int) -> dict[str, Any]:
+    """把转发节点包成可采集事件；合成稳定 message_id 供 message_key 去重。
+
+    此前子事件没有 message_id，唯一索引对 NULL 不生效——同一条转发每次
+    展开都会重复入库。节点自带真实 id 时优先用真实 id。
+    """
+    message_id = sub.get('message_id')
+    if message_id is None or message_id == '':
+        message_id = f'fwd-{forward_id}-{index}'
+    return {
+        'post_type': 'message',
+        'message_type': 'group',
+        'group_id': event.get('group_id'),
+        'user_id': sub.get('user_id') or '',
+        'message': sub.get('message') or [],
+        'message_id': message_id,
+    }
+
+
 async def collect_forward_contents(store: Store, event: dict[str, Any], config: AppConfig) -> None:
     """展开转发的合并消息：抓取实际内容并逐条采集（后台任务，不阻塞消息循环）。"""
     scope = scope_for_event(event)
@@ -484,15 +503,8 @@ async def collect_forward_contents(store: Store, event: dict[str, Any], config: 
                         continue
                     if data.get("echo") == echo:
                         messages = ((data.get("data") or {}).get("messages") or [])
-                        for sub in messages:
-                            sub_event = {
-                                "post_type": "message",
-                                "message_type": "group",
-                                "group_id": event.get("group_id"),
-                                "user_id": sub.get("user_id") or "",
-                                "message": sub.get("message") or [],
-                            }
-                            collect_event(store, sub_event, config)
+                        for index, sub in enumerate(messages):
+                            collect_event(store, forward_sub_event(event, fid, sub, index), config)
                         break
     except Exception as exc:
         print(f"expand forward failed: {type(exc).__name__}: {exc}")
@@ -504,6 +516,21 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
 
 async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
     if _is_self_message(event):
+        return False
+    if event.get('post_type') == 'notice' and event.get('notice_type') == 'group_recall':
+        # 撤回审计：只记事件不回滚已采集内容
+        gid = str(event.get('group_id') or '')
+        if gid and not is_blocked_event(event, config):
+            try:
+                store.record_group_recall(
+                    scope=f'group:{gid}',
+                    group_id=gid,
+                    message_id=str(event.get('message_id') or ''),
+                    user_id=str(event.get('user_id') or ''),
+                    operator_id=str(event.get('operator_id') or ''),
+                )
+            except Exception as exc:
+                print(f'recall audit failed: {type(exc).__name__}: {exc}')
         return False
     if event.get('post_type') != 'message':
         return False
