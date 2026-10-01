@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
-import os
 import sqlite3
 import threading
 from typing import Any
@@ -1245,18 +1244,11 @@ class Store:
     def clear_missing_image_paths(self, base_dir: str | Path) -> int:
         """清掉文件已不存在的 kept_path。
 
-        存在性判定用一次目录遍历（data/images 下 1.2 万文件，替代逐行 stat 的
-        ~1.7s/次同步）；遍历根之外的路径（外部归档等个别情况）仍逐个 stat，
-        行为与旧实现一致。
+        逐行 stat（NTFS 热缓存 ~1.7s/1.2万行）——曾试过一次目录遍历建存在性
+        集合，实测在 NTFS 上反而更慢（~3s），回退为直接 stat；
+        缺失行合并为一次 executemany 批量更新。
         """
         base_dir = Path(base_dir)
-        image_root = base_dir / 'images'
-        existing: set[str] = set()
-        if image_root.is_dir():
-            for root, _dirs, files in os.walk(image_root):
-                for name in files:
-                    existing.add(os.path.normcase(os.path.join(root, name)))
-        image_root_prefix = os.path.normcase(str(image_root.absolute()) + os.sep)
         with self._conn() as conn:
             rows = conn.execute('SELECT id, kept_path FROM images WHERE kept_path IS NOT NULL').fetchall()
             updates = []
@@ -1264,12 +1256,7 @@ class Store:
                 path = Path(kept_path)
                 if not path.is_absolute():
                     path = base_dir / path
-                absolute = os.path.normcase(str(path.absolute()))
-                if absolute.startswith(image_root_prefix):
-                    ok = absolute in existing
-                else:
-                    ok = path.exists()
-                if not ok:
+                if not path.exists():
                     updates.append((image_id,))
             if updates:
                 conn.executemany('UPDATE images SET kept_path = NULL WHERE id = ?', updates)
