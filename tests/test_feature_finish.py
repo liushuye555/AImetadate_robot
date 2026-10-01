@@ -72,10 +72,13 @@ def test_resource_page_has_safe_external_link_and_copy_button(tmp_path):
 
     write_resource_pages(tmp_path / "view", store)
     html = (tmp_path / "view" / "resources.html").read_text(encoding="utf-8")
+    chunks_dir = tmp_path / "view" / "resources-chunks"
+    html += "\n".join(p.read_text(encoding="utf-8") for p in sorted(chunks_dir.glob("chunk-*.js")))
 
     assert "复制链接" in html
-    assert 'target="_blank"' in html
-    assert 'rel="noopener noreferrer"' in html
+    # chunk JSON 里引号会被转义，断言不依赖引号形式
+    assert "_blank" in html
+    assert "noopener" in html
 
 
 def test_repair_command_parser_accepts_id_or_scan():

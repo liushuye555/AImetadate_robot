@@ -4,6 +4,16 @@ from qq_onebot_whitelist.resource_view import select_resource_links, write_resou
 from qq_onebot_whitelist.store import Store
 
 
+def _read_resources(view: Path) -> str:
+    """resources.html 页面壳 + 全部条目分块（分块改造后条目 HTML 在 JS 里）。"""
+    page = (view / 'resources.html').read_text(encoding='utf-8')
+    chunks_dir = view / 'resources-chunks'
+    chunks = '\n'.join(
+        p.read_text(encoding='utf-8') for p in sorted(chunks_dir.glob('chunk-*.js'))
+    ) if chunks_dir.is_dir() else ''
+    return page + '\n' + chunks
+
+
 def test_write_resource_pages_keeps_old_records_and_filters_low_value(tmp_path):
     db = tmp_path / 'bot.db'
     store = Store(db)
@@ -13,7 +23,8 @@ def test_write_resource_pages_keeps_old_records_and_filters_low_value(tmp_path):
 
     result = write_resource_pages(tmp_path / 'view', store)
 
-    resources = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    resources = _read_resources(tmp_path / 'view')
+    page = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
     files = (tmp_path / 'view' / 'files.html').read_text(encoding='utf-8')
     assert result == {'resource_links': 1, 'resource_files': 1}
     assert 'civitai.com/models/123/model' in resources
@@ -21,12 +32,14 @@ def test_write_resource_pages_keeps_old_records_and_filters_low_value(tmp_path):
     assert '好用的 lora' in resources
     assert 'kuaishou' not in resources.lower()
     # 共享样式骨架：返回总览、计数 chip、空结果提示与排序
-    assert '<a href="index.html">← 返回总览</a>' in resources
-    assert 'id="count"' in resources
-    assert 'id="noResult"' in resources
-    assert 'id="sortSel"' in resources
-    assert '最新优先' in resources
-    assert '<li data-time="' in resources
+    assert '<a href="index.html">← 返回总览</a>' in page
+    assert 'id="count"' in page
+    assert 'id="noResult"' in page
+    assert 'id="sortSel"' in page
+    assert '最新优先' in page
+    # 条目进 JS 分块（分块懒加载），页面壳不再内联全部 <li>
+    assert 'data-time=' in resources
+    assert '<li data-time="' not in page
     assert 'id="sortSel"' in files
     assert 'data-size="' in files
     assert 'data-name="' in files
@@ -42,7 +55,7 @@ def test_write_resource_pages_rebuilds_from_full_db_not_incremental_only(tmp_pat
     store.record_link(scope='group:1', user_id='u1', url='https://huggingface.co/a/b', message_text='新模型')
 
     write_resource_pages(tmp_path / 'view', store)
-    resources = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    resources = _read_resources(tmp_path / 'view')
 
     assert 'github.com/a/b' in resources
     assert 'huggingface.co/a/b' in resources
@@ -54,12 +67,13 @@ def test_resource_pages_keep_interesting_sites_with_short_description(tmp_path):
 
     result = write_resource_pages(tmp_path / 'view', store)
 
-    resources = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    resources = _read_resources(tmp_path / 'view')
+    page = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
     assert result['resource_links'] == 1
     assert 'https://weird-tools.example/paint' in resources
     assert '用途：值得一看' in resources
     assert '这个小网站可以在线试试效果' in resources
-    assert 'placeholder="搜索群名、文件名、简介或网址"' in resources
+    assert 'placeholder="搜索群名、文件名、简介或网址"' in page
 
 
 def test_resource_pages_keep_unknown_link_without_source_group(tmp_path):
@@ -68,7 +82,7 @@ def test_resource_pages_keep_unknown_link_without_source_group(tmp_path):
 
     result = write_resource_pages(tmp_path / 'view', store)
 
-    resources = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    resources = _read_resources(tmp_path / 'view')
     assert result['resource_links'] == 1
     assert 'https://unknown.example/item' in resources
     assert '群聊未说明用途' in resources

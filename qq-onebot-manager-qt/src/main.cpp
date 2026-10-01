@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QMessageBox>
+#include <QTimer>
 #include <QUrl>
 #include "app/SingleInstance.h"
 #include "core/AutoRestart.h"
@@ -167,7 +168,7 @@ int main(int argc, char *argv[]) {
         }
     });
     QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
-        ThemeManager::apply(qApp, theme == "dark" ? ThemeManager::Theme::Dark : ThemeManager::Theme::Light);
+        ThemeManager::apply(qApp, ThemeManager::fromName(theme));
     });
     // 侧栏「切换主题」：广播给设置页同步下拉框
     QObject::connect(&window, &MainWindow::themeToggled, settings, &SettingsPage::setTheme);
@@ -282,11 +283,17 @@ int main(int argc, char *argv[]) {
     QObject::connect(reports, &ReportsPage::sendRequested, reportControl, [reportControl] {
         reportControl->run({"-m", "qq_onebot_whitelist.control", "report-send"});
     });
-    QObject::connect(reports, &ReportsPage::viewRequested, reportControl, [reportControl] {
-        reportControl->run({"-m", "qq_onebot_whitelist.control", "view"});
+    // 重建视图走独立控制通道：跑完前按钮置灰、有状态提示，失败也可见
+    auto *viewControl = new ServiceControl(&window);
+    QObject::connect(reports, &ReportsPage::viewRequested, reports, [reports, viewControl] {
+        reports->setViewStatus(QStringLiteral("视图重建中…"));
+        viewControl->run({"-m", "qq_onebot_whitelist.control", "view"});
     });
-    QObject::connect(reportControl, &ServiceControl::finished, reports, [reports](bool ok, QString out) {
-        if (!ok) return;
+    QObject::connect(viewControl, &ServiceControl::finished, reports, [reports](bool ok, QString out) {
+        if (!ok) {
+            reports->setViewStatus("重建失败：" + out.trimmed());
+            return;
+        }
         const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
         if (doc.isObject() && doc.object().contains("categories"))
             reports->setCategories(doc.object().value("categories").toArray().toVariantList());
@@ -297,8 +304,12 @@ int main(int argc, char *argv[]) {
     // 启动时自动拉取已加入的群，填充群采集/群搬运页面的群列表
     scanControl->run({"-m", "qq_onebot_whitelist.control", "groups"});
 
-    // 启动时查询一次数据概况
+    // 启动时查询一次数据概况，此后每 60s 随状态轮询低频刷新
     fetchStats();
+    auto *statsTimer = new QTimer(&window);
+    statsTimer->setInterval(60000);
+    QObject::connect(statsTimer, &QTimer::timeout, fetchStats);
+    statsTimer->start();
 
     window.show();
     return app.exec();

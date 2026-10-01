@@ -477,12 +477,13 @@ def cmd_view_list(args: argparse.Namespace) -> int:
     """快速列出现有报告分类（不重建视图）。"""
     try:
         from .build_image_view import ALL_GALLERY_DIR
+        from .resource_view import RESOURCE_CHUNKS_DIR
         view = REPO_ROOT / "data" / "view"
         categories = []
         if view.exists():
             exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
             for p in sorted(view.iterdir()):
-                if not p.is_dir():
+                if not p.is_dir() or p.name == RESOURCE_CHUNKS_DIR:
                     continue
                 count = sum(1 for f in p.rglob("*") if f.is_file() and f.suffix.lower() in exts)
                 categories.append({"name": p.name, "count": count, "url": p.name + "/index.html"})

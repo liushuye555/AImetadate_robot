@@ -59,6 +59,8 @@ void LogsPage::appendChunk(const QString &text) {
         QTextCharFormat errorFormat;
         errorFormat.setForeground(QColor("#d64550"));
         m_view->setCurrentCharFormat(errorFormat);
+    } else {
+        m_view->setCurrentCharFormat(QTextCharFormat());  // 归零：错误色不污染后续非错误行
     }
     m_view->appendPlainText(text.trimmed());
     if (m_autoScroll->isChecked())

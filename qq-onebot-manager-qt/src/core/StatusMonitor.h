@@ -16,6 +16,9 @@ struct StatusSnapshot {
     bool manualStop = false;
     QString qqNumber;
     QString qqNickname;
+    int imageQueue = 0;
+    int recallCount = 0;
+    QString lastViewSync;
     QDateTime updatedAt;
 };
 

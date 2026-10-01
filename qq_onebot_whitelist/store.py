@@ -780,6 +780,10 @@ class Store:
             )
             conn.commit()
 
+    def recall_count(self) -> int:
+        with self._conn() as conn:
+            return int(conn.execute('SELECT COUNT(*) FROM group_recalls').fetchone()[0])
+
     @staticmethod
     def _reply_text_map(conn, scope: str, needed: set[str], before_id: int | None = None) -> dict[str, str]:
         """被引用消息 id -> 文本（只保留 needed 里出现的引用）。

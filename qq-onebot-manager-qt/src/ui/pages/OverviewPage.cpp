@@ -58,6 +58,9 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     stats->addWidget(makeStatCard(&m_statImages, Strings::zh("statImages"), this), 0, 0);
     stats->addWidget(makeStatCard(&m_statLinks, Strings::zh("statLinks"), this), 0, 1);
     stats->addWidget(makeStatCard(&m_statReport, Strings::zh("statLastReport"), this), 0, 2);
+    stats->addWidget(makeStatCard(&m_statQueue, QStringLiteral("图片队列"), this), 0, 3);
+    stats->addWidget(makeStatCard(&m_statRecall, QStringLiteral("撤回记录"), this), 0, 4);
+    stats->addWidget(makeStatCard(&m_statViewSync, QStringLiteral("视图同步"), this), 0, 5);
     layout->addLayout(stats);
 
     // 快捷操作卡：服务控制 + 数据入口分组，按钮网格对齐
@@ -153,6 +156,10 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
         ? (s.qqLoggedIn ? Strings::zh("running") : "未登录")
         : (s.qqNickname + " (" + s.qqNumber + ")");
     m_qq->setValue(account, s.qqLoggedIn);
+    // 采集健康度：队列积压 / 撤回记录 / 最近视图同步（随 30s 状态心跳更新）
+    m_statQueue->setText(s.imageQueue > 0 ? QStringLiteral("积压 %1").arg(s.imageQueue) : QStringLiteral("0"));
+    m_statRecall->setText(QString::number(s.recallCount));
+    m_statViewSync->setText(s.lastViewSync.isEmpty() ? QStringLiteral("无") : s.lastViewSync);
     if (!s.qqNumber.isEmpty() && s.qqNumber != m_avatarQQ) {
         m_avatarQQ = s.qqNumber;  // 每个账号只拉一次（含磁盘缓存）
         AvatarCache::instance().fetch("user", s.qqNumber, [this](const QPixmap &pm) {

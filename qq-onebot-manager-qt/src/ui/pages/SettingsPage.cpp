@@ -101,6 +101,7 @@ QWidget *SettingsPage::buildGeneralTab() {
     m_language->addItem("中文", "zh-CN");
     m_language->addItem("English", "en-US");
     m_theme = new QComboBox(general);
+    m_theme->addItem("跟随系统", "system");
     m_theme->addItem("浅色", "light");
     m_theme->addItem("深色", "dark");
     if (!m_pendingTheme.isEmpty())

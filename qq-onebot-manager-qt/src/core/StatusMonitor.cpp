@@ -18,6 +18,9 @@ StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int
     s.manualStop = obj.value("manualStop").toBool(false);
     s.qqNumber = obj.value("qqNumber").toString();
     s.qqNickname = obj.value("qqNickname").toString();
+    s.imageQueue = obj.value("imageQueue").toInt(0);
+    s.recallCount = obj.value("recallCount").toInt(0);
+    s.lastViewSync = obj.value("lastViewSync").toString();
     s.valid = true;
     return s;
 }
@@ -57,7 +60,9 @@ void StatusMonitor::publish(const StatusSnapshot &next) {
         next.collectionPaused != m_snapshot.collectionPaused ||
         next.manualStop != m_snapshot.manualStop ||
         next.qqNumber != m_snapshot.qqNumber ||
-        next.qqNickname != m_snapshot.qqNickname;
+        next.qqNickname != m_snapshot.qqNickname ||
+        next.imageQueue != m_snapshot.imageQueue ||
+        next.recallCount != m_snapshot.recallCount;
     m_snapshot = next;
     m_initialized = true;
     if (changed)

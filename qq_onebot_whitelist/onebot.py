@@ -15,6 +15,7 @@ from .collection import (
     ai_match_and_collect,
     collect_event,
     collection_allows,
+    deferred_image_count,
     forward_ids,
     is_collection_paused,
     is_forward_event,
@@ -29,6 +30,7 @@ from .load_aware import load_aware_defer_seconds, load_aware_ok, system_cpu_perc
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _sync_requested = threading.Event()
+_last_view_sync_at = ''
 
 
 def request_image_sync() -> None:
@@ -305,7 +307,8 @@ async def keepalive_loop(ws, config: AppConfig) -> None:
         await asyncio.sleep(30)
 
 
-async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] | None = None) -> None:
+async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] | None = None,
+                             store: Store | None = None) -> None:
     from . import control
     login = login_info or {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
     while True:
@@ -318,6 +321,10 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
                     "bot": True,
                     "collectionPaused": is_collection_paused(),
                     "manualStop": control.manual_stop_requested(),
+                    # 采集健康度：面板总览卡展示
+                    "imageQueue": deferred_image_count(),
+                    "recallCount": store.recall_count() if store else 0,
+                    "lastViewSync": _last_view_sync_at,
                     **login,
                 }
             )
@@ -419,6 +426,7 @@ async def image_worker_loop(config: AppConfig, store: Store) -> None:
 
 async def background_sync_loop(config: AppConfig) -> None:
     """负载感知的后台图片同步：CPU 忙时推迟，空闲后执行重分类+还原+重建视图。"""
+    global _last_view_sync_at
     last_sync = 0.0
     while True:
         if not load_aware_ok(config):
@@ -430,6 +438,7 @@ async def background_sync_loop(config: AppConfig) -> None:
                 counts = await asyncio.to_thread(
                     sync_image_files, _REPO_ROOT, ttl_hours=config.candidate_ttl_hours
                 )
+                _last_view_sync_at = time.strftime('%Y-%m-%d %H:%M')
                 print('image view synced: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
             except Exception as exc:
                 print(f'image view sync failed: {type(exc).__name__}: {exc}')
@@ -717,7 +726,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                 if config.feature_ai_context:
                     ai_task = asyncio.create_task(ai_context_loop(config_path, store))
                 keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
-                status_task = asyncio.create_task(status_writer_loop(ws, config, login_info))
+                status_task = asyncio.create_task(status_writer_loop(ws, config, login_info, store))
                 try:
                     async for raw in ws:
                         try:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import html
+import json
 from urllib.parse import urlparse
 
 from .content_utils import fallback_link_description, file_description, redact_secrets, resource_context
@@ -13,7 +15,8 @@ from .resources import (deterministic_category, domain_profiles, is_direct_image
 
 
 def _html_page(title: str, intro: str, sections: list[str], *, toolbar: str = '',
-               background: str = '', sort_options: list[tuple[str, str]] | None = None) -> str:
+               background: str = '', sort_options: list[tuple[str, str]] | None = None,
+               script: str | None = None) -> str:
     from .view_theme import page_shell
 
     search = ('<div class="search"><input id="filter" type="search" '
@@ -31,7 +34,7 @@ def _html_page(title: str, intro: str, sections: list[str], *, toolbar: str = ''
         f'<div class="toolbar"><div class="toolbar-inner">{search}{toolbar}{sort_html}</div></div>'
         + '\n'.join(sections)
         + '<div id="noResult">没有匹配的内容，换个关键词试试</div>'
-        + _RESOURCE_SCRIPT
+        + (script if script is not None else _RESOURCE_SCRIPT)
     )
     return page_shell(title=title, body=body, background=background)
 
@@ -67,6 +70,115 @@ _RESOURCE_SCRIPT = (
     'const old=b.textContent;b.textContent="已复制";setTimeout(()=>b.textContent=old,1200)}));'
     '</script>'
 )
+
+# 资源链接页分块加载：条目 HTML 进 JS 分块（此前 600 多条全量 DOM 一次进页面，
+# 637KB 首屏与输入过滤都随条目数线性变慢）。分组 section 由前端按类目次序搭建。
+_RESOURCE_CHUNK_SIZE = 100
+RESOURCE_CHUNKS_DIR = 'resources-chunks'
+
+_RESOURCE_CHUNK_SCRIPT = (
+    '<script>'
+    '(function(){'
+    'const q=document.getElementById("filter"),count=document.getElementById("count"),'
+    'empty=document.getElementById("noResult"),pfs=[...document.querySelectorAll("button.pf")],'
+    'host=document.getElementById("resourceSections"),progress=document.getElementById("loadProgress"),'
+    'more=document.getElementById("moreBtn"),sentinel=document.getElementById("loadSentinel");'
+    'const ORDER=__CATEGORY_ORDER_JSON__,COUNTS=__CATEGORY_COUNTS_JSON__,'
+    'chunkCount=__CHUNK_COUNT__,TOTAL=__TOTAL__,token="?v=__BUILD_TOKEN__";'
+    'const unit=count?(count.dataset.unit||"条"):"条";'
+    'let expected=0,allLoaded=chunkCount===0,activePf="",loading=false;'
+    'const catEls={},lis=[];'
+    'function ensureSection(cat){if(catEls[cat])return catEls[cat];'
+    'const section=document.createElement("section");section.className="card";'
+    'const h=document.createElement("h2");h.textContent=cat+" ";'
+    'const m=document.createElement("span");m.className="muted";m.textContent=(COUNTS[cat]||0)+" 条";'
+    'h.appendChild(m);const ul=document.createElement("ul");ul.className="resource-list";'
+    'section.appendChild(h);section.appendChild(ul);'
+    'const my=ORDER.indexOf(cat);let anchor=null;'
+    'for(let i=my+1;i<ORDER.length&&!anchor;i++){if(catEls[ORDER[i]])anchor=catEls[ORDER[i]].section;}'
+    'if(anchor)host.insertBefore(section,anchor);else host.appendChild(section);'
+    'catEls[cat]={section:section,ul:ul};return catEls[cat];}'
+    'function apply(){const v=q.value.trim().toLowerCase();let shown=0;'
+    'for(const li of lis){const art=li.querySelector(".resource-item");'
+    'const cat=(art&&art.dataset.purpose)||"";'
+    'const hit=(!activePf||cat===activePf)&&(!v||li.textContent.toLowerCase().includes(v));'
+    'li.hidden=!hit;if(hit)shown++;}'
+    'for(const cat in catEls)catEls[cat].section.hidden=!catEls[cat].ul.querySelector("li:not([hidden])");'
+    'if(count)count.textContent=shown+" "+unit+(allLoaded?"":"（加载中…）");'
+    'if(empty)empty.style.display=(shown||!allLoaded)?"none":"block";}'
+    'window.__resourceAcceptChunk=function(index,payload){if(index!==expected)return;expected++;'
+    'for(const h of (Array.isArray(payload)?payload:[])){'
+    'const tpl=document.createElement("template");tpl.innerHTML=h;'
+    'const li=tpl.content.firstElementChild;if(!li)continue;'
+    'const art=li.querySelector(".resource-item");'
+    'ensureSection((art&&art.dataset.purpose)||"其他").ul.appendChild(li);lis.push(li);}'
+    'if(progress)progress.textContent=allLoaded?("共 "+lis.length+" / "+TOTAL):(lis.length+" / "+TOTAL);};'
+    'function loadChunk(){if(expected>=chunkCount){allLoaded=true;'
+    'if(progress)progress.textContent="共 "+lis.length+" / "+TOTAL;'
+    'if(more)more.disabled=true;apply();return Promise.resolve();}'
+    'if(loading)return Promise.resolve();loading=true;'
+    'const index=expected;'
+    'return new Promise((resolve,reject)=>{'
+    'const s=document.createElement("script");s.async=true;'
+    's.src="resources-chunks/chunk-"+String(index+1).padStart(4,"0")+".js"+token;'
+    's.onload=function(){s.remove();resolve();};'
+    's.onerror=function(){s.remove();reject(new Error("chunk load failed"));};'
+    'document.head.appendChild(s);})'
+    '.then(function(){loading=false;apply();},function(e){loading=false;'
+    'if(progress)progress.textContent="分块加载失败，点“加载更多”重试";throw e;});}'
+    'function pump(){if(allLoaded)return Promise.resolve();'
+    'const wantMore=activePf||q.value.trim();'
+    'return loadChunk().then(function(){return wantMore?pump():null;});}'
+    'async function ensureAll(){while(!allLoaded)await loadChunk();}'
+    'q.addEventListener("input",function(){apply();if(!allLoaded)pump();});'
+    'const sortSel=document.getElementById("sortSel"),sorters={'
+    '"time-desc":(a,b)=>(b.dataset.time||"").localeCompare(a.dataset.time||""),'
+    '"time-asc":(a,b)=>(a.dataset.time||"").localeCompare(b.dataset.time||"")};'
+    'if(sortSel){sortSel.addEventListener("change",async function(){if(!allLoaded){'
+    'if(progress)progress.textContent="加载全部后排序…";await ensureAll();}'
+    'const f=sorters[sortSel.value];if(!f)return;'
+    'for(const cat in catEls){const ul=catEls[cat].ul;'
+    'const ordered=[...ul.children].sort((a,b)=>f(a,b)||0);'
+    'for(const li of ordered)ul.appendChild(li);}apply();});}'
+    'pfs.forEach(function(b){b.addEventListener("click",function(){'
+    'pfs.forEach(function(x){x.classList.remove("active");});'
+    'b.classList.add("active");activePf=b.dataset.pf||"";apply();if(!allLoaded)pump();});});'
+    'if(more)more.addEventListener("click",function(){loadChunk().catch(function(){});});'
+    'if("IntersectionObserver"in window&&sentinel){'
+    'new IntersectionObserver(function(entries){'
+    'if(entries.some(function(e){return e.isIntersecting;}))loadChunk().catch(function(){});},'
+    '{rootMargin:"600px"}).observe(sentinel);}'
+    'host.addEventListener("click",async function(e){const b=e.target.closest(".copy-link");if(!b)return;'
+    'const u=b.dataset.url||"";try{await navigator.clipboard.writeText(u)}catch(err){'
+    'const t=document.createElement("textarea");t.value=u;document.body.appendChild(t);'
+    't.select();document.execCommand("copy");t.remove()}'
+    'const old=b.textContent;b.textContent="已复制";setTimeout(function(){b.textContent=old},1200);});'
+    'loadChunk().catch(function(){});'
+    '})();</script>'
+)
+
+
+def _write_resource_chunks(view: Path, items_html: list[str], token: str) -> int:
+    """资源条目按固定大小写进 JS 分块，返回分块数；条目数变少时清掉多余分块。"""
+    from .build_image_view import _write_if_changed
+
+    chunks_dir = view / RESOURCE_CHUNKS_DIR
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+    chunk_count = (len(items_html) + _RESOURCE_CHUNK_SIZE - 1) // _RESOURCE_CHUNK_SIZE
+    for index in range(chunk_count):
+        batch = items_html[index * _RESOURCE_CHUNK_SIZE:(index + 1) * _RESOURCE_CHUNK_SIZE]
+        payload = json.dumps(batch, ensure_ascii=False).replace('<', '\\u003c')
+        _write_if_changed(
+            chunks_dir / f'chunk-{index + 1:04d}.js',
+            f'window.__resourceAcceptChunk({index},{payload});\n',
+        )
+    for extra in chunks_dir.glob('chunk-*.js'):
+        try:
+            if int(extra.stem.split('-')[1]) > chunk_count:
+                extra.unlink(missing_ok=True)
+        except (IndexError, ValueError):
+            continue
+    return chunk_count
 
 
 def select_resource_links(store, *, limit: int = 10000, mode: str = 'rule') -> list[dict]:
@@ -163,7 +275,6 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
 
     group_names = store.group_name_map()
     links = select_resource_links(store, mode=link_judge_mode)
-    link_sections: list[str] = []
     link_count = len(links)
     grouped: dict[str, list[dict]] = {}
     for item in links:
@@ -176,16 +287,17 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
     for c, items in grouped.items():
         if c not in CATEGORY_ORDER:
             ordered.append((c, items))
+    category_counts = {c: len(items) for c, items in ordered}
     link_toolbar = (
         f'<span id="count" class="chip count-chip" data-unit="条">{link_count} 条</span>'
         '<button type="button" class="pf active" data-pf="">全部</button>'
         + ''.join(f'<button type="button" class="pf" data-pf="{html.escape(c, quote=True)}">{html.escape(c)}</button>' for c, _ in ordered)
     )
+    # 条目 HTML 进 JS 分块，页面壳只留控件：此前 600 多条全量 DOM（600KB+）
+    # 一次进页面，首屏解析和输入过滤都随条目数线性变慢。
+    # 分组 section 由前端按类目次序搭建，头部计数用服务端统计，随分块渐进出现。
+    link_items: list[str] = []
     for category, items in ordered:
-        link_sections.append(
-            f'<section class="card"><h2>{html.escape(category)} '
-            f'<span class="muted">{len(items)} 条</span></h2><ul class="resource-list">'
-        )
         for item in items:
             url = str(item.get('url') or '')
             purpose_text = str(item.get('purpose') or '链接')
@@ -215,7 +327,7 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
                 profile_line = f'<div class="meta">该站历史功能：{funcs}</div>'
             escaped_url = html.escape(url, quote=True)
             sort_time = html.escape(str(item.get('seen_at') or '')[:16], quote=True)
-            link_sections.append(
+            link_items.append(
                 f'<li data-time="{sort_time}"><article class="resource-item" data-purpose="' + html.escape(category) + '">'
                 f'<div class="title"><span class="badge">用途：{html.escape(purpose_text)}</span>{memory_badge}{headline}</div>'
                 f'<div class="meta">{html.escape(endpoint)}</div>'
@@ -227,16 +339,29 @@ def write_resource_pages(view: str | Path, store, *, link_judge_mode: str = 'rul
                 + profile_line +
                 '</article></li>'
             )
-        link_sections.append('</ul></section>')
-    if not link_sections:
-        link_sections.append('<section class="card"><p class="muted">暂无高价值链接。</p></section>')
+    token = hashlib.sha1('\x1e'.join(link_items).encode('utf-8')).hexdigest()[:10] if link_items else 'empty'
+    chunk_count = _write_resource_chunks(view, link_items, token)
+    link_sections = [
+        '<div id="resourceSections"></div>'
+        '<div style="display:flex;gap:12px;align-items:center;padding:14px 0">'
+        '<span id="loadProgress" class="meta"></span>'
+        '<button id="moreBtn" type="button" class="pf">加载更多</button>'
+        '<span id="loadSentinel" aria-hidden="true"></span></div>'
+    ]
     from .build_image_view import _write_if_changed
-    _write_if_changed(
-        view / 'resources.html',
-        _html_page('资源链接', '仅过滤明确的娱乐、广告和泛分享链接；按 URL 去重。', link_sections,
-                   toolbar=link_toolbar, background=background,
-                   sort_options=[('', '默认排序'), ('time-desc', '最新优先'), ('time-asc', '最早优先')]),
-    )
+    page = _html_page('资源链接', '仅过滤明确的娱乐、广告和泛分享链接；按 URL 去重。', link_sections,
+                      toolbar=link_toolbar, background=background,
+                      sort_options=[('', '默认排序'), ('time-desc', '最新优先'), ('time-asc', '最早优先')],
+                      script=_RESOURCE_CHUNK_SCRIPT)
+    for marker, value in (
+        ('__CATEGORY_ORDER_JSON__', json.dumps([c for c, _ in ordered], ensure_ascii=False)),
+        ('__CATEGORY_COUNTS_JSON__', json.dumps(category_counts, ensure_ascii=False)),
+        ('__CHUNK_COUNT__', str(chunk_count)),
+        ('__TOTAL__', str(link_count)),
+        ('__BUILD_TOKEN__', token),
+    ):
+        page = page.replace(marker, value)
+    _write_if_changed(view / 'resources.html', page)
 
     files = select_resource_files(store)
     file_count = len(files)

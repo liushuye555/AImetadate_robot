@@ -29,15 +29,18 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
     auto *galleryButtons = new QHBoxLayout;
     galleryButtons->setSpacing(10);
     auto *openGallery = new QPushButton(Strings::zh("openGallery"), galleryGroup);
-    auto *rebuild = new QPushButton(Strings::zh("rebuildView"), galleryGroup);
+    m_rebuild = new QPushButton(Strings::zh("rebuildView"), galleryGroup);
     galleryButtons->addWidget(openGallery);
-    galleryButtons->addWidget(rebuild);
+    galleryButtons->addWidget(m_rebuild);
     galleryButtons->addStretch();
+    m_viewStatus = new QLabel(galleryGroup);
+    m_viewStatus->setObjectName("muted");
+    galleryButtons->addWidget(m_viewStatus);
     galleryLayout->addLayout(galleryButtons);
     layout->addWidget(galleryGroup);
 
     connect(openGallery, &QPushButton::clicked, this, [this] { emit openRequested("data/view/index.html"); });
-    connect(rebuild, &QPushButton::clicked, this, [this] { emit viewRequested(); });
+    connect(m_rebuild, &QPushButton::clicked, this, [this] { emit viewRequested(); });
 
     // 日报
     auto *reportGroup = new QGroupBox(Strings::zh("dailyReport"), this);
@@ -64,10 +67,14 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
     // 固定入口：三个本地页面快捷打开
     auto *entries = new QHBoxLayout;
     entries->setSpacing(10);
-    const QStringList pages = {"data/view/index.html", "data/view/files.html", "data/view/resources.html"};
-    for (const QString &page : pages) {
-        auto *button = new QPushButton(page.mid(page.lastIndexOf('/') + 1), this);
-        connect(button, &QPushButton::clicked, this, [this, page] { emit openRequested(page); });
+    const QList<QPair<QString, QString>> pages = {
+        {"data/view/index.html", "图片总览"},
+        {"data/view/files.html", "群文件"},
+        {"data/view/resources.html", "资源链接"},
+    };
+    for (const auto &entry : pages) {
+        auto *button = new QPushButton(entry.second, this);
+        connect(button, &QPushButton::clicked, this, [this, entry] { emit openRequested(entry.first); });
         entries->addWidget(button);
     }
     entries->addStretch();
@@ -80,7 +87,14 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
 void ReportsPage::setPreview(const QString &text) { m_preview->setPlainText(text); }
 void ReportsPage::setNextTime(const QString &text) { m_nextTime->setText(text); }
 
+void ReportsPage::setViewStatus(const QString &text) {
+    m_viewStatus->setText(text);
+    if (m_rebuild) m_rebuild->setEnabled(text == QStringLiteral("视图重建中…") ? false : true);
+}
+
 void ReportsPage::setCategories(const QVariantList &categories) {
+    if (m_rebuild) m_rebuild->setEnabled(true);
+    m_viewStatus->setText(QStringLiteral("视图已重建"));
     m_categories->clear();
     for (const QVariant &category : categories) {
         const QJsonObject obj = category.toJsonObject();

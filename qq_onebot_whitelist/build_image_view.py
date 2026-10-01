@@ -219,7 +219,10 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
 
     background = background_css(find_wallpaper(view))
 
-    categories = sorted([p for p in view.iterdir() if p.is_dir()], key=lambda p: p.name) if view.exists() else []
+    categories = sorted(
+        [p for p in view.iterdir() if p.is_dir() and p.name != 'resources-chunks'],
+        key=lambda p: p.name,
+    ) if view.exists() else []
     link_total = int(counts.get('resource_links') or 0)
     file_total = int(counts.get('resource_files') or 0)
     image_total = sum(int(v) for key, v in counts.items()
@@ -273,8 +276,20 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
         '<p class="page-desc">分类视图入口；图库页面保持单页浏览，图片会随滚动按需加载，不会一次载入全部卡片。</p>'
         f'<div class="chips">{chips}</div>'
         + mask_html +
+        '<div class="toolbar"><div class="toolbar-inner">'
+        '<div class="search"><input id="cardFilter" type="search" '
+        'placeholder="筛选分组 / 资源页…" autocomplete="off"></div>'
+        f'<span id="cardCount" class="chip count-chip">{len(cards)} 个入口</span>'
+        '</div></div>'
         f'<div class="grid">{"".join(cards)}</div>'
         '<p class="foot">视图由机器人从 data/bot.db 自动生成，可随时重建；原图以硬链接方式引用，不额外占用磁盘空间。</p>'
+        '<script>(function(){var q=document.getElementById("cardFilter");if(!q)return;'
+        'var cards=[].slice.call(document.querySelectorAll(".grid > a.card"));'
+        'var n=document.getElementById("cardCount"),base=n?n.textContent:"";'
+        'q.addEventListener("input",function(){var v=q.value.trim().toLowerCase(),shown=0;'
+        'for(var i=0;i<cards.length;i++){var hit=!v||cards[i].textContent.toLowerCase().indexOf(v)>=0;'
+        'cards[i].hidden=!hit;if(hit)shown++;}'
+        'if(n)n.textContent=v?(shown+" / "+cards.length):base;});})();</script>'
     )
     view.mkdir(parents=True, exist_ok=True)
     (view / 'index.html').write_text(
@@ -735,6 +750,22 @@ select#userSel{max-width:300px}
 #groupGrid .gallery-item{width:auto;transition:transform .12s ease,border-color .12s ease}
 #groupGrid .gallery-item:hover{transform:translateY(-2px);border-color:var(--accent)}
 #groupHint{margin:0 auto 24px;color:var(--chip-text)}
+#filterToggle{padding:4px 12px;border-radius:6px;border:1px solid var(--line-strong);background:var(--panel);color:var(--text);cursor:pointer;font-size:13px}
+#filterToggle:hover,#filterToggle.open{border-color:var(--accent);color:var(--accent-soft)}
+#filterToggle.has-filters{border-color:var(--accent);color:var(--accent-soft)}
+#advFilters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 12px;margin-top:6px;border:1px dashed var(--line-strong);border-radius:10px;background:var(--panel)}
+#advFilters[hidden]{display:none}
+#advFilters .adv-sep{flex:1}
+@media(max-width:640px){
+header{padding:12px 14px}
+#searchBox{flex:1 1 100%;width:auto}
+.toolbar{gap:8px}
+#lightboxInfo{width:min(320px,86vw)}
+#overlay.with-info{padding-right:min(320px,86vw)}
+#overlay.with-info #lightbox{max-width:calc(100vw - min(320px,86vw) - 24px)}
+.grid{padding:10px 14px;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.grid.grid-large{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+}
 </style></head><body>
 __THEME_TOGGLE__
 <header><a id="back" href="../index.html">← 返回</a><h1>__TITLE__</h1><div class="muted">共 __COUNT__ 张；滚动到末尾或点击按钮继续加载</div>
@@ -747,6 +778,20 @@ __THEME_TOGGLE__
     <option value="chunks-name">文件名称</option>
     <option value="chunks-res">分辨率</option>
   </select>
+  <label class="muted" for="searchBox">搜索</label>
+  <input id="searchBox" type="search" placeholder="关键词 / QQ号 / ID" autocomplete="off">
+  <button id="filterToggle" type="button" title="展开更多筛选">筛选</button>
+  <label class="muted" for="thumbSel">缩略图</label>
+  <select id="thumbSel">
+    <option value="small">小</option>
+    <option value="medium" selected>中</option>
+    <option value="large">大</option>
+  </select>
+  <button id="exportBtn" type="button">导出</button>
+  <button id="topBtn" type="button">回顶部</button>
+  <span id="collapseInfo" class="muted"></span>
+</div>
+<div id="advFilters" hidden>
 __USER_TOOLBAR__
 __CAT_TOOLBAR__
   <label class="muted" for="sizeSel">尺寸</label>
@@ -767,19 +812,10 @@ __CAT_TOOLBAR__
   </select>
   <label class="muted" for="monthSel">日期</label>
   <select id="monthSel"><option value="">全部</option>__MONTH_OPTIONS__</select>
-  <label class="muted" for="searchBox">搜索</label>
-  <input id="searchBox" type="search" placeholder="关键词 / QQ号 / ID" autocomplete="off">
   <label class="muted" style="cursor:pointer"><input type="checkbox" id="dupOnly"> 只看重复/同批</label>
-  <button id="exportBtn" type="button">导出</button>
-  <label class="muted" for="thumbSel">缩略图</label>
-  <select id="thumbSel">
-    <option value="small">小</option>
-    <option value="medium" selected>中</option>
-    <option value="large">大</option>
-  </select>
+  <span class="adv-sep"></span>
+  <label class="muted" for="jumpTo">跳转</label>
   <input id="jumpTo" type="number" min="1" max="__COUNT__" placeholder="序号">
-  <button id="topBtn" type="button">回顶部</button>
-  <span id="collapseInfo" class="muted"></span>
 </div>
 </header>
 <main><div id="grid" class="grid __GRID_CLASS__"></div>
@@ -822,6 +858,7 @@ __CAT_TOOLBAR__
   const catSel=document.getElementById('catSel');
   const sizeSel=document.getElementById('sizeSel'),resSel=document.getElementById('resSel'),monthSel=document.getElementById('monthSel');
   const searchBox=document.getElementById('searchBox'),dupBox=document.getElementById('dupOnly'),thumbSel=document.getElementById('thumbSel');
+  const filterToggle=document.getElementById('filterToggle'),advFilters=document.getElementById('advFilters');
   let userFilter='',catFilter='',sizeFilter='',minRes=0,monthFilter='',dupOnly=false,searchQuery='';
 
   function sizeClass(item){
@@ -875,6 +912,8 @@ __CAT_TOOLBAR__
     if(searchQuery)parts.push('搜索“'+searchQuery+'”');
     if(known)parts.push('已识别 '+known+' 组同批/相似（当前已加载部分）');
     document.getElementById('collapseInfo').textContent=parts.join(' · ');
+    if(filterToggle){const adv=[userFilter,catFilter,sizeFilter,monthFilter].filter(Boolean).length+(minRes?1:0)+(dupOnly?1:0);
+      filterToggle.textContent=adv?('筛选 · '+adv):'筛选';filterToggle.classList.toggle('has-filters',adv>0);}
   }
   function applyMask(a){
     const image=a.querySelector('img');
@@ -986,6 +1025,13 @@ __CAT_TOOLBAR__
     while(cells.length<=index&&nextChunk<chunkCount)await loadChunk(nextChunk);
   }
   function isPreviewVisible(anchor){return Boolean(anchor)&&!anchor.closest('[hidden]');}
+  function preloadNeighbors(){
+    // 预加载可见结果集中相邻的大图：←/→ 切换不再等网络
+    for(const delta of[-1,1,-2,2]){
+      const anchor=cells[currentIndex+delta];
+      if(anchor&&isPreviewVisible(anchor)&&!anchor.dataset.pre){anchor.dataset.pre='1';const img=new Image();img.src=anchor.href;}
+    }
+  }
   async function show(index){
     if(!total)return;
     index=((index%total)+total)%total;
@@ -994,6 +1040,7 @@ __CAT_TOOLBAR__
     currentIndex=index;groupNav=null;if(overlayHint)hintDefault();
     lightbox.src=anchor.href;overlay.style.display='flex';
     showInfo(itemData[index]);
+    preloadNeighbors();
   }
   async function showAdjacent(delta){
     if(!total||currentIndex<0)return;
@@ -1120,6 +1167,7 @@ __CAT_TOOLBAR__
   });
   if(userSel)userSel.addEventListener('change',()=>{userFilter=userSel.value;resetGrid();});
   if(catSel)catSel.addEventListener('change',()=>{catFilter=catSel.value;resetGrid();});
+  if(filterToggle)filterToggle.addEventListener('click',()=>{const open=advFilters.hidden;advFilters.hidden=!open;filterToggle.classList.toggle('open',open);});
   if(sizeSel)sizeSel.addEventListener('change',()=>{sizeFilter=sizeSel.value;resetGrid();});
   if(resSel)resSel.addEventListener('change',()=>{minRes=Number(resSel.value||0);resetGrid();});
   if(monthSel)monthSel.addEventListener('change',()=>{monthFilter=monthSel.value;resetGrid();});
@@ -1804,7 +1852,7 @@ def write_params_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwar
     _write_context_gallery(cat_dir, entries, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 29  # 页面/文件名/签名规则变化时 +1：统一条目模型，旧签名作废，下次构建按全量处理
+GENERATOR_VERSION = 30  # 页面/文件名/签名规则变化时 +1：工具栏收纳+移动端断点，旧签名作废，下次构建全量重写页面
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'

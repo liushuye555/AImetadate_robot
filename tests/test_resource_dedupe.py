@@ -9,10 +9,12 @@ def test_resource_links_dedupe_across_scopes_and_tracking_queries(tmp_path):
 
     result = write_resource_pages(tmp_path / 'view', store)
     html = (tmp_path / 'view' / 'resources.html').read_text(encoding='utf-8')
+    chunks_dir = tmp_path / 'view' / 'resources-chunks'
+    html += '\n'.join(p.read_text(encoding='utf-8') for p in sorted(chunks_dir.glob('chunk-*.js')))
 
     assert result['resource_links'] == 1
-    # li 带排序属性（<li data-time=...>），按条目数断言
-    assert html.count('class="resource-item"') == 1
+    # li 带排序属性（<li data-time=...>），按条目数断言（条目在 JS 分块里）
+    assert html.count('class=\\"resource-item\\"') == 1
 
 
 def test_resource_files_dedupe_across_scopes_by_name_size_kind(tmp_path):
@@ -25,7 +27,7 @@ def test_resource_files_dedupe_across_scopes_by_name_size_kind(tmp_path):
 
     assert result['resource_files'] == 1
     # data-name 排序属性会重复一次文件名，按条目数断言去重
-    assert html.count('class="resource-item"') == 1
+    assert html.count('class=\"resource-item\"') == 1
     assert 'workflow.json' in html.lower()
     assert 'group:1' in html
     assert 'group:2' in html
