@@ -623,3 +623,22 @@ def test_download_image_aborts_over_size_cap(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         images_mod.download_image('https://x.test/big.png', tmp_dir)
     assert list(tmp_dir.glob('.download-*')) == []  # 失败后临时文件已清理
+
+
+# ---------- 好评晋升遇缺失候选文件：只记录不炸采集 ----------
+
+def test_promote_failure_does_not_break_collection(tmp_path, monkeypatch):
+    """候选图文件被 TTL 清理后，好评晋升失败不能把 handle_event 打挂
+    （历史上一张已删除候选图曾制造 4 万次 handle_event failed）。"""
+    store, config, data = make_store_config(tmp_path)
+    store.record_image(scope='group:9', user_id='u', result={
+        'sha256': 'sha-gone', 'retention_reason': 'candidate',
+        'kept_path': str(data / 'images' / 'candidates' / 'gone.png'),
+    }, raw={})
+    monkeypatch.setattr(collection, 'is_positive_feedback_text', lambda text: True)
+
+    event = {'post_type': 'message', 'message_id': 3001, 'message_type': 'group',
+             'group_id': 9, 'user_id': 100,
+             'message': [{'type': 'text', 'data': {'text': '好评！'}}]}
+    from qq_onebot_whitelist.collection import collect_event
+    assert collect_event(store, event, config) is True  # 不抛异常，消息照常入库

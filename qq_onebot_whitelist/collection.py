@@ -316,9 +316,14 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> boo
                     raw={'file': file_item, 'message_text': text},
                 )
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
-    _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
-    _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
-    collect_custom(store, event, text, config)
+    try:
+        _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
+        _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
+        collect_custom(store, event, text, config)
+    except Exception as exc:
+        # 晋升/反向绑定要移动候选图文件，候选可能刚被 TTL 清理（历史上一张
+        # 已删除候选图曾把 handle_event 打挂 4 万次）：失败只记录，不炸采集
+        print(f'post-record collection step failed: {type(exc).__name__}: {exc}')
     if not config.feature_image_processing or not collection_allows(scope, 'images', config):
         return inserted
     # 图片处理永远走后台队列：同步路径包含最长 30s 的下载 + PIL/phash/Gilbert
