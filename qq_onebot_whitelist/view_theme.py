@@ -78,8 +78,8 @@ h1{font-size:24px;line-height:1.3;margin:8px 0 6px;letter-spacing:.2px}
 .toolbar-inner{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .search{position:relative;flex:1 1 300px;max-width:560px}
 .search::before{content:"🔍";position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.65;pointer-events:none}
-#filter{width:100%;padding:10px 14px 10px 36px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--text);font-size:14.5px;outline:0;transition:border-color .15s,box-shadow .15s}
-#filter:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(74,111,165,.22)}
+#filter,#cardFilter{width:100%;padding:10px 14px 10px 36px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--text);font-size:14.5px;outline:0;transition:border-color .15s,box-shadow .15s}
+#filter:focus,#cardFilter:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(74,111,165,.22)}
 button.pf{padding:6px 13px;border-radius:999px;border:1px solid var(--line-strong);background:var(--pf-bg);color:var(--accent-soft);font-size:13px;cursor:pointer;transition:border-color .12s,color .12s,background .12s}
 button.pf:hover{border-color:var(--accent);color:var(--accent-soft)}
 button.pf.active{background:#2c3f63;border-color:#46679f;color:#fff}
