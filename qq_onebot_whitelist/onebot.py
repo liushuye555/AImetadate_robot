@@ -325,6 +325,7 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
                     "imageQueue": deferred_image_count(),
                     "recallCount": store.recall_count() if store else 0,
                     "lastViewSync": _last_view_sync_at,
+                    **_backup_status_fields(),
                     **login,
                 }
             )
@@ -447,6 +448,44 @@ async def background_sync_loop(config: AppConfig) -> None:
             await asyncio.sleep(30)
         else:
             await asyncio.sleep(10)
+
+
+def _backup_status_fields() -> dict:
+    from . import backup
+    state = backup.read_state()
+    return {
+        "lastBackup": str(state.get('lastBackup') or ''),
+        "backupOk": bool(state.get('backupOk')),
+    }
+
+
+async def background_backup_loop(config: AppConfig, config_path: str | Path) -> None:
+    """每日自动备份：负载感知；今天没成功备过就快照一次（周一为周备），失败 10 分钟后重试。"""
+    from . import backup
+    while True:
+        if not load_aware_ok(config):
+            await asyncio.sleep(load_aware_defer_seconds(config))
+            continue
+        state = backup.read_state()
+        today = time.strftime('%Y-%m-%d')
+        done_today = str(state.get('lastBackup') or '').startswith(today) and bool(state.get('backupOk'))
+        if not done_today:
+            try:
+                await asyncio.to_thread(
+                    backup.run_backup,
+                    config.data_dir / 'bot.db',
+                    config.backup_dir,
+                    keep_daily=config.backup_keep_daily,
+                    keep_weekly=config.backup_keep_weekly,
+                    min_free_mb=config.backup_min_free_mb,
+                    config_yaml=Path(config_path).resolve(),
+                    images_source=(config.data_dir / 'images')
+                    if config.backup_images and config.backup_images_dir else None,
+                    images_target=config.backup_images_dir,
+                )
+            except Exception as exc:
+                print(f'backup failed: {type(exc).__name__}: {exc}')
+        await asyncio.sleep(600)
 
 
 async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
@@ -717,6 +756,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         # 启动不再阻塞在完整同步上：交给后台负载感知循环（CPU 忙时自动推迟）
         sync_task = asyncio.create_task(background_sync_loop(config))
         image_task = asyncio.create_task(image_worker_loop(config, store))
+        backup_task = asyncio.create_task(background_backup_loop(config, config_path))
         try:
             async with websockets.connect(config.onebot_ws_url) as ws:
                 login_info = await probe_login_info(config)
@@ -750,10 +790,10 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             # NapCat 未登录/未就绪时连接会被拒，重试等待而不是直接退出
             print(f'OneBot connect failed: {type(exc).__name__}: {exc}')
         finally:
-            for task in (sync_task, image_task):
+            for task in (sync_task, image_task, backup_task):
                 task.cancel()
             await asyncio.gather(
-                *(t for t in (sync_task, image_task) if not t.done()),
+                *(t for t in (sync_task, image_task, backup_task) if not t.done()),
                 return_exceptions=True,
             )
             try:
@@ -761,7 +801,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                     {"napcat": control.port_open(control.NAPCAT_PORT),
                      "onebot": False, "bot": False,
                      "qqLoggedIn": False, "qqNumber": "", "qqNickname": "",
-                     "manualStop": control.manual_stop_requested()}
+                     "manualStop": control.manual_stop_requested(),
+                     **_backup_status_fields()}
                 )
             except Exception as exc:
                 # 断线兜底状态写失败（如 Windows rename 撞上面板只读句柄）不能炸掉重连循环

@@ -29,6 +29,7 @@ private:
     QLabel *m_statQueue = nullptr;
     QLabel *m_statRecall = nullptr;
     QLabel *m_statViewSync = nullptr;
+    QLabel *m_statBackup = nullptr;
     QLabel *m_hint = nullptr;
     QLabel *m_autoRestart = nullptr;
     QPushButton *m_collection = nullptr;

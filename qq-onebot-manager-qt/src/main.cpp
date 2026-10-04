@@ -44,7 +44,7 @@ static QWidget *makeReports(QWidget *parent) { return new ReportsPage(parent); }
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("QQ OneBot 管理器");
-    app.setWindowIcon(QIcon(":/icons/app.svg"));
+    app.setWindowIcon(QIcon(":/icons/app.png"));
 
     SingleInstance single("qq-onebot-manager-qt");
     if (!single.tryLock()) {
@@ -297,6 +297,24 @@ int main(int argc, char *argv[]) {
         const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
         if (doc.isObject() && doc.object().contains("categories"))
             reports->setCategories(doc.object().value("categories").toArray().toVariantList());
+    });
+    // 立即备份走独立控制通道：跑完前按钮置灰，结果（快照文件名/大小）就地展示
+    auto *backupControl = new ServiceControl(&window);
+    QObject::connect(reports, &ReportsPage::backupRequested, reports, [reports, backupControl] {
+        reports->setBackupStatus(QStringLiteral("备份中…"));
+        backupControl->run({"-m", "qq_onebot_whitelist.control", "backup"});
+    });
+    QObject::connect(backupControl, &ServiceControl::finished, reports, [reports](bool ok, QString out) {
+        if (!ok) {
+            reports->setBackupStatus("备份失败：" + out.trimmed());
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+        if (doc.isObject()) {
+            const QJsonObject obj = doc.object();
+            reports->setBackupStatus(QStringLiteral("已备份 ") + obj.value("file").toString()
+                + QStringLiteral("（") + QString::number(obj.value("sizeMB").toDouble()) + QStringLiteral("MB）"));
+        }
     });
     reportControl->run({"-m", "qq_onebot_whitelist.control", "view-list"});
     reports->setNextTime("日报发送时间可在设置页配置");

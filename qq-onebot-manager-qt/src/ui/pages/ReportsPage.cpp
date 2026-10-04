@@ -30,17 +30,23 @@ ReportsPage::ReportsPage(QWidget *parent) : QWidget(parent) {
     galleryButtons->setSpacing(10);
     auto *openGallery = new QPushButton(Strings::zh("openGallery"), galleryGroup);
     m_rebuild = new QPushButton(Strings::zh("rebuildView"), galleryGroup);
+    m_backup = new QPushButton(QStringLiteral("立即备份"), galleryGroup);
     galleryButtons->addWidget(openGallery);
     galleryButtons->addWidget(m_rebuild);
+    galleryButtons->addWidget(m_backup);
     galleryButtons->addStretch();
     m_viewStatus = new QLabel(galleryGroup);
     m_viewStatus->setObjectName("muted");
     galleryButtons->addWidget(m_viewStatus);
+    m_backupStatus = new QLabel(galleryGroup);
+    m_backupStatus->setObjectName("muted");
+    galleryButtons->addWidget(m_backupStatus);
     galleryLayout->addLayout(galleryButtons);
     layout->addWidget(galleryGroup);
 
     connect(openGallery, &QPushButton::clicked, this, [this] { emit openRequested("data/view/index.html"); });
     connect(m_rebuild, &QPushButton::clicked, this, [this] { emit viewRequested(); });
+    connect(m_backup, &QPushButton::clicked, this, [this] { emit backupRequested(); });
 
     // 日报
     auto *reportGroup = new QGroupBox(Strings::zh("dailyReport"), this);
@@ -90,6 +96,11 @@ void ReportsPage::setNextTime(const QString &text) { m_nextTime->setText(text); 
 void ReportsPage::setViewStatus(const QString &text) {
     m_viewStatus->setText(text);
     if (m_rebuild) m_rebuild->setEnabled(text == QStringLiteral("视图重建中…") ? false : true);
+}
+
+void ReportsPage::setBackupStatus(const QString &text) {
+    m_backupStatus->setText(text);
+    if (m_backup) m_backup->setEnabled(text == QStringLiteral("备份中…") ? false : true);
 }
 
 void ReportsPage::setCategories(const QVariantList &categories) {

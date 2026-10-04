@@ -19,6 +19,8 @@ struct StatusSnapshot {
     int imageQueue = 0;
     int recallCount = 0;
     QString lastViewSync;
+    QString lastBackup;
+    bool backupOk = false;
     QDateTime updatedAt;
 };
 

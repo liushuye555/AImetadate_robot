@@ -21,6 +21,8 @@ StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int
     s.imageQueue = obj.value("imageQueue").toInt(0);
     s.recallCount = obj.value("recallCount").toInt(0);
     s.lastViewSync = obj.value("lastViewSync").toString();
+    s.lastBackup = obj.value("lastBackup").toString();
+    s.backupOk = obj.value("backupOk").toBool(false);
     s.valid = true;
     return s;
 }
@@ -62,7 +64,9 @@ void StatusMonitor::publish(const StatusSnapshot &next) {
         next.qqNumber != m_snapshot.qqNumber ||
         next.qqNickname != m_snapshot.qqNickname ||
         next.imageQueue != m_snapshot.imageQueue ||
-        next.recallCount != m_snapshot.recallCount;
+        next.recallCount != m_snapshot.recallCount ||
+        next.lastBackup != m_snapshot.lastBackup ||
+        next.backupOk != m_snapshot.backupOk;
     m_snapshot = next;
     m_initialized = true;
     if (changed)

@@ -100,6 +100,13 @@ class AppConfig:
     keepalive_idle_minutes: int = 60
     view_server_enabled: bool = True
     view_server_port: int = 3017
+    backup_enabled: bool = True
+    backup_dir: Path = Path('data/backups')
+    backup_keep_daily: int = 3
+    backup_keep_weekly: int = 2
+    backup_min_free_mb: int = 2048
+    backup_images: bool = False
+    backup_images_dir: Path | None = None
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -126,6 +133,7 @@ def load_config(path: str | Path) -> AppConfig:
     relay = raw.get('relay') or {}
     chat = raw.get('chat') or {}
     view_server = raw.get('view_server') or {}
+    backup = raw.get('backup') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
@@ -225,4 +233,11 @@ def load_config(path: str | Path) -> AppConfig:
         keepalive_idle_minutes=int(keepalive.get('idle_minutes') or 60),
         view_server_enabled=bool(view_server.get('enabled', True)),
         view_server_port=int(view_server.get('port') or 3017),
+        backup_enabled=bool(backup.get('enabled', True)),
+        backup_dir=Path(backup.get('dir') or 'data/backups'),
+        backup_keep_daily=max(1, int(backup.get('keep_daily') or 3)),
+        backup_keep_weekly=max(0, int(backup.get('keep_weekly') or 2)),
+        backup_min_free_mb=max(0, int(backup.get('min_free_mb') or 2048)),
+        backup_images=bool(backup.get('images', False)),
+        backup_images_dir=(Path(backup['images_dir']) if str(backup.get('images_dir') or '').strip() else None),
     )

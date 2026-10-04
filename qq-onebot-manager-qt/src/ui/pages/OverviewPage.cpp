@@ -42,10 +42,10 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     auto *cards = new QGridLayout;
     cards->setHorizontalSpacing(12);
     cards->setVerticalSpacing(12);
-    m_napcat = new StatusCard("NapCat", ":/icons/card-napcat.svg", this);
-    m_onebot = new StatusCard("OneBot", ":/icons/card-onebot.svg", this);
-    m_bot = new StatusCard("Bot", ":/icons/card-bot.svg", this);
-    m_qq = new StatusCard("QQ", ":/icons/card-qq.svg", this);
+    m_napcat = new StatusCard("NapCat", ":/icons/card-napcat.png", this);
+    m_onebot = new StatusCard("OneBot", ":/icons/card-onebot.png", this);
+    m_bot = new StatusCard("Bot", ":/icons/card-bot.png", this);
+    m_qq = new StatusCard("QQ", ":/icons/card-qq.png", this);
     cards->addWidget(m_napcat, 0, 0);
     cards->addWidget(m_onebot, 0, 1);
     cards->addWidget(m_bot, 0, 2);
@@ -61,6 +61,7 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     stats->addWidget(makeStatCard(&m_statQueue, QStringLiteral("图片队列"), this), 0, 3);
     stats->addWidget(makeStatCard(&m_statRecall, QStringLiteral("撤回记录"), this), 0, 4);
     stats->addWidget(makeStatCard(&m_statViewSync, QStringLiteral("视图同步"), this), 0, 5);
+    stats->addWidget(makeStatCard(&m_statBackup, QStringLiteral("最近备份"), this), 0, 6);
     layout->addLayout(stats);
 
     // 快捷操作卡：服务控制 + 数据入口分组，按钮网格对齐
@@ -160,6 +161,10 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
     m_statQueue->setText(s.imageQueue > 0 ? QStringLiteral("积压 %1").arg(s.imageQueue) : QStringLiteral("0"));
     m_statRecall->setText(QString::number(s.recallCount));
     m_statViewSync->setText(s.lastViewSync.isEmpty() ? QStringLiteral("无") : s.lastViewSync);
+    if (s.lastBackup.isEmpty())
+        m_statBackup->setText(QStringLiteral("无"));
+    else
+        m_statBackup->setText(s.backupOk ? s.lastBackup : QStringLiteral("失败 ") + s.lastBackup);
     if (!s.qqNumber.isEmpty() && s.qqNumber != m_avatarQQ) {
         m_avatarQQ = s.qqNumber;  // 每个账号只拉一次（含磁盘缓存）
         AvatarCache::instance().fetch("user", s.qqNumber, [this](const QPixmap &pm) {

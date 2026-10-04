@@ -88,3 +88,16 @@ ai_context:
   # 只在这些本地时间窗口调用 LLM；留空 [] 表示全天允许。
   # 支持跨午夜窗口，例如 "23:00-07:00"。
   allowed_windows: []
+
+backup:
+  enabled: true
+  # 快照目录（相对仓库根或绝对路径）。建议指向另一块物理盘防整盘故障。
+  dir: data/backups
+  # 轮换保留：最近 N 份日备（周一自动归为周备，另保留 N 份）。
+  keep_daily: 3
+  keep_weekly: 2
+  # 目标盘剩余空间低于该值(MB)时跳过备份，不写满磁盘。
+  min_free_mb: 2048
+  # 图片异地镜像（35GB 级，首拷较慢，之后每天增量）。需要先设 images_dir 并确认目标盘空间。
+  images: false
+  # images_dir: E:/bot-backups

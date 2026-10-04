@@ -499,6 +499,39 @@ def cmd_view_list(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    """执行一次备份（DB 快照 + config 归档，可选图片镜像），结果写入 run/backup-state.json。"""
+    try:
+        from . import backup
+        from .config import load_config
+        config = load_config(REPO_ROOT / "config.yaml")
+        if getattr(args, "pre", None):
+            snapshot = backup.pre_operation_snapshot(
+                config.data_dir / "bot.db", config.backup_dir, args.pre
+            )
+            print(json.dumps({"ok": True, "file": snapshot.name}, ensure_ascii=False))
+            return 0
+        if not config.backup_enabled:
+            print(json.dumps({"ok": False, "error": "backup.enabled=false"}, ensure_ascii=False))
+            return 1
+        result = backup.run_backup(
+            config.data_dir / "bot.db",
+            config.backup_dir,
+            keep_daily=config.backup_keep_daily,
+            keep_weekly=config.backup_keep_weekly,
+            min_free_mb=config.backup_min_free_mb,
+            config_yaml=REPO_ROOT / "config.yaml",
+            images_source=(config.data_dir / "images") if config.backup_images else None,
+            images_target=config.backup_images_dir if config.backup_images else None,
+            force_kind=getattr(args, "kind", None),
+        )
+        print(json.dumps({"ok": result.get("backupOk", False), **result}, ensure_ascii=False))
+        return 0 if result.get("backupOk") else 1
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -513,6 +546,11 @@ def build_parser() -> argparse.ArgumentParser:
     vision.add_argument("--limit", default="20")
     vision.add_argument("--respect-window", action="store_true")
     sub.add_parser("view-list", help="list existing report categories")
+    backup_parser = sub.add_parser("backup", help="run a backup now (DB snapshot + config)")
+    backup_parser.add_argument("--pre", default=None, metavar="REASON",
+                               help="dangerous-op snapshot: bot-pre-<reason>-<ts>.db, exempt from retention")
+    backup_parser.add_argument("--kind", default=None, choices=("daily", "weekly"),
+                               help="force snapshot kind instead of weekday-based")
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -541,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         "view": cmd_view,
         "vision-recheck": cmd_vision_recheck,
         "view-list": cmd_view_list,
+        "backup": cmd_backup,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,
