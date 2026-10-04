@@ -107,6 +107,16 @@ class AppConfig:
     backup_min_free_mb: int = 2048
     backup_images: bool = False
     backup_images_dir: Path | None = None
+    file_sync_enabled: bool = False
+    file_sync_webdav_url: str = 'http://127.0.0.1:5244/dav'
+    file_sync_webdav_user: str = ''
+    file_sync_webdav_password: str = ''
+    file_sync_remote_dir: str = 'QQ群文件'
+    file_sync_staging_dir: Path = Path('data/file-staging')
+    file_sync_max_file_gb: float = 10.0
+    file_sync_groups: set[str] = field(default_factory=set)
+    file_sync_backfill: bool = True
+    file_sync_scan_interval_minutes: int = 360
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -134,6 +144,7 @@ def load_config(path: str | Path) -> AppConfig:
     chat = raw.get('chat') or {}
     view_server = raw.get('view_server') or {}
     backup = raw.get('backup') or {}
+    file_sync = raw.get('file_sync') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
@@ -240,4 +251,14 @@ def load_config(path: str | Path) -> AppConfig:
         backup_min_free_mb=max(0, int(backup.get('min_free_mb') or 2048)),
         backup_images=bool(backup.get('images', False)),
         backup_images_dir=(Path(backup['images_dir']) if str(backup.get('images_dir') or '').strip() else None),
+        file_sync_enabled=bool(file_sync.get('enabled', False)),
+        file_sync_webdav_url=str(file_sync.get('webdav_url') or 'http://127.0.0.1:5244/dav'),
+        file_sync_webdav_user=str(file_sync.get('webdav_user') or ''),
+        file_sync_webdav_password=str(file_sync.get('webdav_password') or ''),
+        file_sync_remote_dir=str(file_sync.get('remote_dir') or 'QQ群文件'),
+        file_sync_staging_dir=Path(file_sync.get('staging_dir') or 'data/file-staging'),
+        file_sync_max_file_gb=max(0.1, float(file_sync.get('max_file_gb') or 10)),
+        file_sync_groups={str(x) for x in (file_sync.get('groups') or [])},
+        file_sync_backfill=bool(file_sync.get('backfill', True)),
+        file_sync_scan_interval_minutes=max(5, int(file_sync.get('scan_interval_minutes') or 360)),
     )

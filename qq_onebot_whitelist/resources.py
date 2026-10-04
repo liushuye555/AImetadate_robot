@@ -41,6 +41,7 @@ def extract_file_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
             if not name:
                 continue
             files.append({
+                'file_id': str(data.get('file_id') or data.get('id') or ''),
                 'file_name': str(name),
                 'file_size': to_int(data.get('size') or data.get('file_size')),
                 'url': data.get('url') or data.get('file_url'),
@@ -52,6 +53,7 @@ def extract_file_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
         name = file_info.get('name') or file_info.get('file_name') or file_info.get('id') or ''
         if name:
             files.append({
+                'file_id': str(file_info.get('id') or file_info.get('file_id') or ''),
                 'file_name': str(name),
                 'file_size': to_int(file_info.get('size') or file_info.get('file_size')),
                 'url': file_info.get('url'),

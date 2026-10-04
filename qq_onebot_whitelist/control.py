@@ -532,6 +532,114 @@ def cmd_backup(args: argparse.Namespace) -> int:
         return 1
 
 
+async def _file_sync_scan(config) -> dict:
+    """开一条短 ws 连接，扫描目标群文件树并入队（补历史）。"""
+    import asyncio
+    import websockets
+
+    from . import file_sync
+    from .store import Store
+
+    store = Store(config.data_dir / "bot.db")
+    enqueued = 0
+    per_group: dict = {}
+    async with websockets.connect(config.onebot_ws_url) as ws:
+
+        async def call_action(action: str, params: dict) -> dict:
+            echo = f"fs-{action}-{time.time()}"
+            await ws.send(json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False))
+            deadline = time.monotonic() + 30
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"{action} 超时")
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                data = json.loads(raw)
+                if data.get("echo") != echo:
+                    continue
+                if isinstance(data.get("status"), str) and data["status"].lower() in ("failed", "false"):
+                    raise RuntimeError(f"{action} 失败: {data.get('message') or data.get('wording')}")
+                return data
+
+        group_ids = set(config.file_sync_groups)
+        if not group_ids:
+            listing = await call_action("get_group_list", {})
+            rows = listing.get("data") or []
+            group_ids = {str(item.get("group_id")) for item in rows if item.get("group_id")} - config.blocked_groups
+        for group_id in sorted(group_ids):
+            count_new = 0
+
+            def on_file(row, gid=group_id):
+                nonlocal count_new
+                if store.enqueue_file_upload(
+                    scope=gid,
+                    file_id=row["file_id"],
+                    file_name=row["file_name"],
+                    file_size=row.get("file_size"),
+                    upload_time=str(row.get("upload_time")) if row.get("upload_time") is not None else None,
+                    busid=row.get("busid"),
+                ):
+                    count_new += 1
+
+            try:
+                total = await file_sync.scan_group(call_action, group_id, on_file=on_file)
+                per_group[group_id] = {"total": total, "new": count_new}
+                enqueued += count_new
+            except Exception as exc:
+                per_group[group_id] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    return {"groups": per_group, "enqueued": enqueued}
+
+
+def cmd_file_sync(args: argparse.Namespace) -> int:
+    try:
+        from . import file_sync
+        from .config import load_config
+        from .store import Store
+        config = load_config(REPO_ROOT / "config.yaml")
+        if args.retry_failed:
+            store = Store(config.data_dir / "bot.db")
+            n = store.retry_failed_file_uploads()
+            print(json.dumps({"ok": True, "retried": n}, ensure_ascii=False))
+            return 0
+        if args.scan:
+            import asyncio
+            result = asyncio.run(_file_sync_scan(config))
+            print(json.dumps({"ok": True, **result}, ensure_ascii=False))
+            return 0
+        if args.run:
+            if not config.file_sync_enabled:
+                print(json.dumps({"ok": False, "error": "file_sync.enabled=false"}, ensure_ascii=False))
+                return 1
+            import asyncio
+            from .store import Store
+
+            store = Store(config.data_dir / "bot.db")
+
+            async def _run():
+                def fetch_url(group_id, file_id, busid=None):
+                    return asyncio.to_thread(
+                        file_sync.fetch_download_url_once, group_id, file_id, busid,
+                        ws_url=config.onebot_ws_url,
+                    )
+                return await file_sync.process_pending(store, config, fetch_url, limit=int(args.run))
+
+            stats = asyncio.run(_run())
+            print(json.dumps({"ok": True, **stats}, ensure_ascii=False))
+            return 0
+        store = Store(config.data_dir / "bot.db")
+        print(json.dumps({
+            "ok": True,
+            "enabled": config.file_sync_enabled,
+            "webdav": config.file_sync_webdav_url,
+            "remoteDir": config.file_sync_remote_dir,
+            "status": store.file_upload_status_counts(),
+        }, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -551,6 +659,13 @@ def build_parser() -> argparse.ArgumentParser:
                                help="dangerous-op snapshot: bot-pre-<reason>-<ts>.db, exempt from retention")
     backup_parser.add_argument("--kind", default=None, choices=("daily", "weekly"),
                                help="force snapshot kind instead of weekday-based")
+    file_sync_parser = sub.add_parser("file-sync", help="group file cloud sync status/scan/run")
+    file_sync_parser.add_argument("--scan", action="store_true",
+                                  help="list all group files via NapCat and enqueue (backfill)")
+    file_sync_parser.add_argument("--run", nargs="?", const=3, default=None, metavar="N",
+                                  help="process up to N pending files now")
+    file_sync_parser.add_argument("--retry-failed", action="store_true",
+                                  help="requeue failed uploads")
     sub.add_parser("start")
     sub.add_parser("stop")
     sub.add_parser("restart")
@@ -580,6 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         "vision-recheck": cmd_vision_recheck,
         "view-list": cmd_view_list,
         "backup": cmd_backup,
+        "file-sync": cmd_file_sync,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,

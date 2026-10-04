@@ -101,3 +101,23 @@ backup:
   # 图片异地镜像（35GB 级，首拷较慢，之后每天增量）。需要先设 images_dir 并确认目标盘空间。
   images: false
   # images_dir: E:/bot-backups
+
+file_sync:
+  # 群文件上云：下载群文件本体后经 WebDAV 上传（推荐对接 AList/OpenList，
+  # 它把百度/阿里/OneDrive/123 等网盘统一挂成 WebDAV，后端随便换）。
+  enabled: false
+  # AList 的 WebDAV 地址与账号；账号密码也可直接写进 url（http://user:pass@host:5244/dav）
+  webdav_url: http://127.0.0.1:5244/dav
+  webdav_user: admin
+  webdav_password: ""
+  # 网盘里的目标目录：/<remote_dir>/<群名>/<年-月>/<文件名>
+  remote_dir: QQ群文件
+  # 下载暂存目录（上传成功后自动清理）
+  staging_dir: data/file-staging
+  # 单文件大小上限（GB），超出记 skipped 不上传
+  max_file_gb: 10
+  # 只同步这些群（群号列表）；留空 = 除 blocked_groups 外全部群
+  groups: []
+  # 定期用 NapCat 群文件列表接口补扫历史群文件
+  backfill: true
+  scan_interval_minutes: 360

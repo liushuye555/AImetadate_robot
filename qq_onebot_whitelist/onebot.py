@@ -325,6 +325,8 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
                     "imageQueue": deferred_image_count(),
                     "recallCount": store.recall_count() if store else 0,
                     "lastViewSync": _last_view_sync_at,
+                    "fileQueue": _file_sync_queue,
+                    "lastFileSync": _last_file_sync_at,
                     **_backup_status_fields(),
                     **login,
                 }
@@ -457,6 +459,87 @@ def _backup_status_fields() -> dict:
         "lastBackup": str(state.get('lastBackup') or ''),
         "backupOk": bool(state.get('backupOk')),
     }
+
+
+_last_file_sync_at = ''
+_file_sync_queue = 0
+
+
+def _make_file_sync_fetch_url(ws):
+    from . import file_sync
+
+    async def fetch_url(group_id: str, file_id: str, busid: int | None = None) -> str:
+        params: dict[str, Any] = {'group_id': int(group_id), 'file_id': str(file_id)}
+        if busid:
+            try:
+                params['busid'] = int(busid)
+            except (TypeError, ValueError):
+                pass
+        return file_sync.url_from_response(await call_action(ws, file_sync._URL_ACTION, params))
+
+    return fetch_url
+
+
+async def file_sync_scan_all(config: AppConfig, store: Store, ws) -> int:
+    """扫描所有目标群的文件树并入队，返回新增条数。"""
+    from . import file_sync
+    group_ids: set[str] = set(config.file_sync_groups)
+    if not group_ids:
+        resp = await call_action(ws, 'get_group_list', {})
+        blocked = config.blocked_groups
+        group_ids = {
+            str(item.get('group_id'))
+            for item in (resp.get('data') or [])
+            if item.get('group_id') and str(item.get('group_id')) not in blocked
+        }
+    enqueued = 0
+    for group_id in sorted(group_ids):
+        def on_file(row: dict[str, Any], gid: str = group_id) -> None:
+            nonlocal enqueued
+            if store.enqueue_file_upload(
+                scope=gid,
+                file_id=row['file_id'],
+                file_name=row['file_name'],
+                file_size=row.get('file_size'),
+                upload_time=str(row.get('upload_time')) if row.get('upload_time') is not None else None,
+                busid=row.get('busid'),
+            ):
+                enqueued += 1
+        try:
+            added = await file_sync.scan_group(call_action, group_id, on_file=on_file)
+            print(f'file_sync: 群 {group_id} 扫描到 {added} 个文件')
+        except Exception as exc:
+            print(f'file_sync: 群 {group_id} 扫描失败: {type(exc).__name__}: {exc}')
+    return enqueued
+
+
+async def background_file_sync_loop(config: AppConfig, store: Store, ws) -> None:
+    """群文件上云循环：按间隔补扫历史 + 持续消化 pending 队列。"""
+    from . import file_sync
+    global _last_file_sync_at, _file_sync_queue
+    last_scan = 0.0
+    while True:
+        try:
+            if not load_aware_ok(config):
+                await asyncio.sleep(load_aware_defer_seconds(config))
+                continue
+            now = time.monotonic()
+            if config.file_sync_backfill and (now - last_scan) >= config.file_sync_scan_interval_minutes * 60:
+                await file_sync_scan_all(config, store, ws)
+                last_scan = now
+            stats = await file_sync.process_pending(store, config, _make_file_sync_fetch_url(ws), limit=2)
+            if stats.get('uploaded') or stats.get('skipped') or stats.get('failed'):
+                _last_file_sync_at = time.strftime('%Y-%m-%d %H:%M')
+        except Exception as exc:
+            print(f'file_sync loop failed: {type(exc).__name__}: {exc}')
+            await asyncio.sleep(300)
+            continue
+        try:
+            counts = store.file_upload_status_counts()
+            _file_sync_queue = int(counts.get('pending', 0))
+        except Exception:
+            pass
+        await asyncio.sleep(120)
 
 
 async def background_backup_loop(config: AppConfig, config_path: str | Path) -> None:
@@ -767,6 +850,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                     ai_task = asyncio.create_task(ai_context_loop(config_path, store))
                 keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
                 status_task = asyncio.create_task(status_writer_loop(ws, config, login_info, store))
+                file_sync_task = (asyncio.create_task(background_file_sync_loop(config, store, ws))
+                                  if config.file_sync_enabled else None)
                 try:
                     async for raw in ws:
                         try:
@@ -778,11 +863,11 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                         except Exception as exc:
                             print(f'handle_event failed: {type(exc).__name__}: {exc}')
                 finally:
-                    for task in (startup_task, report_task, ai_task, keepalive_task, status_task):
+                    for task in (startup_task, report_task, ai_task, keepalive_task, status_task, file_sync_task):
                         if task is not None:
                             task.cancel()
                     await asyncio.gather(
-                        *(t for t in (startup_task, report_task, ai_task, keepalive_task, status_task)
+                        *(t for t in (startup_task, report_task, ai_task, keepalive_task, status_task, file_sync_task)
                           if t is not None and not t.done()),
                         return_exceptions=True,
                     )

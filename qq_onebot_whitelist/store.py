@@ -137,6 +137,24 @@ CREATE TABLE IF NOT EXISTS group_recalls (
   operator_id TEXT
 );
 
+-- 群文件上云队列：files 表只存元数据，本表驱动「下载本体 → WebDAV 传网盘」流水线
+CREATE TABLE IF NOT EXISTS file_uploads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT,
+  scope TEXT,
+  file_id TEXT,
+  file_name TEXT,
+  file_size INTEGER,
+  busid INTEGER,
+  upload_time TEXT,
+  webdav_path TEXT,
+  status TEXT DEFAULT 'pending',
+  error TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_uploads_key ON file_uploads(scope, file_id);
+CREATE INDEX IF NOT EXISTS idx_file_uploads_status ON file_uploads(status, id);
+
 CREATE TABLE IF NOT EXISTS ai_context_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -413,6 +431,62 @@ class Store:
                 (scope, str(user_id), file_name, file_size, url, kind, json.dumps(raw, ensure_ascii=False)),
             )
             conn.commit()
+
+    # ---- 群文件上云队列（file_uploads）：files 表只存元数据，这里驱动下载+上传 ----
+
+    def enqueue_file_upload(self, *, scope: str, file_id: str, file_name: str,
+                            file_size: int | None = None, upload_time: str | None = None,
+                            busid: int | None = None) -> bool:
+        """按 (scope, file_id) 幂等入队；已存在（任意状态）返回 False。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                'INSERT OR IGNORE INTO file_uploads (scope, file_id, file_name, file_size, busid, upload_time, status) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (str(scope), str(file_id), str(file_name), file_size, busid, upload_time, 'pending'),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def pending_file_uploads(self, limit: int = 5) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, scope, file_id, file_name, file_size, busid, upload_time FROM file_uploads "
+                "WHERE status = 'pending' ORDER BY id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        keys = ('id', 'scope', 'file_id', 'file_name', 'file_size', 'busid', 'upload_time')
+        return [dict(zip(keys, row)) for row in rows]
+
+    def file_upload_status_counts(self) -> dict[str, int]:
+        with self._conn() as conn:
+            rows = conn.execute('SELECT status, count(*) FROM file_uploads GROUP BY status').fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
+    def mark_file_upload(self, upload_id: int, status: str, *,
+                         error: str | None = None, webdav_path: str | None = None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                'UPDATE file_uploads SET status = ?, error = ?, webdav_path = COALESCE(?, webdav_path), '
+                'updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                (status, error, webdav_path, upload_id),
+            )
+            conn.commit()
+
+    def retry_failed_file_uploads(self) -> int:
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE file_uploads SET status = 'pending', error = NULL WHERE status = 'failed'")
+            conn.commit()
+            return cur.rowcount
+
+    def group_display_name(self, group_id: str) -> str:
+        """群名用于网盘目录名；未知的群退回群号。"""
+        try:
+            with self._conn() as conn:
+                row = conn.execute('SELECT name FROM group_names WHERE group_id = ?', (str(group_id),)).fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        name = str(row[0]).strip() if row and row[0] else ''
+        return name or str(group_id)
 
     def record_image(self, *, scope: str, user_id: str, result: dict[str, Any], raw: dict[str, Any]) -> None:
         with self._conn() as conn:

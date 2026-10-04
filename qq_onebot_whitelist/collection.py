@@ -315,6 +315,20 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> boo
                     kind=file_item.get('kind') or 'other',
                     raw={'file': file_item, 'message_text': text},
                 )
+            # 上云队列：全部类型的群文件都入队（file_sync.enabled 时由后台循环搬运）
+            if config.file_sync_enabled:
+                file_id = str(
+                    file_item.get('file_id')
+                    or file_item.get('url')
+                    or f"{file_item['file_name']}:{file_item.get('file_size') or 0}"
+                ).strip()
+                if file_id:
+                    store.enqueue_file_upload(
+                        scope=scope,
+                        file_id=file_id,
+                        file_name=file_item['file_name'],
+                        file_size=file_item.get('file_size'),
+                    )
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
     try:
         _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
