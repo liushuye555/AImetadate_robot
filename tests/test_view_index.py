@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from qq_onebot_whitelist.build_image_view import write_view_index
 
 
@@ -916,3 +918,94 @@ def test_category_gallery_page_has_no_cat_filter(tmp_path):
     page = (category / "index.html").read_text(encoding="utf-8")
     assert 'id="catSel"' not in page
     assert "__CAT_TOOLBAR__" not in page
+
+
+def _gallery_chunk_items(cat_dir, subdir='chunks'):
+    import json
+
+    items = []
+    for path in sorted((cat_dir / subdir).glob('chunk-*.js')):
+        body = path.read_text(encoding='utf-8')
+        items.extend(json.loads(body[body.index('['):body.rindex(']') + 1]))
+    return items
+
+
+@pytest.mark.parametrize('context_reason,category', [
+    ('positive_feedback', '02_群友好评'),
+    ('prompt_bound', '03_提示词绑定'),
+    ('params_discussion', '03_参数讨论'),
+])
+@pytest.mark.parametrize('deobfuscated', [False, True])
+def test_context_display_masks_only_restored_images(tmp_path, context_reason, category, deobfuscated):
+    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'image.png'
+    image.write_bytes(b'image')
+    store.record_image(scope='group:1', user_id='100', result={
+        'sha256': 'image', 'format': 'PNG', 'width': 64, 'height': 64,
+        'kept_path': str(image), 'retention_reason': 'ai_metadata',
+        'ai_source': 'ComfyUI', 'context_reason': context_reason,
+        'deobfuscated': deobfuscated, 'bound_prompt': '1girl, solo',
+    }, raw={})
+
+    build_view(tmp_path)
+
+    items = _gallery_chunk_items(tmp_path / 'data' / 'view' / category)
+    assert len(items) == 1
+    assert items[0]['masked'] is deobfuscated
+
+
+def test_all_gallery_masks_restored_images_from_obfuscation_category(tmp_path):
+    import json
+    from PIL import Image
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'image.png'
+    Image.new('RGB', (64, 64), 'red').save(image)
+    for digest, deobfuscated in [('restored', True), ('ordinary', False), ('restored-copy', True)]:
+        store.record_image(scope='group:1', user_id='100', result={
+            'sha256': digest, 'format': 'PNG', 'width': 64, 'height': 64,
+            'kept_path': str(image), 'retention_reason': 'xiaofanqie_obfuscated',
+            'deobfuscated': deobfuscated,
+        }, raw={})
+
+    build_view(tmp_path)
+
+    view = tmp_path / 'data' / 'view'
+    # 免遮罩仅适用于混淆专属页；总览中的同一张还原图必须遮罩。
+    assert all(not item['masked'] for item in _gallery_chunk_items(view / '05_小番茄混淆'))
+    for subdir in ['chunks', 'chunks-name', 'chunks-size', 'chunks-res']:
+        items = {item['id']: item for item in _gallery_chunk_items(view / ALL_GALLERY_DIR, subdir)}
+        assert items['1']['masked'] is True
+        assert items['2']['masked'] is False
+        assert items['3']['masked'] is True
+    groups = list((view / ALL_GALLERY_DIR / 'groups').glob('*.js'))
+    assert groups
+    for path in groups:
+        body = path.read_text(encoding='utf-8')
+        members = json.loads(body[body.index('{'):body.rindex('}') + 1])['members']
+        assert {item['id']: item['masked'] for item in members} == {'1': True, '2': False}
+
+
+def test_saved_collection_masks_restored_images(tmp_path):
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'image.png'
+    image.write_bytes(b'image')
+    store.record_image(scope='group:1', user_id='100', result={
+        'sha256': 'image', 'format': 'PNG', 'width': 64, 'height': 64,
+        'kept_path': str(image), 'retention_reason': 'chat_record_saved',
+        'deobfuscated': True,
+    }, raw={})
+
+    build_view(tmp_path)
+
+    view = tmp_path / 'data' / 'view'
+    assert _gallery_chunk_items(view / '06_聊天记录收藏' / '未分类')[0]['masked'] is True
+    assert _gallery_chunk_items(view / ALL_GALLERY_DIR)[0]['masked'] is True

@@ -497,6 +497,7 @@ def _gallery_entry(
     masked: bool,
     batch: str = '',
     text: str = '',
+    deobfuscated: bool = False,
 ) -> dict[str, object]:
     """统一图库条目：数据库单次扫描的产物，类目页/合并页/info 都从它投影。
 
@@ -516,6 +517,7 @@ def _gallery_entry(
         'ts': str(seen_at or '')[:10],
         'kw': kw,
         'masked': bool(masked),
+        'deobfuscated': bool(deobfuscated),
         'batch': batch,
         'text': text,
     }
@@ -1407,6 +1409,7 @@ def _entries_from_disk(cat_dir: Path, item_meta: dict[str, dict[str, str]] | Non
             seen_at=str(meta_entry.get('ts') or ''),
             kw=str(meta_entry.get('kw') or ''),
             masked='还原' in p.name,
+            deobfuscated='还原' in p.name,
             batch=_gallery_batch_key(p.name),
         ))
     return out
@@ -1689,7 +1692,8 @@ def write_all_gallery(
             'uid': str(entry.get('uid') or ''),
             'ts': str(entry.get('ts') or ''),
             'kw': str(entry.get('kw') or ''),
-            'masked': bool(entry.get('masked')),
+            # 合并页按图片来源决定遮罩，05 专属页的免遮罩状态不沿用。
+            'masked': bool(entry.get('deobfuscated') or entry.get('masked')),
             'batch': batch,
             'batch_total': batch_totals.get(batch, 0),
             'w': width,
@@ -1798,7 +1802,7 @@ def _place_context_display(
 
     还原图统一带 _还原 文件名标记（普通分组的模糊按文件名判定），
     05 混淆分组本体不遮罩。同 sha 在同一类目只落一个位置（与主展示共用去重表）。
-    03 两类的交叉显示沿用既有语义：上下文页条目恒遮罩（原实现硬编码 deobfuscated=True）。
+    交叉显示的普通图不遮罩，遮罩只取决于图片是否由混淆还原而来。
     """
     reason = row['retention_reason'] or 'unknown'
     context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
@@ -1822,12 +1826,10 @@ def _place_context_display(
         # 01 类是普通图库：筛选元数据进条目（kw 与主落位一致取正文摘录）
         kw = str(row['text_excerpt'] or '').strip()[:160].lower()
         text = ''
-        masked = is_deobfuscated
     else:
-        # 03 上下文页：正文进 text（页面按 text 搜索），kw 不用；恒遮罩
+        # 上下文页：正文进 text（页面按 text 搜索），kw 不用。
         kw = ''
         text = str(row['bound_prompt'] or '')
-        masked = True
     plans.setdefault(context_cat, _CatPlan()).entries.append(_gallery_entry(
         row_id=row['id'],
         cat=context_cat,
@@ -1838,7 +1840,8 @@ def _place_context_display(
         uid=str(row['user_id'] or ''),
         seen_at=str(row['seen_at'] or ''),
         kw=kw,
-        masked=masked,
+        masked=is_deobfuscated,
+        deobfuscated=is_deobfuscated,
         batch='',
         text=text,
     ))
@@ -1852,7 +1855,7 @@ def write_params_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwar
     _write_context_gallery(cat_dir, entries, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 30  # 页面/文件名/签名规则变化时 +1：工具栏收纳+移动端断点，旧签名作废，下次构建全量重写页面
+GENERATOR_VERSION = 31  # 统一还原图遮罩规则：普通图交叉显示不遮罩，合并页不继承 05 免遮罩。
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -2106,6 +2109,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
             continue
         sha256 = str(row['sha256'] or '') if 'sha256' in row.keys() else ''
         reason = row['retention_reason'] or 'unknown'
+        is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
         if reason == 'chat_record_saved':
             category = saved_category_name(row['saved_category'] if 'saved_category' in row.keys() else '')
             saved_categories.add(category)
@@ -2117,7 +2121,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 seen.add(sha256)
             w, h = row['width'], row['height']
             ext = src.suffix or '.img'
-            filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}") + ext
+            mask_marker = '_还原' if is_deobfuscated else ''
+            filename = safe_name(f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}") + ext
             saved_plan = plans.setdefault(saved_key, _CatPlan())
             saved_plan.entries.append(_gallery_entry(
                 row_id=row['id'],
@@ -2129,7 +2134,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 uid=str(row['user_id'] or ''),
                 seen_at=str(row['seen_at'] or ''),
                 kw=str(row['text_excerpt'] or '')[:160].lower(),
-                masked=False,
+                masked=is_deobfuscated,
+                deobfuscated=is_deobfuscated,
             ))
             all_entries.append(saved_plan.entries[-1])
             continue
@@ -2145,7 +2151,6 @@ def build_view(project_dir: Path) -> dict[str, int]:
         size_class = _size_class_of(row['width'], row['height'])
         w, h = row['width'], row['height']
         ext = src.suffix or '.img'
-        is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
         # 遮罩：除 05 混淆分组外，还原图一律带 _还原 标记（普通分组的模糊按文件名判定）
         mask_marker = '_还原' if (is_deobfuscated and reason not in ('xiaofanqie_obfuscated', 'xiaofanqie_compressed')) else ''
         pk = str(row['prompt_key'] or '')[:8] if (
@@ -2167,6 +2172,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
             seen_at=str(row['seen_at'] or ''),
             kw=(str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
             masked=bool(mask_marker),
+            deobfuscated=is_deobfuscated,
             batch=pk,
             text=str(row['bound_prompt'] or ''),
         )
