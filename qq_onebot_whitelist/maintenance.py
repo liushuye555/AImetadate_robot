@@ -519,16 +519,21 @@ def reclassify_params_judge(project_dir: str | Path, *, mode: str = 'rule') -> i
     changed = 0
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
-            "SELECT id, bound_prompt FROM images "
-            "WHERE retention_reason='params_discussion' AND bound_prompt IS NOT NULL"
+            "SELECT i.id, i.bound_prompt FROM images i "
+            "WHERE i.retention_reason='params_discussion' AND i.bound_prompt IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM image_discussions d WHERE d.image_id=i.id)"
         ).fetchall()
     texts = [str(r[1] or '') for r in rows]
     verdicts = judge_params_batch(texts, store=store)
     downgrade_ids = [row_id for row_id, verdict in zip((r[0] for r in rows), verdicts) if not verdict]
     with sqlite3.connect(db) as conn:
         for row_id in downgrade_ids:
-            conn.execute("UPDATE images SET retention_reason='candidate', bound_prompt=NULL WHERE id=?", (row_id,))
-            changed += 1
+            cur = conn.execute(
+                "UPDATE images SET retention_reason='candidate', bound_prompt=NULL "
+                "WHERE id=? AND NOT EXISTS (SELECT 1 FROM image_discussions d WHERE d.image_id=images.id)",
+                (row_id,),
+            )
+            changed += max(0, cur.rowcount)
         conn.commit()
     return changed
 

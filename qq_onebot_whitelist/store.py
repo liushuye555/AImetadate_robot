@@ -1617,20 +1617,35 @@ class Store:
                 "WHERE retention_reason IN (" + placeholders + ") "
                 "AND kept_path IS NOT NULL "
                 "AND (vision_checked IS NULL OR vision_checked = 0) "
+                "AND NOT (retention_reason='params_discussion' AND EXISTS ("
+                "SELECT 1 FROM image_discussions d WHERE d.image_id=images.id "
+                "AND (d.manual=1 OR d.status IN ('pending','rejected')))) "
                 "ORDER BY id DESC LIMIT ?",
                 (*categories, int(limit)),
             ).fetchall()
         return [(r['id'], r[1], r[2], r[3], r['retention_reason']) for r in rows]
 
-    def demote_image_to_candidate(self, image_id: int) -> None:
+    def demote_image_to_candidate(self, image_id: int) -> bool:
         """视觉判定图不对：降到 04_候选待观察（数据不删，报告可见）。"""
         with self._conn() as conn:
+            # Reviewed parameter archives remain evidence. A failed visual check
+            # can hide an automatic selection without putting its original on TTL.
             conn.execute(
+                "UPDATE image_discussions SET status='pending',reason='视觉复核未确认，保留原件待复查',"
+                "updated_at=CURRENT_TIMESTAMP WHERE image_id=? AND manual=0 AND status='selected' "
+                "AND EXISTS (SELECT 1 FROM images WHERE id=? AND retention_reason='params_discussion')",
+                (int(image_id), int(image_id)),
+            )
+            cursor = conn.execute(
                 "UPDATE images SET retention_reason = 'candidate', "
-                "bound_prompt = NULL, vision_checked = 1 WHERE id = ?",
+                "bound_prompt = NULL, vision_checked = 1 WHERE id = ? "
+                "AND NOT (retention_reason='params_discussion' AND EXISTS ("
+                "SELECT 1 FROM image_discussions d WHERE d.image_id=images.id))",
                 (int(image_id),),
             )
+            demoted = cursor.rowcount > 0
             conn.commit()
+        return demoted
 
     def archive_hashes(self, limit: int = 20000) -> list[tuple[int, str]]:
         """返回 AI 归档图片的 (phash, sha256) 列表。"""

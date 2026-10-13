@@ -208,3 +208,22 @@ def test_unknown_empty_hash_does_not_link_different_pictures(tmp_path):
     store.set_image_discussion(original, 'rejected', '歌单封面', manual=True)
     store.set_image_discussion(unrelated, 'selected', '独立技术图')
     assert store.image_discussion(unrelated)['status'] == 'selected'
+
+
+@pytest.mark.parametrize('status,manual', [('selected', True), ('selected', False), ('pending', False), ('rejected', True)])
+def test_visual_recheck_cannot_put_reviewed_originals_on_candidate_ttl(tmp_path, status, manual):
+    store = Store(tmp_path / 'bot.db')
+    image_id = _image(store, 'group:1')
+    with store._conn() as conn:
+        conn.execute("UPDATE images SET retention_reason='params_discussion',kept_path='original.png'")
+        conn.commit()
+    store.set_image_discussion(image_id, status, 'reviewed', manual=manual)
+    candidates = store.vision_unchecked_images(categories=('params_discussion',))
+    assert bool(candidates) == (status == 'selected' and not manual)
+    assert not store.demote_image_to_candidate(image_id)
+    with store._conn() as conn:
+        row = conn.execute('SELECT retention_reason,kept_path FROM images WHERE id=?', (image_id,)).fetchone()
+        assert tuple(row) == ('params_discussion', 'original.png')
+    current = store.image_discussion(image_id)
+    assert current['status'] == ('pending' if status == 'selected' and not manual else status)
+    assert current['manual'] == int(manual)

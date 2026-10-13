@@ -190,8 +190,7 @@ def recheck_batch(project_dir: str | Path, config, *, limit: int | None = None,
             store.set_vision_verdict(cached_verdict, image_id, sha256=sha256)
             reused += 1
             if cached_verdict == 'not_ai':
-                store.demote_image_to_candidate(image_id)
-                demoted += 1
+                demoted += int(store.demote_image_to_candidate(image_id))
             continue
         jobs.append((image_id, sha256, path, context, CATEGORY_MODES.get(category, 'strict')))
 
@@ -220,6 +219,5 @@ def recheck_batch(project_dir: str | Path, config, *, limit: int | None = None,
             continue
         checked += 1
         if not verdict['is_ai_image']:
-            store.demote_image_to_candidate(image_id)
-            demoted += 1
+            demoted += int(store.demote_image_to_candidate(image_id))
     return {'checked': checked, 'demoted': demoted, 'cached': reused}
