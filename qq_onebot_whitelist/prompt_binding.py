@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 # 提示词强证据：质量词、prompt: 前缀、<lora:...> 标签语法
 QUALITY_PROMPT_RE = re.compile(r'\b(masterpiece|best quality)\b', re.I)
@@ -31,7 +32,7 @@ BARE_DRAW_KEYWORDS = {'模型', '状态', '帮助', 'help', '菜单', '功能', 
 
 # 参数"具体词"：几乎只在生成参数语境出现
 PARAMS_SPECIFIC_RE = re.compile(
-    r'(ckpt|sampler|denoise|steps|seed|lora|fp8|seedvr|cfg\b|unet|vae'
+    r'(ckpt|sampler|denoise|steps|seed|lora|fp8|fp16|bf16|int8|int4|seedvr|cfg\b|unet|vae'
     r'|炼丹|采样|二采|低噪|底模|重绘幅度)', re.I)
 # 参数"泛化词"：日常聊天也常用，单独出现不算数
 PARAMS_GENERIC_RE = re.compile(
@@ -83,11 +84,40 @@ def is_params_message(text: str) -> bool:
     return bool(generic) and bool(PARAMS_QUESTION_RE.search(t))
 
 
+def _record_message_key(record: dict) -> str:
+    """Platform identifiers precede the legacy, identity-free dictionary id."""
+    raw = record.get('raw') or {}
+    for key in ('message_key', 'message_id', 'real_id', 'message_seq'):
+        value = record.get(key)
+        if value is None or value == '':
+            value = raw.get(key)
+        if value is not None and value != '':
+            return str(value)
+    if not any(key in record for key in ('message_key', 'raw', 'seen_at', 'user_id')):
+        return str(record.get('id') or '')
+    return ''
+
+
+def _timestamp(value) -> float | None:
+    if value is None or value == '':
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        try:
+            stamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            return stamp.replace(tzinfo=stamp.tzinfo or timezone.utc).timestamp()
+        except ValueError:
+            return None
+
+
 def bind_prompt_for_image(
     records: list[dict],
     reply_to: str | None = None,
     own_message_id: str | None = None,
     own_text: str | None = None,
+    own_user_id: str | None = None,
+    own_timestamp: float | None = None,
 ) -> tuple[str | None, str]:
     """为图片判定绑定：返回 (kind, prompt_text)。
 
@@ -103,7 +133,7 @@ def bind_prompt_for_image(
     # 引用绑定①：图片引用含提示词的文本
     if reply_to:
         for rec in records:
-            if str(rec.get('id') or '') == str(reply_to):
+            if _record_message_key(rec) == str(reply_to):
                 if is_prompt_message(str(rec.get('text') or '')):
                     return 'prompt', str(rec.get('text') or '')
                 break
@@ -124,7 +154,26 @@ def bind_prompt_for_image(
         last = non_empty[-1]
         if is_prompt_message(str(last.get('text') or '')):
             return 'prompt', str(last.get('text') or '')
-    # 参数/模型讨论
-    if any(is_params_message(str(rec.get('text') or '')) for rec in records[-6:]):
-        return 'params', ''
+    # 参数关键词只是候选信号，真实消息必须有同条、引用或同作者邻近关系。
+    # 实质内容和完整讨论由 params_context 做统一复核。
+    if own_text and is_params_message(own_text):
+        return 'params', own_text
+    for rec in reversed(records[-6:]):
+        text = str(rec.get('text') or '').strip()
+        if not is_params_message(text):
+            continue
+        stamp = _timestamp(rec.get('time') or (rec.get('raw') or {}).get('time') or rec.get('seen_at'))
+        if own_timestamp is not None and (stamp is None or abs(own_timestamp - stamp) > 180):
+            continue
+        if reply_to and _record_message_key(rec) == str(reply_to):
+            return 'params', text
+        if own_message_id and str(rec.get('reply_to_message_id') or '') == str(own_message_id):
+            return 'params', text
+        if own_user_id is not None and str(rec.get('user_id') or '') == str(own_user_id):
+            if rec is non_empty[-1] and not rec.get('reply_to_message_id'):
+                return 'params', text
+    # 旧的纯字典调用不含消息身份，保留其候选检测返回值；采集路径始终传身份。
+    if own_user_id is None and all(not any(k in r for k in ('raw', 'message_key', 'user_id', 'seen_at')) for r in records):
+        if any(is_params_message(str(r.get('text') or '')) for r in records[-6:]):
+            return 'params', ''
     return None, ''

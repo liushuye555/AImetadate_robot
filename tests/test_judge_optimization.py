@@ -129,7 +129,7 @@ def test_prompt_after_image_binds_backward(tmp_path):
     asyncio.run(scenario())
 
 
-def test_params_after_image_binds_backward(tmp_path):
+def test_parameter_question_after_image_does_not_promote(tmp_path):
     async def scenario():
         store = Store(tmp_path / 'bot.db')
         cfg = make_config(tmp_path)
@@ -142,8 +142,8 @@ def test_params_after_image_binds_backward(tmp_path):
             row = conn.execute(
                 "SELECT retention_reason, bound_prompt FROM images WHERE sha256='ddd'"
             ).fetchone()
-        assert row[0] == 'params_discussion'
-        assert 'sampler' in (row[1] or '')
+        assert row[0] == 'candidate'
+        assert not row[1]
 
     asyncio.run(scenario())
 

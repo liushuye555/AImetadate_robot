@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -19,7 +20,7 @@ from .ai_relevance import is_positive_feedback_text
 from .summary import extract_links
 from .gilbert_obfuscation import analyze_image, has_tool_encoder_fingerprint, restore_image, safe_restore
 from .prompt_binding import bind_prompt_for_image
-from .prompt_binding import is_params_message, is_prompt_message
+from .prompt_binding import is_params_message, is_prompt_message, _timestamp
 
 
 PAUSE_MARKER = Path(__file__).resolve().parents[1] / "run" / "collection-paused"
@@ -34,7 +35,7 @@ MAX_DEFERRED_IMAGES = 1500
 # 30 分钟以上的"迟到好评"多为闲聊误晋升；群内批量发图后单条好评很常见，
 # 因此窗口内所有仍在候选状态的图一起晋升，而不是只晋升最后一张。
 PRAISE_WINDOW_SECONDS = 600
-BIND_BACK_WINDOW_SECONDS = 600
+BIND_BACK_WINDOW_SECONDS = 180
 # 好评落空时（窗内没有候选图）给已归档图补标记上下文的原因集合
 PRAISE_CONTEXT_REASONS = ('ai_metadata', 'prompt_bound', 'params_discussion',
                           'xiaofanqie_obfuscated', 'xiaofanqie_compressed')
@@ -256,8 +257,38 @@ def _promote_recent_candidate_if_needed(store: Store, scope: str, text: str, con
         store.mark_image_context(int(recent['id']), 'positive_feedback')
 
 
-def _bind_recent_candidate_if_needed(store: Store, scope: str, text: str, config: AppConfig, user_id: str | None = None) -> None:
-    """图后补发的提示词/参数讨论反向绑定到窗口内仍在候选状态的图。
+def _message_details(store: Store, scope: str, message_db_id: int | None) -> dict:
+    """Resolve the source event even when the worker retained only message_id."""
+    if message_db_id is None:
+        return {}
+    with store._conn() as conn:
+        row = conn.execute('SELECT raw_json, message_key, seen_at, user_id, text '
+                           'FROM messages WHERE scope=? AND id=?', (scope, int(message_db_id))).fetchone()
+    if row is None:
+        return {}
+    try:
+        raw = json.loads(row[0] or '{}')
+    except (TypeError, ValueError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {'raw': raw, 'message_key': row[1], 'seen_at': row[2], 'user_id': row[3],
+            'text': row[4] or '', 'time': raw.get('time')}
+
+
+def _write_image_discussion(store: Store, image_id: int, context: dict) -> None:
+    store.set_image_discussion(
+        image_id, status=context.get('status') or 'pending',
+        reason=context.get('reason') or 'no_related_parameters',
+        context_text=context.get('text') or '', evidence_ids=context.get('evidence_ids') or [],
+    )
+
+
+def _bind_recent_candidate_if_needed(
+    store: Store, scope: str, text: str, config: AppConfig, user_id: str | None = None,
+    event: dict[str, Any] | None = None, message_db_id: int | None = None,
+) -> None:
+    """反向绑定候选图，并刷新已选参数图的关联讨论正文。
 
     图片入库时只看"前一条消息"；讨论常发生在图发出之后，这里补上事后方向。
     """
@@ -265,17 +296,105 @@ def _bind_recent_candidate_if_needed(store: Store, scope: str, text: str, config
     if not text or (user_id and str(user_id) in config.images_ignore_bot_user_ids):
         return
     is_prompt = is_prompt_message(text)
-    if not is_prompt and not is_params_message(text):
+    is_params = is_params_message(text)
+    if not is_prompt and not is_params:
         return
-    candidates = store.recent_candidate_images(scope, max_age_seconds=BIND_BACK_WINDOW_SECONDS)
+    source_text = _message_details(store, scope, message_db_id)
+    text_event = source_text.get('raw') or event or {}
+    text_stamp = _timestamp(text_event.get('time') or source_text.get('seen_at'))
+    if text_stamp is None and is_prompt:
+        text_stamp = datetime.now(timezone.utc).timestamp()
+    reply_id = reply_to_message_id(text_event)
+    # 窗口依据原事件时间；历史补采的入库时间不能让旧消息重新变成邻近消息。
+    with store._conn() as conn:
+        rows = conn.execute(
+            "SELECT id, sha256, kept_path, size, width, height, format, has_ai_metadata, "
+            "seen_at, user_id, message_db_id, raw_json, retention_reason FROM images WHERE scope=? "
+            "AND (retention_reason='candidate' OR (? AND "
+            "(retention_reason='params_discussion' OR context_reason='params_discussion'))) "
+            "AND kept_path IS NOT NULL ORDER BY id DESC LIMIT 256",
+            (scope, int(is_params)),
+        ).fetchall()
+    candidates = []
+    for row in rows:
+        candidate = dict(zip(('id', 'sha256', 'kept_path', 'size', 'width', 'height', 'format',
+                              'has_ai_metadata', 'seen_at', 'user_id', 'message_db_id',
+                              'raw_json', 'retention_reason'), row))
+        candidates.append(candidate)
+    latest_author_image = None
+    if message_db_id is not None and user_id:
+        with store._conn() as conn:
+            author_rows = conn.execute('SELECT id, raw_json FROM messages WHERE scope=? '
+                                       'AND user_id=? AND id<=? ORDER BY id DESC LIMIT 256',
+                                       (scope, str(user_id), int(message_db_id))).fetchall()
+        for db_id, raw_json in author_rows:
+            try:
+                if extract_image_segments(json.loads(raw_json or '{}')):
+                    latest_author_image = db_id
+                    break
+            except (TypeError, ValueError):
+                continue
+    context_cache = {}
     for candidate in candidates:
         if is_probable_sticker_result(candidate):
             continue
-        reason = 'prompt_bound' if is_prompt else 'params_discussion'
+        try:
+            image_raw = json.loads(candidate['raw_json'] or '{}')
+        except (TypeError, ValueError):
+            image_raw = {}
+        image_db_id = candidate.get('message_db_id') or image_raw.get('message_db_id')
+        image_message = _message_details(store, scope, image_db_id)
+        image_stamp = _timestamp(image_message.get('time') or image_message.get('seen_at') or candidate['seen_at'])
+        if text_stamp is None or image_stamp is None or not 0 <= text_stamp - image_stamp <= BIND_BACK_WINDOW_SECONDS:
+            continue
+        existing_discussion = store.image_discussion(int(candidate['id']))
+        if existing_discussion and existing_discussion.get('manual'):
+            if candidate['retention_reason'] != 'candidate' or existing_discussion.get('status') != 'selected':
+                continue
+        if candidate['retention_reason'] != 'candidate':
+            # 已选图可能收到引用其关联问题的后续回答；交由完整关系图判定。
+            # 此路径仅更新派生正文，不能移动、降级或删除已存原图。
+            if image_db_id is None or message_db_id is None:
+                continue
+            from .params_context import build_image_context
+            if image_db_id not in context_cache:
+                context_cache[image_db_id] = build_image_context(store, scope, int(image_db_id))
+            context = context_cache[image_db_id]
+            if context.get('status') == 'selected' and message_db_id in context.get('evidence_ids', []):
+                _write_image_discussion(store, int(candidate['id']), context)
+            continue
+        platform_id = str(image_message.get('message_key') or image_raw.get('message_id') or '')
+        if reply_id:
+            if not platform_id or reply_id != platform_id:
+                continue
+        elif str(candidate.get('user_id') or '') != str(user_id or ''):
+            continue
+        elif image_db_id is not None and latest_author_image != image_db_id:
+            continue
+        context = None
+        reason = 'prompt_bound'
+        bound_text = text
+        if not is_prompt:
+            if image_db_id is None or message_db_id is None:
+                continue
+            from .params_context import build_image_context
+            if image_db_id not in context_cache:
+                context_cache[image_db_id] = build_image_context(store, scope, int(image_db_id))
+            context = context_cache[image_db_id]
+            if message_db_id not in context.get('evidence_ids', []):
+                continue
+            _write_image_discussion(store, int(candidate['id']), context)
+            saved_discussion = store.image_discussion(int(candidate['id']))
+            if context.get('status') != 'selected' or (saved_discussion and saved_discussion.get('status') != 'selected'):
+                continue
+            reason = 'params_discussion'
+            bound_text = context.get('text') or ''
         if not _promote_candidate_row(store, scope, candidate, config, reason=reason):
             continue
-        store.set_bound_prompt(int(candidate['id']), text[:2000])
-        return
+        store.set_bound_prompt(int(candidate['id']), bound_text[:2000])
+        # 多图片段来自同一消息时共享同一个讨论，不能只晋升最后一段。
+        if image_db_id is None:
+            return
 
 
 def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> bool:
@@ -332,7 +451,8 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> boo
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
     try:
         _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
-        _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)
+        _bind_recent_candidate_if_needed(store, scope, text, config, user_id=user_id,
+                                         event=event, message_db_id=message_db_id)
         collect_custom(store, event, text, config)
     except Exception as exc:
         # 晋升/反向绑定要移动候选图文件，候选可能刚被 TTL 清理（历史上一张
@@ -418,6 +538,12 @@ def process_event_image(
     """处理单张图片：幂等检查 → 下载 → 归档 → 混淆检测/还原 → 表情包过滤 → 入库。"""
     if str(user_id or '') in config.images_ignore_bot_user_ids:
         return  # 机器人账号发送的图片直接忽略
+    source_message = _message_details(store, scope, message_db_id)
+    if source_message:
+        event = {**(event or {}), **source_message['raw']}
+        own_text = source_message['text']
+    discussion = {'status': 'pending', 'text': '', 'evidence_ids': [],
+                  'reason': 'missing_source_message'}
     # 事件级幂等：同一事件（scope+消息+段序号）重放时不再下载/记账。
     # 段序号由调用方写入 image['segment_index']；缺序号（老路径/手动保存）不拦。
     segment_index = image.get('segment_index')
@@ -428,6 +554,12 @@ def process_event_image(
         except Exception:
             pass  # 幂等检查失败时按新图处理，宁可多记不可漏记
     try:
+        if message_db_id is not None:
+            try:
+                from .params_context import build_image_context
+                discussion = build_image_context(store, scope, message_db_id)
+            except Exception as exc:
+                print(f'image discussion context failed: {type(exc).__name__}: {exc}')
         result = process_image_url(
             image['url'],
             tmp_dir=config.data_dir / 'tmp',
@@ -439,7 +571,9 @@ def process_event_image(
         # 03 提示词/参数绑定（无 AI 元数据图）
         if not result.get('has_ai_metadata'):
             try:
-                records = store.recent_records(scope, limit=6)
+                records = store.recent_records_before(scope, message_db_id, limit=6) if message_db_id is not None else []
+                for record in records:
+                    record.update(_message_details(store, scope, record.get('id')))
             except Exception:
                 records = []
             kind, prompt = bind_prompt_for_image(
@@ -448,6 +582,9 @@ def process_event_image(
                 own_message_id=str((event or {}).get('message_id') or '') or None,
                 own_text=own_text,
             )
+            # 关键词命中只提出候选；确认关联及实质答案由统一上下文判定器决定。
+            if kind != 'prompt':
+                kind = 'params' if discussion.get('status') == 'selected' else None
             if kind == 'prompt':
                 keep = True
                 # LLM 复核模式（rule/llm/both）：校验提示词文本是否像真实出图提示词
@@ -468,7 +605,7 @@ def process_event_image(
                     else:
                         keep = cached_verdict
                     if not keep:
-                        kind = 'params' if any(is_params_message(str(r.get('text') or '')) for r in records[-6:]) else None
+                        kind = 'params' if discussion.get('status') == 'selected' else None
                 if keep:
                     result['retention_reason'] = 'prompt_bound'
                     result['bound_prompt'] = prompt[:2000]
@@ -480,9 +617,7 @@ def process_event_image(
                 result['retention_reason'] = 'candidate'
             # 参数讨论：记录相关讨论文本（供报告展示"讨论了什么参数"）
             if result.get('retention_reason') == 'params_discussion' and not result.get('bound_prompt'):
-                result['bound_prompt'] = '\n'.join(
-                    str(r.get('text') or '') for r in records[-6:] if str(r.get('text') or '').strip()
-                )[:2000]
+                result['bound_prompt'] = str(discussion.get('text') or '')[:2000]
             # 参数讨论 LLM 复核（rule/llm/both）：只问没答/闲聊 → 降级候选
             if result.get('retention_reason') == 'params_discussion' \
                     and config.ai_discussion_judge != 'rule' and result.get('bound_prompt'):
@@ -491,10 +626,12 @@ def process_event_image(
                     if not judge_params_batch([result['bound_prompt']], store=store)[0]:
                         result['retention_reason'] = 'candidate'
                         result['bound_prompt'] = None
+                        discussion = {**discussion, 'status': 'pending',
+                                      'reason': '参数讨论复核未确认实质内容'}
                 except Exception:
                     pass
             # 绑定成功的图若在候选目录，晋升到 ai 归档（候选目录会被定期清理）
-            if kind in ('prompt', 'params') and result.get('kept_path') \
+            if result.get('retention_reason') in ('prompt_bound', 'params_discussion') and result.get('kept_path') \
                     and 'candidates' in str(result.get('kept_path') or ''):
                 try:
                     from .image_lifecycle import CandidateImage, promote_candidate
@@ -607,5 +744,13 @@ def process_event_image(
             result=result,
             raw=raw,
         )
+        if message_db_id is not None:
+            with store._conn() as conn:
+                recorded = conn.execute('SELECT id FROM images WHERE scope=? AND message_db_id=? '
+                                        'AND segment_index IS ? ORDER BY id DESC LIMIT 1',
+                                        (scope, int(message_db_id),
+                                         int(segment_index) if segment_index is not None else None)).fetchone()
+            if recorded:
+                _write_image_discussion(store, int(recorded[0]), discussion)
     except Exception as exc:
         print(f'image processing failed: {type(exc).__name__}: {exc}')

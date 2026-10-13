@@ -957,6 +957,98 @@ def test_context_display_masks_only_restored_images(tmp_path, context_reason, ca
     assert items[0]['masked'] is deobfuscated
 
 
+@pytest.mark.parametrize('status,visible', [
+    ('selected', True),
+    ('pending', False),
+    ('rejected', False),
+])
+def test_params_discussion_report_uses_review_status_without_removing_image(tmp_path, status, visible):
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'params.png'
+    image.write_bytes(b'image')
+    store.record_image(scope='group:1', user_id='100', result={
+        'sha256': f'params-{status}', 'format': 'PNG', 'width': 64, 'height': 64,
+        'kept_path': str(image), 'retention_reason': 'params_discussion',
+        'bound_prompt': 'old bound prompt',
+    }, raw={})
+    with store._conn() as conn:
+        image_id = int(conn.execute('SELECT MAX(id) FROM images').fetchone()[0])
+    store.set_image_discussion(image_id, status, 'reason', context_text='selected discussion context')
+
+    build_view(tmp_path)
+
+    view = tmp_path / 'data' / 'view'
+    params_items = _gallery_chunk_items(view / '03_参数讨论') if (view / '03_参数讨论').exists() else []
+    all_items = _gallery_chunk_items(view / ALL_GALLERY_DIR) if (view / ALL_GALLERY_DIR).exists() else []
+    assert bool(params_items) is visible
+    assert bool(all_items) is visible
+    if visible:
+        assert params_items[0]['text'] == 'selected discussion context'
+        assert all_items[0]['kw'] == 'selected discussion context'
+    assert image.exists()
+    assert store.image_discussion(image_id)['status'] == status
+
+
+@pytest.mark.parametrize('status,params_visible', [
+    ('selected', True),
+    ('pending', False),
+    ('rejected', False),
+])
+def test_ai_image_param_cross_display_does_not_hide_ai_main_category(tmp_path, status, params_visible):
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'ai.png'
+    image.write_bytes(b'image')
+    store.record_image(scope='group:1', user_id='100', result={
+        'sha256': f'ai-{status}', 'format': 'PNG', 'width': 64, 'height': 64,
+        'kept_path': str(image), 'retention_reason': 'ai_metadata',
+        'ai_source': 'ComfyUI', 'context_reason': 'params_discussion',
+        'bound_prompt': 'old bound prompt',
+    }, raw={})
+    with store._conn() as conn:
+        image_id = int(conn.execute('SELECT MAX(id) FROM images').fetchone()[0])
+    store.set_image_discussion(image_id, status, 'reason', context_text='selected discussion context')
+
+    build_view(tmp_path)
+
+    view = tmp_path / 'data' / 'view'
+    assert len(_gallery_chunk_items(view / '01_AI元数据_ComfyUI')) == 1
+    params_items = _gallery_chunk_items(view / '03_参数讨论') if (view / '03_参数讨论').exists() else []
+    assert bool(params_items) is params_visible
+    assert len(_gallery_chunk_items(view / ALL_GALLERY_DIR)) == 1
+    if params_visible:
+        assert params_items[0]['text'] == 'selected discussion context'
+    assert image.exists()
+
+
+def test_params_discussion_report_falls_back_when_discussion_table_is_missing(tmp_path):
+    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.store import Store
+
+    store = Store(tmp_path / 'data' / 'bot.db')
+    image = tmp_path / 'legacy.png'
+    image.write_bytes(b'image')
+    store.record_image(scope='group:1', user_id='100', result={
+        'sha256': 'legacy-params', 'format': 'PNG', 'width': 64, 'height': 64,
+        'kept_path': str(image), 'retention_reason': 'params_discussion',
+        'bound_prompt': 'legacy bound prompt',
+    }, raw={})
+    with store._conn() as conn:
+        conn.execute('DROP TABLE image_discussions')
+        conn.commit()
+
+    build_view(tmp_path)
+
+    items = _gallery_chunk_items(tmp_path / 'data' / 'view' / '03_参数讨论')
+    assert len(items) == 1
+    assert items[0]['text'] == 'legacy bound prompt'
+
+
 def test_all_gallery_masks_restored_images_from_obfuscation_category(tmp_path):
     import json
     from PIL import Image

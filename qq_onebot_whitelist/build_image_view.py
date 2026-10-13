@@ -1796,7 +1796,7 @@ def _size_class_of(w: object, h: object) -> str:
 
 def _place_context_display(
     row, src: Path, sha256: str, size_class: str, ext: str, is_deobfuscated: bool,
-    *, plans: dict, dedup_seen: dict,
+    *, plans: dict, dedup_seen: dict, discussion: dict | None = None,
 ) -> None:
     """按 context_reason 把行交叉显示到原分类（05 确认混淆图回 01/02/03 等）。
 
@@ -1807,6 +1807,9 @@ def _place_context_display(
     reason = row['retention_reason'] or 'unknown'
     context_reason = row['context_reason'] if 'context_reason' in row.keys() else None
     if not context_reason or context_reason not in CATEGORY_NAMES:
+        return
+    discussion = discussion or {}
+    if context_reason == 'params_discussion' and discussion.get('status') in {'pending', 'rejected'}:
         return
     context_cat = CATEGORY_NAMES[context_reason]
     if context_reason == 'ai_metadata':
@@ -1830,6 +1833,8 @@ def _place_context_display(
         # 上下文页：正文进 text（页面按 text 搜索），kw 不用。
         kw = ''
         text = str(row['bound_prompt'] or '')
+        if context_reason == 'params_discussion' and discussion.get('status') == 'selected':
+            text = str(discussion.get('context_text') or '')
     plans.setdefault(context_cat, _CatPlan()).entries.append(_gallery_entry(
         row_id=row['id'],
         cat=context_cat,
@@ -1855,7 +1860,7 @@ def write_params_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwar
     _write_context_gallery(cat_dir, entries, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 31  # 统一还原图遮罩规则：普通图交叉显示不遮罩，合并页不继承 05 免遮罩。
+GENERATOR_VERSION = 32  # 参数讨论页按人工结论展示，旧数据库仍沿用原字段。
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -2040,6 +2045,15 @@ def build_view(project_dir: Path) -> dict[str, int]:
     conn.execute('PRAGMA journal_mode=WAL')
     conn.row_factory = sqlite3.Row
     image_cols = {row[1] for row in conn.execute('PRAGMA table_info(images)')}
+    discussion_rows = {}
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_discussions'").fetchone():
+        try:
+            discussion_rows = {
+                int(r['image_id']): {'status': r['status'], 'context_text': r['context_text']}
+                for r in conn.execute('SELECT image_id, status, context_text FROM image_discussions')
+            }
+        except sqlite3.OperationalError:
+            discussion_rows = {}
     sha256_col = 'sha256, ' if 'sha256' in image_cols else "'' AS sha256, "
     saved_category_col = 'saved_category, ' if 'saved_category' in image_cols else "'' AS saved_category, "
     restored_col = 'restored_path, ' if 'restored_path' in image_cols else "'' AS restored_path, "
@@ -2109,6 +2123,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
             continue
         sha256 = str(row['sha256'] or '') if 'sha256' in row.keys() else ''
         reason = row['retention_reason'] or 'unknown'
+        discussion = discussion_rows.get(int(row['id']), {})
+        hide_params_main = reason == 'params_discussion' and discussion.get('status') in {'pending', 'rejected'}
         is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
         if reason == 'chat_record_saved':
             category = saved_category_name(row['saved_category'] if 'saved_category' in row.keys() else '')
@@ -2143,7 +2159,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
         if reason == 'ai_metadata' and row['ai_source']:
             display = SOURCE_DISPLAY.get(str(row['ai_source']), str(row['ai_source']))
             cat = cat + '_' + safe_name(display)
-        if sha256:
+        if sha256 and not hide_params_main:
             seen = dedup_seen.setdefault(cat, set())
             if sha256 in seen:
                 continue
@@ -2160,27 +2176,31 @@ def build_view(project_dir: Path) -> dict[str, int]:
             f"#{row['id']}_{w or 'x'}x{h or 'x'}_{reason}{mask_marker}{'_pk' + pk if pk else ''}"
             f"{'_x' + str(occurrences.get(cat, {}).get(sha256, 1)) if sha256 and occurrences.get(cat, {}).get(sha256, 1) > 1 else ''}"
         ) + ext
-        plan = plans.setdefault(cat, _CatPlan())
-        entry = _gallery_entry(
-            row_id=row['id'],
-            cat=cat,
-            rel=f'{size_class}/{filename}',
-            src=src,
-            w=row['width'],
-            h=row['height'],
-            uid=str(row['user_id'] or ''),
-            seen_at=str(row['seen_at'] or ''),
-            kw=(str(row['text_excerpt'] or '') + ' ' + str(row['bound_prompt'] or '')).strip()[:160].lower(),
-            masked=bool(mask_marker),
-            deobfuscated=is_deobfuscated,
-            batch=pk,
-            text=str(row['bound_prompt'] or ''),
-        )
-        plan.entries.append(entry)
-        all_entries.append(entry)
+        if not hide_params_main:
+            discussion_text = str(row['bound_prompt'] or '')
+            if reason == 'params_discussion' and discussion.get('status') == 'selected':
+                discussion_text = str(discussion.get('context_text') or '')
+            plan = plans.setdefault(cat, _CatPlan())
+            entry = _gallery_entry(
+                row_id=row['id'],
+                cat=cat,
+                rel=f'{size_class}/{filename}',
+                src=src,
+                w=row['width'],
+                h=row['height'],
+                uid=str(row['user_id'] or ''),
+                seen_at=str(row['seen_at'] or ''),
+                kw=(str(row['text_excerpt'] or '') + ' ' + discussion_text).strip()[:160].lower(),
+                masked=bool(mask_marker),
+                deobfuscated=is_deobfuscated,
+                batch=pk,
+                text=discussion_text,
+            )
+            plan.entries.append(entry)
+            all_entries.append(entry)
         # 交叉显示：05 的确认混淆图按 context_reason 回到原分类
         _place_context_display(row, src, sha256, size_class, ext, is_deobfuscated,
-                               plans=plans, dedup_seen=dedup_seen)
+                               plans=plans, dedup_seen=dedup_seen, discussion=discussion)
     # merged 行（原地还原替换后 kept_path 置空、只剩 context_reason）：
     # 用同 sha 的现存存档文件兜底，把它们的交叉显示补齐（主展示不做，避免重复落位）。
     if ctx_only_rows:
@@ -2198,7 +2218,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
             is_deobfuscated = bool(row['deobfuscated']) if 'deobfuscated' in row.keys() else False
             _place_context_display(row, src, sha256, _size_class_of(row['width'], row['height']),
                                    src.suffix or '.img', is_deobfuscated,
-                                   plans=plans, dedup_seen=dedup_seen)
+                                   plans=plans, dedup_seen=dedup_seen,
+                                   discussion=discussion_rows.get(int(row['id']), {}))
     state = _load_build_state(project_dir)
     counts: dict[str, int] = {}
     copy_fallbacks: list[tuple[Path, Path]] = []

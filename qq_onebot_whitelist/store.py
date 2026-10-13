@@ -9,6 +9,7 @@ import threading
 from typing import Any
 
 from .summary import extract_links
+from .content_utils import redact_secrets
 
 
 def raw_message_ids(raw: dict[str, Any]) -> set[str]:
@@ -258,6 +259,18 @@ CREATE TABLE IF NOT EXISTS discussion_judges (
   verdict INTEGER,
   tokens INTEGER,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS image_discussions (
+  image_id INTEGER PRIMARY KEY,
+  scope TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  context_text TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  manual INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
 );
 '''
 
@@ -1692,3 +1705,98 @@ class Store:
         with self._conn() as conn:
             row = conn.execute('SELECT COUNT(*) FROM messages WHERE scope = ? AND id > ?', (scope, int(after_id))).fetchone()
         return int(row[0] or 0)
+
+    def set_image_discussion(
+        self,
+        image_id: int,
+        status: str,
+        reason: str,
+        context_text: str = '',
+        evidence_ids: list[int] | None = None,
+        manual: bool = False,
+        version: int = 1,
+    ) -> bool:
+        """Store discussion metadata separately from image retention decisions."""
+        if status not in {'selected', 'rejected', 'pending'}:
+            raise ValueError('invalid image discussion status')
+        ids = [] if evidence_ids is None else list(evidence_ids)
+        if any(type(item) is not int or item <= 0 for item in ids):
+            raise ValueError('evidence_ids must contain positive integers')
+        safe_reason = redact_secrets(reason)[:500]
+        safe_context = redact_secrets(context_text)[:6000]
+        with self._conn() as conn:
+            image = conn.execute('SELECT scope,sha256 FROM images WHERE id = ?', (int(image_id),)).fetchone()
+            if image is None:
+                raise ValueError('image does not exist')
+            scope = image[0]
+            if ids:
+                placeholders = ','.join('?' for _ in ids)
+                rows = conn.execute(
+                    f'SELECT id FROM messages WHERE scope = ? AND id IN ({placeholders})',
+                    (scope, *ids),
+                ).fetchall()
+                if {int(row[0]) for row in rows} != set(ids):
+                    raise ValueError('evidence message does not exist in image scope')
+            existing = conn.execute(
+                'SELECT manual FROM image_discussions WHERE image_id = ?', (int(image_id),)
+            ).fetchone()
+            if existing and int(existing[0]) == 1 and not manual:
+                return False
+            # Resolve inherited human rejection inside the write statement. A
+            # separate read could become stale while another thread corrects a
+            # duplicate. Explicit manual decisions and other groups stay independent.
+            cursor = conn.execute(
+                '''WITH rejection AS (
+                     SELECT d.reason FROM image_discussions d JOIN images i ON i.id=d.image_id
+                     WHERE ?=0 AND i.scope=? AND i.sha256=? AND i.sha256<>'' AND d.manual=1 AND d.status='rejected'
+                     ORDER BY d.updated_at DESC LIMIT 1
+                   )
+                   INSERT INTO image_discussions
+                   (image_id, scope, status, reason, context_text, evidence_json, manual, version, updated_at)
+                   SELECT ?, ?,
+                     CASE WHEN EXISTS(SELECT 1 FROM rejection) THEN 'rejected' ELSE ? END,
+                     COALESCE((SELECT reason FROM rejection),?),
+                     CASE WHEN EXISTS(SELECT 1 FROM rejection) THEN '' ELSE ? END,
+                     CASE WHEN EXISTS(SELECT 1 FROM rejection) THEN '[]' ELSE ? END,
+                     ?, ?, CURRENT_TIMESTAMP WHERE 1=1
+                   ON CONFLICT(image_id) DO UPDATE SET
+                     scope=excluded.scope, status=excluded.status, reason=excluded.reason,
+                     context_text=excluded.context_text, evidence_json=excluded.evidence_json,
+                     manual=excluded.manual, version=excluded.version, updated_at=CURRENT_TIMESTAMP
+                   WHERE image_discussions.manual=0 OR excluded.manual=1''',
+                (int(bool(manual)), scope, image[1], int(image_id), scope, status, safe_reason, safe_context,
+                 json.dumps(ids, ensure_ascii=False), int(bool(manual)), int(version)),
+            )
+            # sqlite reports -1 for INSERT statements prefixed by a CTE.
+            written = conn.execute('SELECT changes()').fetchone()[0] > 0
+            if written and manual and status == 'rejected' and image[1]:
+                conn.execute(
+                    '''INSERT INTO image_discussions
+                       (image_id,scope,status,reason,context_text,evidence_json,manual,version,updated_at)
+                       SELECT id,scope,'rejected',?,'','[]',0,?,CURRENT_TIMESTAMP FROM images
+                       WHERE scope=? AND sha256=? AND id<>?
+                       ON CONFLICT(image_id) DO UPDATE SET status='rejected',reason=excluded.reason,
+                         context_text='',evidence_json='[]',version=excluded.version,updated_at=CURRENT_TIMESTAMP
+                       WHERE image_discussions.manual=0''',
+                    (safe_reason, int(version), scope, image[1], int(image_id)),
+                )
+            conn.commit()
+        return written
+
+    def image_discussion(self, image_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                'SELECT image_id, scope, status, reason, context_text, evidence_json, manual, version, updated_at '
+                'FROM image_discussions WHERE image_id = ?',
+                (int(image_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        try:
+            result['evidence_ids'] = json.loads(result.pop('evidence_json'))
+        except (TypeError, json.JSONDecodeError):
+            result['evidence_ids'] = []
+            result.pop('evidence_json', None)
+        return result
