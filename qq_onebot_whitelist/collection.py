@@ -530,14 +530,18 @@ def process_event_image(
             if xfq_result is not None:
                 result['xfq_ratio'] = round(float(xfq_result['ratio']), 4)
                 result['xfq_layers'] = xfq_result.get('layers')
+                result['xfq_direction'] = xfq_result.get('direction')
+                result['xfq_version'] = xfq_result.get('detector_version')
                 try:
-                        store.save_obfuscation_score(
-                            str(result.get('sha256') or ''),
-                            ratio=float(xfq_result['ratio']),
-                            layers=xfq_result.get('layers'),
-                            obfuscated=bool(xfq_result.get('obfuscated')),
-                            confidence=xfq_result.get('confidence') or 'none',
-                        )
+                    store.save_obfuscation_score(
+                        str(result.get('sha256') or ''),
+                        ratio=float(xfq_result['ratio']),
+                        layers=xfq_result.get('layers'),
+                        obfuscated=bool(xfq_result.get('obfuscated')),
+                        confidence=xfq_result.get('confidence') or 'none',
+                        direction=xfq_result.get('direction'),
+                        version=xfq_result.get('detector_version'),
+                    )
                 except Exception:
                     pass
                 if xfq_result.get('obfuscated'):
@@ -555,17 +559,24 @@ def process_event_image(
                     # 确认档自动解混淆：还原到临时文件后提升为唯一存档（删原图）
                     if confidence == 'confirmed' and result.get('kept_path'):
                         try:
+                            restore_args = {}
+                            direction = xfq_result.get('direction')
+                            if direction in {'decode', 'encode'}:
+                                restore_args['direction'] = direction
                             final = safe_restore(
                                 result['kept_path'],
                                 config.data_dir / 'tmp' / f"{result.get('sha256')}.restore.png",
                                 config.data_dir / 'images' / 'ai',
                                 str(result.get('sha256') or ''),
                                 layers=xfq_result.get('layers'),
+                                **restore_args,
                             )
                             if final is not None:
                                 result['kept_path'] = str(final)
                                 result['restored_path'] = str(final)
                                 result['deobfuscated'] = True
+                                result['size'] = final.stat().st_size
+                                result['format'] = 'PNG'
                             else:
                                 print('restore failed verification, keeping original')
                         except Exception as exc:

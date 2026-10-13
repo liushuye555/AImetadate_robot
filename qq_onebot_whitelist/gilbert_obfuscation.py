@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
 from array import array
 from pathlib import Path
 from typing import Any
@@ -41,11 +42,13 @@ RATIO_WEAK_MAX = 0.95       # 疑似档的 ratio 上限
 RATIO_FALLBACK = 0.30       # 超大图无法逆置换时的严格 ratio 兜底
 MAX_LAYERS = 3              # 尝试解混淆的最大层数
 MAX_RESTORE_PIXELS = MAX_PIXELS  # 检测到的图片都允许进入还原；超大图仍由 MAX_PIXELS 拦截
+DETECTOR_VERSION = 2  # 双向检测；旧弱信号缓存需要重新判断。
 
 # 曲线顺序缓存：按 (w, h) 存 array('I')，总量上限约 64MB，超出清空
 MAX_CACHE_BYTES = 64 * 1024 * 1024
 _order_cache: dict[tuple[int, int], array] = {}
 _cache_bytes = 0
+_promote_lock = threading.RLock()
 
 
 def _gilbert_walk(x: int, y: int, ax: int, ay: int, bx: int, by: int,
@@ -173,13 +176,14 @@ def _apply_decoder(src: bytearray, order: array, width: int, shift: int) -> byte
     return dst
 
 
-def _restore_ratios(mv, width: int, height: int, base_tv: float, layers: int = MAX_LAYERS) -> list[float]:
+def _restore_ratios(mv, width: int, height: int, base_tv: float, layers: int = MAX_LAYERS,
+                    *, direction: str = 'decode') -> list[float]:
     """连续应用 1..layers 层逆置换，返回每层后的栅格 TV / 原始栅格 TV。"""
     if base_tv <= 1e-6:
         return []
     n = width * height
     order = _curve_order_cached(width, height)
-    shift = round((math.sqrt(5) - 1) / 2 * n)
+    shift = round((math.sqrt(5) - 1) / 2 * n) * (1 if direction == 'decode' else -1)
     cur = bytearray(mv)
     ratios: list[float] = []
     for _ in range(layers):
@@ -217,29 +221,31 @@ def analyze_image(path: str | Path) -> dict[str, Any] | None:
         'tv_curve': tv_curve,
         'restore_ratios': [],
         'layers': None,
+        'direction': None,
+        'detector_version': DETECTOR_VERSION,
+        'direction_ratios': {},
     }
     if ratio < RESTORE_BORDERLINE and width * height <= MAX_RESTORE_PIXELS:
-        ratios = _restore_ratios(mv, width, height, tv_raster)
-        result['restore_ratios'] = [round(v, 4) for v in ratios]
-        best_layer = None
-        best_value = None
-        for idx, value in enumerate(ratios, start=1):
-            if value < RESTORE_CONFIRM:
-                best_layer = idx
-                best_value = value
-                break
-        if best_layer is not None:
+        candidates = []
+        for direction in ('decode', 'encode'):
+            ratios = _restore_ratios(mv, width, height, tv_raster, direction=direction)
+            result['direction_ratios'][direction] = [round(v, 4) for v in ratios]
+            candidates.extend((value, layer, direction) for layer, value in enumerate(ratios, 1))
+        if not candidates:
+            return result
+        best_value, best_layer, best_direction = min(candidates)
+        result['restore_ratios'] = result['direction_ratios'][best_direction]
+        if best_value < RESTORE_CONFIRM:
             result['obfuscated'] = True
             result['confidence'] = 'confirmed'
             result['layers'] = best_layer
-        elif ratio <= RATIO_WEAK_MAX and min(ratios) < RESTORE_WEAK:
-            # 逆置换后 TV 没有明显上升：重压/缩放后的混淆图（弱信号，待人工复核）
-            for idx, value in enumerate(ratios, start=1):
-                if value < RESTORE_WEAK:
-                    result['obfuscated'] = True
-                    result['confidence'] = 'possible'
-                    result['layers'] = idx
-                    break
+            result['direction'] = best_direction
+        elif ratio <= RATIO_WEAK_MAX and best_value < RESTORE_WEAK:
+            # 双向均未确认：可能重压/缩放，也可能是其他弱信号，保留复核状态。
+            result['obfuscated'] = True
+            result['confidence'] = 'possible'
+            result['layers'] = best_layer
+            result['direction'] = best_direction
     elif ratio < RATIO_FALLBACK:
         # 超大图无法逐层逆置换，只能看强 ratio 信号（保守）
         result['obfuscated'] = True
@@ -290,29 +296,45 @@ def restore_image(
     out_path: str | Path,
     layers: int | None = None,
     max_layers: int = MAX_LAYERS,
+    *, direction: str | None = None,
 ) -> tuple[Path, int]:
-    """对混淆图做单层逆置换还原（网站"解混淆"方向），保存为无损 PNG。"""
+    """按检测出的方向和层数还原为 PNG，保留透明度与生成元数据。"""
     from PIL import Image as _Image
 
+    if direction is None:
+        detected = analyze_image(src_path)
+        if not detected or detected.get('confidence') != 'confirmed':
+            raise ValueError('未找到可确认的混淆还原方向')
+        direction = detected['direction']
+        if layers is None:
+            layers = detected['layers']
+    if direction not in ('decode', 'encode'):
+        raise ValueError('还原方向必须是 decode/encode')
+    layers = 1 if layers is None else layers
+    if type(layers) is not int or not 1 <= layers <= min(max_layers, MAX_LAYERS):
+        raise ValueError('还原层数超出范围')
     with _Image.open(src_path) as img:
         width, height = img.size
         if width * height > MAX_RESTORE_PIXELS:
             raise ValueError(f'图片过大（{width}x{height}），无法还原')
-        rgb = img.convert('RGB')
+        mode = 'RGBA' if 'A' in img.getbands() or 'transparency' in img.info else 'RGB'
+        rgb = img.convert(mode)
         # 混淆不修改元数据：把原文件的 tEXt（prompt/workflow 等）带到还原图上，
         # 否则"还原即替换"会把生成元数据一起抹掉。
         text_meta = dict(getattr(img, 'text', None) or {})
-    channels = [list(rgb.getchannel(name).tobytes()) for name in ('R', 'G', 'B')]
     order = _curve_order_cached(width, height)
     n = width * height
-    shift = round((math.sqrt(5) - 1) / 2 * n)
+    shift = round((math.sqrt(5) - 1) / 2 * n) * (1 if direction == 'decode' else -1)
 
     restored_channels: list[bytes] = []
-    for channel in channels:
-        restored_channels.append(bytes(_apply_decoder(bytearray(channel), order, width, shift)))
+    for name in mode:
+        channel = bytearray(rgb.getchannel(name).tobytes())
+        for _ in range(layers):
+            channel = _apply_decoder(channel, order, width, shift)
+        restored_channels.append(bytes(channel))
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    merged = _Image.merge('RGB', [_Image.frombytes('L', (width, height), c) for c in restored_channels])
+    merged = _Image.merge(mode, [_Image.frombytes('L', (width, height), c) for c in restored_channels])
     save_kwargs: dict = {}
     if text_meta:
         from PIL.PngImagePlugin import PngInfo
@@ -321,7 +343,7 @@ def restore_image(
             pnginfo.add_text(str(key), str(value))
         save_kwargs['pnginfo'] = pnginfo
     merged.save(out_path, format='PNG', **save_kwargs)
-    return out_path, 1
+    return out_path, layers
 
 
 def promote_restored(
@@ -329,6 +351,7 @@ def promote_restored(
     restored_path: str | Path,
     archive_root: str | Path,
     digest: str,
+    *, original_snapshot: str | Path | None = None,
 ) -> Path:
     """把还原图提升为唯一存档：原子覆盖归档区原文件，随后删除混淆原图。
 
@@ -341,13 +364,43 @@ def promote_restored(
     if not restored.exists() or restored.stat().st_size <= 0:
         raise FileNotFoundError(f'restored image missing or empty: {restored}')
     archive_root = Path(archive_root)
+    if not digest or '/' in digest or '\\' in digest or digest in ('.', '..'):
+        raise ValueError('无效的归档摘要')
     dest = archive_root / digest[:2] / f'{digest}{restored.suffix}'
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = restored.with_suffix(restored.suffix + '.tmp')
-    shutil.copy2(str(restored), str(tmp))
-    tmp.replace(dest)
-    if original.exists() and original.resolve() != dest.resolve():
-        original.unlink(missing_ok=True)
+    same_target = original.resolve() == dest.parent.resolve() / dest.name
+    backup_source = Path(original_snapshot) if original_snapshot is not None else original
+    # 原件独立副本，不与归档文件共用硬链接：覆盖归档后仍可恢复混淆内容。
+    if backup_source.is_file():
+        backup = archive_root.parent / 'obfuscation-originals' / digest[:2] / f'{digest}{original.suffix}'
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.exists():
+            import os
+            import tempfile
+            fd, name = tempfile.mkstemp(prefix='.original-', dir=backup.parent)
+            os.close(fd)
+            try:
+                shutil.copy2(backup_source, name)
+                # 原子发布且不覆盖：并发还原时先完成的原件副本永久保留。
+                try:
+                    os.link(name, backup)
+                except FileExistsError:
+                    pass
+            finally:
+                Path(name).unlink(missing_ok=True)
+    import os
+    import tempfile
+    fd, staged_name = tempfile.mkstemp(prefix='.restored-', dir=dest.parent)
+    os.close(fd)
+    tmp = Path(staged_name)
+    try:
+        shutil.copy2(str(restored), str(tmp))
+        with _promote_lock:
+            tmp.replace(dest)
+            if not same_target and original.exists():
+                original.unlink(missing_ok=True)
+    finally:
+        tmp.unlink(missing_ok=True)
     return dest
 
 
@@ -357,13 +410,22 @@ def safe_restore(
     archive_root: str | Path,
     digest: str,
     layers: int | None = None,
+    *, direction: str | None = None,
 ) -> Path | None:
     """还原并校验：输出必须是正常图（未判混淆且 ratio ≥ 0.8）才替换归档。
 
     校验不通过返回 None（保留原图，不标记 deobfuscated），避免把坏还原当成品。
     """
-    restored, _ = restore_image(src_path, tmp_out, layers=layers)
-    check = analyze_image(restored)
-    if not (check and not check.get('obfuscated') and check.get('ratio', 0) >= 0.8):
-        return None
-    return promote_restored(src_path, restored, archive_root, digest)
+    import shutil
+    from tempfile import TemporaryDirectory
+    parent = Path(tmp_out).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    # 每次调用独占输入快照与输出；并发任务不会读到对方正在写的 PNG。
+    with TemporaryDirectory(prefix='obfuscation-restore-', dir=parent) as work:
+        snapshot = Path(work) / ('source' + Path(src_path).suffix)
+        shutil.copy2(src_path, snapshot)
+        restored, _ = restore_image(snapshot, Path(work) / 'restored.png', layers=layers, direction=direction)
+        check = analyze_image(restored)
+        if not (check and not check.get('obfuscated') and check.get('ratio', 0) >= 0.8):
+            return None
+        return promote_restored(src_path, restored, archive_root, digest, original_snapshot=snapshot)

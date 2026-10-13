@@ -193,6 +193,13 @@ CREATE INDEX IF NOT EXISTS idx_custom_rule_id ON custom_collections(rule, id);
 CREATE TABLE IF NOT EXISTS image_hashes (
   sha256 TEXT PRIMARY KEY,
   phash TEXT,
+  xfq_ratio REAL,
+  xfq_layers INTEGER,
+  xfq_obfuscated INTEGER,
+  xfq_confidence TEXT,
+  xfq_direction TEXT,
+  xfq_version INTEGER DEFAULT 0,
+  vision_verdict TEXT,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -317,6 +324,10 @@ class Store:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_obfuscated INTEGER')
         if 'xfq_confidence' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_confidence TEXT')
+        if 'xfq_direction' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_direction TEXT')
+        if 'xfq_version' not in hash_cols:
+            conn.execute('ALTER TABLE image_hashes ADD COLUMN xfq_version INTEGER DEFAULT 0')
         if 'vision_verdict' not in hash_cols:
             conn.execute('ALTER TABLE image_hashes ADD COLUMN vision_verdict TEXT')
 
@@ -636,10 +647,15 @@ class Store:
             conn.commit()
 
     def mark_image_deobfuscated(self, image_id: int, *, kept_path: str, restored_path: str) -> None:
+        try:
+            size = Path(kept_path).stat().st_size
+        except OSError:
+            size = None
         with self._conn() as conn:
             conn.execute(
-                'UPDATE images SET kept_path=?, restored_path=?, deobfuscated=1 WHERE id=?',
-                (kept_path, restored_path, int(image_id)),
+                "UPDATE images SET kept_path=?, restored_path=?, deobfuscated=1, size=COALESCE(?,size), "
+                "format=CASE WHEN ? IS NOT NULL THEN 'PNG' ELSE format END WHERE id=?",
+                (kept_path, restored_path, size, size, int(image_id)),
             )
             conn.commit()
 
@@ -1446,19 +1462,24 @@ class Store:
     def save_obfuscation_score(
         self, sha256: str, *, ratio: float, layers: int | None,
         obfuscated: bool, confidence: str | None = None,
+        direction: str | None = None, version: int | None = None,
     ) -> None:
         """缓存小番茄混淆检测结果，避免重分类时重复分析。"""
         if not sha256:
             return
+        if version is None:
+            from .gilbert_obfuscation import DETECTOR_VERSION
+            version = DETECTOR_VERSION
         with self._conn() as conn:
             conn.execute(
-                'INSERT INTO image_hashes (sha256, xfq_ratio, xfq_layers, xfq_obfuscated, xfq_confidence) '
-                'VALUES (?, ?, ?, ?, ?) '
+                'INSERT INTO image_hashes (sha256, xfq_ratio, xfq_layers, xfq_obfuscated, xfq_confidence, xfq_direction, xfq_version) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(sha256) DO UPDATE SET xfq_ratio = excluded.xfq_ratio, '
                 'xfq_layers = excluded.xfq_layers, xfq_obfuscated = excluded.xfq_obfuscated, '
-                'xfq_confidence = excluded.xfq_confidence, '
+                'xfq_confidence = excluded.xfq_confidence, xfq_direction = excluded.xfq_direction, '
+                'xfq_version = excluded.xfq_version, '
                 'updated_at = CURRENT_TIMESTAMP',
-                (sha256, round(float(ratio), 4), layers, 1 if obfuscated else 0, confidence),
+                (sha256, round(float(ratio), 4), layers, 1 if obfuscated else 0, confidence, direction, int(version)),
             )
             conn.commit()
 
@@ -1474,6 +1495,38 @@ class Store:
         if not row or row[0] is None:
             return None
         return (float(row[0]), int(row[1]) if row[1] is not None else None, bool(row[2]), row[3])
+
+    def obfuscation_details(self, sha256: str) -> dict | None:
+        """返回包含算法方向与版本的缓存详情；旧缓存的版本为 0。"""
+        if not sha256:
+            return None
+        with self._conn() as conn:
+            row = conn.execute(
+                'SELECT xfq_ratio, xfq_layers, xfq_obfuscated, xfq_confidence, '
+                'xfq_direction, COALESCE(xfq_version, 0) FROM image_hashes WHERE sha256 = ?',
+                (sha256,),
+            ).fetchone()
+        if not row or row[0] is None:
+            return None
+        return {
+            'ratio': float(row[0]),
+            'layers': int(row[1]) if row[1] is not None else None,
+            'obfuscated': bool(row[2]),
+            'confidence': row[3],
+            'direction': row[4],
+            'detector_version': int(row[5] or 0),
+        }
+
+    def touch_obfuscation_attempt(self, sha256: str) -> None:
+        """将失败尝试排到迁移队列末尾，不把读取错误缓存成否定结论。"""
+        if not sha256:
+            return
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO image_hashes(sha256,updated_at) VALUES (?,strftime('%Y-%m-%d %H:%M:%f','now')) "
+                "ON CONFLICT(sha256) DO UPDATE SET updated_at=excluded.updated_at", (sha256,),
+            )
+            conn.commit()
 
     def set_vision_verdict(self, verdict: str, image_id: int, sha256: str | None = None) -> None:
         """缓存视觉复核结果（一张图只花一次 token）。

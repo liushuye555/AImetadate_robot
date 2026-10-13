@@ -8,9 +8,31 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .build_image_view import build_view
-from .gilbert_obfuscation import analyze_image, safe_restore
+from .gilbert_obfuscation import DETECTOR_VERSION, analyze_image, safe_restore
 from .resource_view import write_resource_pages
 from .store import Store
+
+
+def _cached_detection(store: Store, digest: str, *, refresh_legacy: bool = False):
+    result = store.obfuscation_details(digest)
+    if result is None or result.get('confidence') is None:
+        return None
+    if refresh_legacy and result.get('detector_version') != DETECTOR_VERSION:
+        return None
+    return result
+
+
+def _save_detection(store: Store, digest: str, result: dict):
+    store.save_obfuscation_score(
+        digest, ratio=float(result.get('ratio') or 0), layers=result.get('layers'),
+        obfuscated=bool(result.get('obfuscated')), confidence=result.get('confidence') or 'none',
+        direction=result.get('direction'), version=result.get('detector_version'),
+    )
+
+
+def _restore_options(result: dict) -> dict:
+    direction = result.get('direction')
+    return {'direction': direction} if direction in ('decode', 'encode') else {}
 
 
 def deduplicate_image_storage(project_dir: str | Path, store: Store) -> int:
@@ -124,7 +146,8 @@ def remove_sticker_records(project_dir: str | Path) -> int:
     return removed
 
 
-def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5) -> int:
+def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int = 10, reencode_threshold: float = 6.5,
+                                   image_ids: list[int] | None = None) -> int:
     """重分类图片：小番茄混淆（Gilbert 曲线逆置换验证）。
 
     - 算法级确认且无上下文分类 → xiaofanqie_obfuscated（并自动还原）；
@@ -132,12 +155,15 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     - 重压/缩放弱信号 → xiaofanqie_compressed；
     - 其余图退回 no_ai_metadata（旧 pHash/块状伪影启发式分类已退役）。
     """
-    from .gilbert_obfuscation import analyze_image, safe_restore
-    from .store import Store
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
     if not db.exists():
         return 0
+    if image_ids is not None:
+        if not image_ids:
+            return 0
+        if len(image_ids) > 1000 or any(type(i) is not int or i <= 0 for i in image_ids):
+            raise ValueError('图片编号范围无效')
     store = Store(db)
     decisions: list[tuple[int, str, str | None, str | None]] = []
     context_reasons = ('positive_feedback', 'prompt_bound', 'params_discussion', 'ai_metadata')
@@ -148,52 +174,47 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
             ).fetchall()
         }
         rows = conn.execute(
-            "SELECT id, kept_path, format, sha256, retention_reason FROM images "
-            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode') "
-            "AND kept_path IS NOT NULL"
+            "SELECT id, kept_path, format, sha256, retention_reason, has_ai_metadata, context_reason FROM images "
+            "WHERE retention_reason IN ('candidate', 'no_ai_metadata', 'possible_obfuscation', 'possible_reencode', 'xiaofanqie_compressed') "
+            "AND kept_path IS NOT NULL AND coalesce(deobfuscated,0)=0 AND merged_into IS NULL"
+            + (' AND id IN (' + ','.join('?' for _ in image_ids) + ')' if image_ids is not None else ''),
+            image_ids or [],
         ).fetchall()
     # 两阶段：先全部判定（独立连接，避免外层写事务内再开连接导致 SQLite 锁）
     archive_root = project_dir / 'data' / 'images' / 'ai'
-    for row_id, kept_path, format, sha256, reason in rows:
+    for row_id, kept_path, format, sha256, reason, has_metadata, original_context in rows:
         path = Path(kept_path)
         if not path.exists():
             continue
-        cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-        if cached is not None and cached[3] is not None:
-            xfq_result = {
-                'obfuscated': cached[2],
-                'ratio': cached[0],
-                'layers': cached[1],
-                'confidence': cached[3],
-            }
-        elif sha256 and str(sha256) in confirmed_shas:
+        cached = _cached_detection(store, str(sha256 or ''), refresh_legacy=True) if sha256 else None
+        if sha256 and str(sha256) in confirmed_shas:
             # 同 sha 已有确认标记（文件可能已是还原图，无法再分析）
             xfq_result = {'obfuscated': True, 'ratio': 0.5, 'layers': None, 'confidence': 'confirmed'}
+        elif cached is not None:
+            xfq_result = cached
         else:
             try:
                 xfq_result = analyze_image(path)
             except Exception:
-                xfq_result = None
+                continue
+            if xfq_result is None:
+                continue
             if xfq_result is not None:
                 try:
-                    store.save_obfuscation_score(
-                        str(sha256 or ''),
-                        ratio=float(xfq_result['ratio']),
-                        layers=xfq_result.get('layers'),
-                        obfuscated=bool(xfq_result.get('obfuscated')),
-                        confidence=xfq_result.get('confidence') or 'none',
-                    )
+                    _save_detection(store, str(sha256 or ''), xfq_result)
                 except Exception:
                     pass
         if xfq_result and xfq_result.get('obfuscated'):
             confirmed = xfq_result.get('confidence') == 'confirmed'
-            context_reason = None
+            context_reason = original_context
             if confirmed and reason in context_reasons:
                 # 交叉分类：05 为主分类，上下文分类单独记录（02/03 遮罩显示）
                 new_reason = 'xiaofanqie_obfuscated'
                 context_reason = reason
             else:
                 new_reason = 'xiaofanqie_obfuscated' if confirmed else 'xiaofanqie_compressed'
+                if confirmed and has_metadata and not context_reason:
+                    context_reason = 'ai_metadata'
             restored_final = None
             # 确认档：还原即替换（删混淆原图、归档指向还原图）
             if confirmed and sha256:
@@ -208,6 +229,7 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                             archive_root,
                             str(sha256),
                             layers=xfq_result.get('layers'),
+                            **_restore_options(xfq_result),
                         )
                         restored_final = str(final) if final is not None else None
                     else:
@@ -215,17 +237,18 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
                         restored_final = str(path)
                 except Exception:
                     pass
-            decisions.append((row_id, new_reason, restored_final, context_reason))
+            if new_reason != reason or restored_final or context_reason != original_context:
+                decisions.append((row_id, new_reason, restored_final, context_reason))
         elif reason in ('possible_obfuscation', 'possible_reencode'):
             # 旧启发式临时分类退役：非混淆图退回 04 候选（TTL 自动清理）
-            decisions.append((row_id, 'candidate', None, None))
+            decisions.append((row_id, 'ai_metadata' if has_metadata else 'candidate', None, original_context))
     if decisions:
         with sqlite3.connect(db) as conn:
             for row_id, new_reason, restored_final, context_reason in decisions:
                 if restored_final:
                     conn.execute(
-                        "UPDATE images SET retention_reason=?, kept_path=?, restored_path=?, deobfuscated=1, context_reason=? WHERE id=?",
-                        (new_reason, restored_final, restored_final, context_reason, row_id),
+                        "UPDATE images SET retention_reason=?, kept_path=?, restored_path=?, deobfuscated=1, context_reason=?, size=?, format='PNG' WHERE id=?",
+                        (new_reason, restored_final, restored_final, context_reason, Path(restored_final).stat().st_size, row_id),
                     )
                 else:
                     conn.execute(
@@ -236,59 +259,64 @@ def reclassify_possible_obfuscation(project_dir: str | Path, *, threshold: int =
     return len(decisions)
 
 
-def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
+def restore_confirmed_obfuscation(project_dir: str | Path, *, max_rechecks: int = 20) -> int:
     """为已确认的小番茄混淆图补齐自动还原并替换为唯一存档（删原图）。"""
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
     if not db.exists():
         return 0
+    if type(max_rechecks) is not int or not 1 <= max_rechecks <= 1000:
+        raise ValueError('每轮重新检测数量必须为1—1000')
     store = Store(db)
     archive_root = project_dir / 'data' / 'images' / 'ai'
     changed = 0
+    rechecks = 0
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
-            "SELECT id, sha256, kept_path FROM images "
-            "WHERE retention_reason IN ('xiaofanqie_obfuscated', 'prompt_bound', 'params_discussion', 'positive_feedback') "
-            "AND deobfuscated=0 "
-            "AND kept_path IS NOT NULL"
+            "SELECT i.id, i.sha256, i.kept_path FROM images i LEFT JOIN image_hashes h ON h.sha256=i.sha256 "
+            "WHERE i.retention_reason IN ('xiaofanqie_obfuscated', 'prompt_bound', 'params_discussion', 'positive_feedback') "
+            "AND i.deobfuscated=0 AND i.merged_into IS NULL "
+            "AND i.kept_path IS NOT NULL ORDER BY COALESCE(h.updated_at,''),i.id"
         ).fetchall()
         for row_id, sha256, kept_path in rows:
             path = Path(kept_path)
             if not path.exists():
                 continue
-            cached = store.obfuscation_score(str(sha256 or '')) if sha256 else None
-            if cached is not None and cached[3] is not None:
+            cached = _cached_detection(store, str(sha256 or ''), refresh_legacy=True) if sha256 else None
+            if cached is not None:
                 # 已分析过（含负结果）：直接复用缓存，避免每轮同步全量重分析
-                if cached[2] and cached[3] == 'confirmed':
-                    layers = cached[1]
+                if cached['obfuscated'] and cached['confidence'] == 'confirmed':
+                    layers = cached['layers']
+                    detected = cached
                 else:
                     continue
             else:
                 # 存量 02/03 图片可能从未写入 image_hashes；先现场检测，避免
                 # 只有新采集图片才能自动解混淆。
+                if rechecks >= max_rechecks:
+                    continue
+                rechecks += 1
                 try:
                     detected = analyze_image(path)
                 except Exception:
-                    detected = None
+                    store.touch_obfuscation_attempt(str(sha256 or ''))
+                    continue
+                if detected is None:
+                    # 尺寸超出支持范围也持久缓存，避免每轮占满有限的迁移名额。
+                    detected = {'obfuscated': False, 'ratio': 1.0, 'layers': None, 'confidence': 'unsupported',
+                                'detector_version': DETECTOR_VERSION}
                 if not (detected and detected.get('obfuscated') and detected.get('confidence') == 'confirmed'):
                     # 负结果同样落缓存：本轮分析一次，后续同步直接跳过
                     if detected is not None and sha256:
                         try:
-                            store.save_obfuscation_score(
-                                str(sha256), ratio=float(detected.get('ratio') or 0.0),
-                                layers=detected.get('layers'), obfuscated=False,
-                                confidence=detected.get('confidence') or 'none',
-                            )
+                            _save_detection(store, str(sha256), detected)
                         except Exception:
                             pass
                     continue
                 layers = detected.get('layers')
                 if sha256:
                     try:
-                        store.save_obfuscation_score(
-                            str(sha256), ratio=float(detected['ratio']),
-                            layers=layers, obfuscated=True, confidence='confirmed',
-                        )
+                        _save_detection(store, str(sha256), detected)
                     except Exception:
                         pass
             try:
@@ -300,6 +328,7 @@ def restore_confirmed_obfuscation(project_dir: str | Path) -> int:
                     archive_root,
                     str(sha256 or ''),
                     layers=layers,
+                    **_restore_options(detected),
                 )
                 if final is not None:
                     store.mark_image_deobfuscated(
