@@ -1025,9 +1025,16 @@ class Store:
                 rows = conn.execute('SELECT url FROM links ORDER BY id DESC LIMIT ?', (int(limit),)).fetchall()
         return [row[0] for row in rows]
 
-    def recent_link_records(self, limit: int = 20, since: str | None = None) -> list[dict[str, Any]]:
+    def recent_link_records(self, limit: int = 20, since: str | None = None, scope: str | None = None) -> list[dict[str, Any]]:
         with self._conn() as conn:
-            if since:
+            if scope is not None:
+                sql = 'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links WHERE scope = ?'
+                args: list = [scope]
+                if since:
+                    sql += ' AND seen_at > ?'
+                    args.append(since)
+                rows = conn.execute(sql + ' ORDER BY id DESC LIMIT ?', [*args, int(limit)]).fetchall()
+            elif since:
                 rows = conn.execute(
                     'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links WHERE seen_at > ? ORDER BY id DESC LIMIT ?',
                     (since, int(limit)),
@@ -1093,9 +1100,16 @@ class Store:
             )
             conn.commit()
 
-    def recent_files(self, limit: int = 20, since: str | None = None) -> list[dict[str, Any]]:
+    def recent_files(self, limit: int = 20, since: str | None = None, scope: str | None = None) -> list[dict[str, Any]]:
         with self._conn() as conn:
-            if since:
+            if scope is not None:
+                sql = 'SELECT seen_at, scope, user_id, file_name, file_size, url, kind, raw_json FROM files WHERE scope = ?'
+                args: list = [scope]
+                if since:
+                    sql += ' AND seen_at > ?'
+                    args.append(since)
+                rows = conn.execute(sql + ' ORDER BY id DESC LIMIT ?', [*args, int(limit)]).fetchall()
+            elif since:
                 rows = conn.execute(
                     'SELECT seen_at, scope, user_id, file_name, file_size, url, kind, raw_json FROM files WHERE seen_at > ? ORDER BY id DESC LIMIT ?',
                     (since, int(limit)),

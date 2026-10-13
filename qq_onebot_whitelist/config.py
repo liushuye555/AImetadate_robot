@@ -117,6 +117,7 @@ class AppConfig:
     file_sync_groups: set[str] = field(default_factory=set)
     file_sync_backfill: bool = True
     file_sync_scan_interval_minutes: int = 360
+    knowledge: dict = field(default_factory=dict)
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -261,4 +262,5 @@ def load_config(path: str | Path) -> AppConfig:
         file_sync_groups={str(x) for x in (file_sync.get('groups') or [])},
         file_sync_backfill=bool(file_sync.get('backfill', True)),
         file_sync_scan_interval_minutes=max(5, int(file_sync.get('scan_interval_minutes') or 360)),
+        knowledge=dict(raw.get('knowledge') or {}),
     )

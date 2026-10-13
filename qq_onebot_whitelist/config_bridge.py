@@ -28,6 +28,8 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
     proxy = network.get('proxy') or {}
     relay = data.get('relay') or {}
     chat = data.get('chat') or {}
+    knowledge = data.get('knowledge') or {}
+    knowledge_defaults = knowledge.get('defaults') or {}
 
     def field(key: str, kind: str, default: Any, en: str, zh: str, **extra: Any) -> dict[str, Any]:
         item = {'key': key, 'kind': kind, 'default': default, 'label': {'en-US': en, 'zh-CN': zh}}
@@ -69,6 +71,16 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('collection.groups', 'collection-list', collection.get('groups', {}), 'Per-group collection', '群级采集配置', section='collection'),
         field('collection.rules', 'custom-rules', collection.get('rules', []), 'Custom collection rules', '自定义采集规则', section='collection'),
         field('collection.expand_forwards', 'bool', collection.get('expand_forwards', False), 'Expand forwarded messages', '展开转发的合并消息', section='collection'),
+        field('knowledge.enabled', 'bool', knowledge.get('enabled', False), 'Enable group knowledge features', '启用群知识功能', section='knowledge'),
+        field('knowledge.defaults.match_mode', 'select', knowledge_defaults.get('match_mode', 'hybrid'), 'Default knowledge match mode', '默认知识匹配模式', section='knowledge', options=['hybrid', 'specialist', 'generic']),
+        field('knowledge.defaults.topics', 'list', knowledge_defaults.get('topics', []), 'Default topics', '默认主题', section='knowledge'),
+        field('knowledge.defaults.interval_minutes', 'number', knowledge_defaults.get('interval_minutes', 15), 'Analysis interval (minutes)', '分析间隔（分钟）', section='knowledge', min=1, max=1440),
+        field('knowledge.defaults.min_new_messages', 'number', knowledge_defaults.get('min_new_messages', 30), 'Minimum new messages', '最少新增消息数', section='knowledge', min=1, max=200),
+        field('knowledge.defaults.max_wait_minutes', 'number', knowledge_defaults.get('max_wait_minutes', 60), 'Maximum wait (minutes)', '最长等待时间（分钟）', section='knowledge', min=1, max=1440),
+        field('knowledge.defaults.batch_size', 'number', knowledge_defaults.get('batch_size', 100), 'Messages per batch', '每批消息数', section='knowledge', min=5, max=200),
+        field('knowledge.defaults.max_tokens_per_day', 'number', knowledge_defaults.get('max_tokens_per_day', 50000), 'Daily token budget', '每日 token 预算', section='knowledge', min=1000, max=10000000),
+        field('knowledge.defaults.files.max_file_mb', 'number', (knowledge_defaults.get('files') or {}).get('max_file_mb', 512), 'Maximum file size (MB)', '最大文件大小（MB）', section='knowledge', min=1, max=102400),
+        field('knowledge.defaults.files.budget_gb', 'number', (knowledge_defaults.get('files') or {}).get('budget_gb', 20), 'File archive budget (GB)', '文件归档容量（GB）', section='knowledge', min=0, max=100000),
         field('load_aware.enabled', 'bool', load_aware.get('enabled', True), 'Load-aware scheduling', '负载感知调度', section='load'),
         field('load_aware.cpu_threshold', 'number', load_aware.get('cpu_threshold', 80), 'CPU threshold (%)', 'CPU 阈值（%）', section='load', min=10, max=100),
         field('load_aware.check_seconds', 'number', load_aware.get('check_seconds', 60), 'Recheck interval (s)', '重试间隔（秒）', section='load', min=10, max=3600),

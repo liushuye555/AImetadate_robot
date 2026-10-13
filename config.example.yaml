@@ -118,6 +118,37 @@ file_sync:
   max_file_gb: 10
   # 只同步这些群（群号列表）；留空 = 除 blocked_groups 外全部群
   groups: []
+
   # 定期用 NapCat 群文件列表接口补扫历史群文件
   backfill: true
   scan_interval_minutes: 360
+
+# 群知识功能：全局默认关闭。启用全局开关后，仍需在 knowledge.groups 中
+# 为具体群显式开启群开关及需要的子功能；新群不会自动启用。
+knowledge:
+  enabled: false
+  defaults:
+    match_mode: hybrid
+    topics: []
+    interval_minutes: 15
+    min_new_messages: 30
+    max_wait_minutes: 60
+    batch_size: 100
+    max_tokens_per_day: 50000
+    summary:
+      enabled: false
+      daily: false
+      weekly: false
+    extraction:
+      enabled: false
+    glossary:
+      enabled: false
+    files:
+      enabled: false
+      max_file_mb: 512
+      budget_gb: 20
+    history:
+      enabled: false
+    notifications:
+      enabled: false
+  groups: {}

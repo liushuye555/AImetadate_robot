@@ -768,7 +768,8 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
             request_image_sync()
             return stale_view_counts(_REPO_ROOT / 'data' / 'view')
         return sync_image_files(_REPO_ROOT, ttl_hours=config.candidate_ttl_hours)
-    reply = build_reply(
+    reply = await asyncio.to_thread(
+        build_reply,
         event,
         store,
         default_summary_limit=config.default_summary_limit,
@@ -840,6 +841,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         sync_task = asyncio.create_task(background_sync_loop(config))
         image_task = asyncio.create_task(image_worker_loop(config, store))
         backup_task = asyncio.create_task(background_backup_loop(config, config_path))
+        from .knowledge import knowledge_loop
+        knowledge_task = asyncio.create_task(knowledge_loop(config_path))
         try:
             async with websockets.connect(config.onebot_ws_url) as ws:
                 login_info = await probe_login_info(config)
@@ -875,10 +878,10 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             # NapCat 未登录/未就绪时连接会被拒，重试等待而不是直接退出
             print(f'OneBot connect failed: {type(exc).__name__}: {exc}')
         finally:
-            for task in (sync_task, image_task, backup_task):
+            for task in (sync_task, image_task, backup_task, knowledge_task):
                 task.cancel()
             await asyncio.gather(
-                *(t for t in (sync_task, image_task, backup_task) if not t.done()),
+                *(t for t in (sync_task, image_task, backup_task, knowledge_task) if not t.done()),
                 return_exceptions=True,
             )
             try:

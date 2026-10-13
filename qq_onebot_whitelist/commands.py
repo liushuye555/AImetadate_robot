@@ -80,9 +80,9 @@ def format_view_counts(counts: dict, language: str = 'zh-CN') -> str:
     return '\n'.join(lines)
 
 
-def format_resources(store, *, limit: int = 20, language: str = 'zh-CN') -> str:
-    files = store.recent_files(limit=limit)
-    links = store.recent_link_records(limit=limit)
+def format_resources(store, *, limit: int = 20, language: str = 'zh-CN', scope: str | None = None) -> str:
+    files = store.recent_files(limit=limit, scope=scope)
+    links = store.recent_link_records(limit=limit, scope=scope)
     if not files and not links:
         return tr('no_records', language)
     lines = [tr('resources_title', language)]
@@ -157,6 +157,10 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
     normalized = text.lower().replace(' ', '')
     scope = scope_for_event(event)
     is_private = event.get('message_type') == 'private'
+    from .knowledge import command_reply
+    knowledge_reply = command_reply(text, event, config_path)
+    if knowledge_reply is not None:
+        return knowledge_reply
     if is_keepalive_event(event):
         return tr('alive', language)
     schedule_reply = handle_analysis_windows_command(text, is_private=is_private, config_path=config_path, language=language)
@@ -165,7 +169,7 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
     if view_builder is not None and is_refresh_command(normalized):
         return format_view_counts(view_builder(), language)
     if normalized in {'资源', '文件', '链接线索', '资源总结', '文件线索', 'resources', 'files', 'resourcessummary', 'resourceleads'}:
-        return format_resources(store, language=language)
+        return format_resources(store, language=language, scope=None if is_private else scope)
     if normalized in {'/帮助', '帮助', 'help', '/help'}:
         return help_text(language)
     if normalized.startswith('/链接') or normalized == '链接' or normalized.startswith('/link') or normalized == 'links':
@@ -196,7 +200,7 @@ def build_reply(event: dict[str, Any], store, *, default_summary_limit: int = 10
         fallback_config = LLMConfig.ds_fallback_from_env_file()
         if llm_config or fallback_config:
             try:
-                return summarize_records_with_fallback(records, llm_config, fallback_config)
+                return summarize_records_with_fallback(records, llm_config, fallback_config, purpose='group_summary')
             except Exception as exc:
                 fallback = summarize_records(records, language=language)
                 return tr('summary_failed', language, reason=type(exc).__name__, fallback=fallback)
