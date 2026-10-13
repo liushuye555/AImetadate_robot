@@ -32,7 +32,7 @@ def read_records(db_path: Path, scope: str, *, after_id: int = 0, limit: int = 1
     conn.row_factory = sqlite3.Row
     try:
         conn.execute('PRAGMA query_only=ON')
-        query = 'SELECT id,scope,text,raw_json,seen_at,links_json FROM messages WHERE scope=? AND id>?'
+        query = 'SELECT id,scope,user_id,text,raw_json,seen_at,links_json FROM messages WHERE scope=? AND id>?'
         args: list = [scope, after_id]
         if before_id is not None:
             query += ' AND id<=?'
@@ -61,17 +61,24 @@ def read_records(db_path: Path, scope: str, *, after_id: int = 0, limit: int = 1
             reply = reply_to_message_id(raw)
             quote = ''
             quote_id = None
+            quoted_actor_key = None
             if reply:
-                found = conn.execute('SELECT id,text FROM messages WHERE scope=? AND message_key=? LIMIT 1', (scope, reply)).fetchone()
+                found = conn.execute('SELECT id,text,user_id FROM messages WHERE scope=? AND message_key=? LIMIT 1', (scope, reply)).fetchone()
                 quote = found['text'] if found else ''
                 quote_id = found['id'] if found else None
+                if found and found['user_id'] is not None and str(found['user_id']):
+                    quoted_actor_key = sha256((scope + '\0' + str(found['user_id'])).encode('utf-8')).hexdigest()[:12]
             try:
                 links = json.loads(row['links_json'] or '[]')
             except (ValueError, TypeError):
                 links = []
             files = [{**f, 'scope': scope, 'message_id': row['id']} for f in extract_file_segments(raw)]
+            actor_key = None
+            if row['user_id'] is not None and str(row['user_id']):
+                actor_key = sha256((scope + '\0' + str(row['user_id'])).encode('utf-8')).hexdigest()[:12]
             records.append(dict(id=row['id'], scope=scope, text=row['text'] or '', time=when,
                                 quoted_text=quote or '', quoted_id=quote_id, links=links, files=files,
+                                actor_key=actor_key, quoted_actor_key=quoted_actor_key,
                                 segments=[s.get('type') for s in raw.get('message', []) if isinstance(s, dict)]
                                 if isinstance(raw.get('message'), list) else []))
         return records
