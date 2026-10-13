@@ -46,6 +46,7 @@ def extract_file_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
                 'file_size': to_int(data.get('size') or data.get('file_size')),
                 'url': data.get('url') or data.get('file_url'),
                 'kind': classify_file(str(name)),
+                **({'busid': to_int(data.get('busid', data.get('bus_id')))} if 'busid' in data or 'bus_id' in data else {}),
             })
     # NapCat may also emit group upload notices; preserve minimal metadata.
     if event.get('post_type') == 'notice' and event.get('notice_type') in {'group_upload', 'offline_file'}:
@@ -58,6 +59,7 @@ def extract_file_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
                 'file_size': to_int(file_info.get('size') or file_info.get('file_size')),
                 'url': file_info.get('url'),
                 'kind': classify_file(str(name)),
+                **({'busid': to_int(file_info.get('busid', file_info.get('bus_id')))} if 'busid' in file_info or 'bus_id' in file_info else {}),
             })
     return files
 

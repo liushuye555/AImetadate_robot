@@ -27,7 +27,7 @@ def test_extract_file_segments_keeps_notice_file_id():
     event = {'post_type': 'notice', 'notice_type': 'group_upload',
              'file': {'id': 'F123', 'name': 'pack.zip', 'size': 4096, 'busid': 102}}
     files = extract_file_segments(event)
-    assert files == [{'file_id': 'F123', 'file_name': 'pack.zip', 'file_size': 4096, 'url': None, 'kind': 'archive'}]
+    assert files == [{'file_id': 'F123', 'file_name': 'pack.zip', 'file_size': 4096, 'url': None, 'kind': 'archive', 'busid': 102}]
 
 
 def test_classify_links_by_domain_and_context():

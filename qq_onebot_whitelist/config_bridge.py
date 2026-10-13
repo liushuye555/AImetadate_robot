@@ -69,6 +69,8 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         field('echo.window_seconds', 'number', echo.get('window_seconds', 60), 'Repeat window (s, 0=unlimited consecutive)', '复读时间窗（秒，0=无限连续）', section='keepalive', min=0, max=3600),
         field('echo.groups', 'list', echo.get('groups', []), 'Echo groups (blank = all)', '复读群列表（留空=全部群）', section='keepalive'),
         field('collection.groups', 'collection-list', collection.get('groups', {}), 'Per-group collection', '群级采集配置', section='collection'),
+        field('knowledge.groups', 'knowledge-groups', knowledge.get('groups', {}), 'Per-group knowledge', '群知识配置', section='collection'),
+        field('knowledge.defaults', 'knowledge-defaults', knowledge_defaults, 'Knowledge preferences', '群知识默认参数', section='collection'),
         field('collection.rules', 'custom-rules', collection.get('rules', []), 'Custom collection rules', '自定义采集规则', section='collection'),
         field('collection.expand_forwards', 'bool', collection.get('expand_forwards', False), 'Expand forwarded messages', '展开转发的合并消息', section='collection'),
         field('knowledge.enabled', 'bool', knowledge.get('enabled', False), 'Enable group knowledge features', '启用群知识功能', section='knowledge'),

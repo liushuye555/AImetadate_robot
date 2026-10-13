@@ -7,6 +7,7 @@ dependencies = [
   "websockets>=12",
   "PyYAML>=6",
   "pillow>=12.3.0",
+  "pypdf>=6.20.1",
 ]
 
 [project.optional-dependencies]

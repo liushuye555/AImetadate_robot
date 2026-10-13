@@ -24,7 +24,55 @@
 #include <QFont>
 #include <QTime>
 #include <QTimer>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
+#include <QRegularExpression>
 #include <algorithm>
+
+namespace {
+// Defaults supply parameters only. Every opt-in is read from the group's own object.
+bool explicitEnabled(const QJsonObject &object, const QString &key = QStringLiteral("enabled")) {
+    return object.value(key).isBool() && object.value(key).toBool();
+}
+
+void insertPath(QJsonObject &object, const QStringList &path, const QJsonValue &value) {
+    if (path.size() == 1) {
+        object.insert(path.first(), value);
+        return;
+    }
+    QJsonObject child = object.value(path.first()).toObject();
+    insertPath(child, path.mid(1), value);
+    object.insert(path.first(), child);
+}
+
+QJsonObject disabledKnowledgeGroup(QJsonObject group) {
+    group.insert("enabled", false);
+    for (const QString &feature : {QStringLiteral("summary"), QStringLiteral("extraction"),
+                                  QStringLiteral("glossary"), QStringLiteral("files"),
+                                  QStringLiteral("history"), QStringLiteral("notifications")}) {
+        QJsonObject child = group.value(feature).toObject();
+        child.insert("enabled", false);
+        if (feature == "summary") {
+            child.insert("daily", false);
+            child.insert("weekly", false);
+        } else if (feature == "files") {
+            child.insert("preview_enabled", false);
+        }
+        group.insert(feature, child);
+    }
+    QJsonObject models = group.value("models").toObject();
+    models.insert("tiered_enabled", false);
+    models.insert("review_enabled", false);
+    models.insert("circuit_enabled", false);
+    group.insert("models", models);
+    QJsonObject feedback = group.value("feedback").toObject();
+    feedback.insert("enabled", false);
+    feedback.insert("optimization_enabled", false);
+    group.insert("feedback", feedback);
+    return group;
+}
+}
 
 CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
@@ -118,8 +166,64 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
         rebuildCollectionList();
         markDirty();
     });
-    connect(scan, &QPushButton::clicked, this, [this] { emit groupsScanRequested(); });
+    connect(scan, &QPushButton::clicked, this, [this] {
+        m_knowledgeScanPending = false;
+        emit groupsScanRequested();
+    });
     connect(m_expandForwards, &QCheckBox::toggled, this, [this] { markDirty(); });
+
+    auto *knowledge = new QGroupBox(QStringLiteral("群知识"), container);
+    knowledge->setObjectName("knowledgeGroupBox");
+    auto *kv = new QVBoxLayout(knowledge);
+    m_knowledgeEnabled = new QCheckBox(QStringLiteral("启用群知识（独立总开关）"), knowledge);
+    m_knowledgeEnabled->setObjectName("knowledgeEnabled");
+    kv->addWidget(m_knowledgeEnabled);
+    m_knowledgeList = new QListWidget(knowledge);
+    m_knowledgeList->setObjectName("knowledgeGroups");
+    m_knowledgeList->setMinimumHeight(150);
+    kv->addWidget(m_knowledgeList);
+    auto *kb = new QHBoxLayout;
+    auto *kAdd = new QPushButton(QStringLiteral("新增群"), knowledge);
+    kAdd->setObjectName("knowledgeAdd");
+    auto *kEdit = new QPushButton(QStringLiteral("编辑群功能"), knowledge);
+    kEdit->setObjectName("knowledgeEdit");
+    auto *kRemove = new QPushButton(QStringLiteral("移除群"), knowledge);
+    kRemove->setObjectName("knowledgeRemove");
+    auto *kScan = new QPushButton(Strings::zh("scanGroups"), knowledge);
+    kScan->setObjectName("knowledgeScan");
+    kb->addWidget(kAdd);
+    kb->addWidget(kEdit);
+    kb->addWidget(kRemove);
+    kb->addWidget(kScan);
+    kb->addStretch();
+    kv->addLayout(kb);
+    auto *kHint = new QLabel(QStringLiteral("这里只列已选群；勾选仅控制该群开关，各子功能需分别启用。扫描和新增群不会自动开启知识功能。移除群会保存关闭标记及各子功能关闭状态（配置采用合并保存，不物理删除群键）。通知外发尚不支持，结果仅在本地查看。"), knowledge);
+    kHint->setWordWrap(true);
+    kHint->setObjectName("muted");
+    kv->addWidget(kHint);
+    layout->addWidget(knowledge);
+    connect(m_knowledgeEnabled, &QCheckBox::toggled, this, [this] { markDirty(); });
+    connect(kAdd, &QPushButton::clicked, this, [this] { openKnowledgeDialog({}); });
+    connect(kEdit, &QPushButton::clicked, this, [this] {
+        if (m_knowledgeList->currentItem())
+            openKnowledgeDialog(m_knowledgeList->currentItem()->data(Qt::UserRole).toString());
+    });
+    connect(kRemove, &QPushButton::clicked, this, &CollectionPage::removeKnowledgeGroup);
+    connect(kScan, &QPushButton::clicked, this, [this] {
+        m_knowledgeScanPending = true;
+        emit groupsScanRequested();
+    });
+    connect(m_knowledgeList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        openKnowledgeDialog(item->data(Qt::UserRole).toString());
+    });
+    connect(m_knowledgeList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+        if (m_suppressKnowledgeChange) return;
+        const QString scope = item->data(Qt::UserRole).toString();
+        QJsonObject group = m_knowledgeGroups.value(scope).toObject();
+        group.insert("enabled", item->checkState() == Qt::Checked);
+        m_knowledgeGroups.insert(scope, group);
+        markDirty();
+    });
 
     // 自定义采集规则
     auto *rules = new QGroupBox(Strings::zh("customRules"), container);
@@ -216,10 +320,15 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
 
 void CollectionPage::setSchema(bool ok, const QVariant &schemaVariant) {
     if (!ok) return;
+    m_loadingConfig = true;
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
+    QJsonObject knowledge;
     for (const QJsonValue &value : items) {
         const QJsonObject obj = value.toObject();
         const QString key = obj.value("key").toString();
+        if (key == "knowledge") knowledge = obj.value("default").toObject();
+        else if (key.startsWith("knowledge."))
+            insertPath(knowledge, key.mid(10).split('.'), obj.value("default"));
         if (m_templateBoxes.contains(key)) {
             m_templateBoxes.value(key)->setChecked(obj.value("default").toBool());
         } else if (key == "collection.expand_forwards") {
@@ -242,13 +351,15 @@ void CollectionPage::setSchema(bool ok, const QVariant &schemaVariant) {
             rebuildCustomRuleList();
         }
     }
+    setConfig(QJsonObject{{"knowledge", knowledge}});
+    m_loadingConfig = false;
     m_schemaLoaded = true;
     m_dirty = false;
     m_save->setEnabled(false);
 }
 
 void CollectionPage::markDirty() {
-    if (!m_schemaLoaded) return;
+    if (!m_schemaLoaded || m_loadingConfig) return;
     m_dirty = true;
     m_save->setEnabled(true);
 }
@@ -273,6 +384,8 @@ QJsonObject CollectionPage::buildPatch() const {
     }
     patch.insert("collection.groups", groups);
     patch.insert("collection.rules", m_customRules);
+    patch.insert("knowledge", QJsonObject{{"enabled", m_knowledgeEnabled->isChecked()},
+                                          {"groups", m_knowledgeGroups}});
     return patch;
 }
 
@@ -290,11 +403,257 @@ void CollectionPage::setGroups(const QVariantList &groups) {
         const QString name = obj.value("name").toString();
         if (id.isEmpty()) continue;
         m_groupNames.insert(id, name);
+        if (!m_knowledgeAvailableGroups.contains(id)) m_knowledgeAvailableGroups << id;
+        if (m_knowledgeScanPending) continue;
         if (!m_groupIds.contains(id)) m_groupIds << id;
         if (!m_collectionMap.contains(id))
             m_collectionMap.insert(id, QJsonObject{{"images", true}, {"links", true}, {"files", true}, {"forwards", true}});
     }
+    if (m_knowledgeScanPending) {
+        m_knowledgeScanPending = false;
+        rebuildKnowledgeList();
+        return;
+    }
     rebuildCollectionList();
+    rebuildKnowledgeList();
+    markDirty();
+}
+
+void CollectionPage::setConfig(const QJsonObject &config) {
+    const bool wasLoading = m_loadingConfig;
+    m_loadingConfig = true;
+    const QJsonObject knowledge = config.value("knowledge").toObject();
+    m_knowledgeDefaults = knowledge.value("defaults").toObject();
+    m_knowledgeGroups = knowledge.value("groups").toObject();
+    m_removedKnowledgeGroups.clear();
+    m_knowledgeEnabled->setChecked(explicitEnabled(knowledge));
+    rebuildKnowledgeList();
+    m_schemaLoaded = true;
+    m_dirty = false;
+    m_save->setEnabled(false);
+    m_loadingConfig = wasLoading;
+}
+
+void CollectionPage::rebuildKnowledgeList() {
+    m_suppressKnowledgeChange = true;
+    m_knowledgeList->clear();
+    for (auto it = m_knowledgeGroups.constBegin(); it != m_knowledgeGroups.constEnd(); ++it) {
+        if (!it.key().startsWith("group:") || !it.value().isObject()
+            || m_removedKnowledgeGroups.contains(it.key())) continue;
+        const QString id = it.key().mid(6);
+        const QString name = m_groupNames.value(id);
+        auto *item = new QListWidgetItem(name.isEmpty() ? id : name + " · " + id, m_knowledgeList);
+        item->setData(Qt::UserRole, it.key());
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(explicitEnabled(it.value().toObject()) ? Qt::Checked : Qt::Unchecked);
+    }
+    m_suppressKnowledgeChange = false;
+}
+
+void CollectionPage::removeKnowledgeGroup() {
+    auto *item = m_knowledgeList->currentItem();
+    if (!item) return;
+    const QString scope = item->data(Qt::UserRole).toString();
+    m_knowledgeGroups.insert(scope, disabledKnowledgeGroup(m_knowledgeGroups.value(scope).toObject()));
+    m_removedKnowledgeGroups.insert(scope);
+    rebuildKnowledgeList();
+    markDirty();
+}
+
+void CollectionPage::openKnowledgeDialog(const QString &scope) {
+    const QJsonObject original = scope.isEmpty() ? QJsonObject{} : m_knowledgeGroups.value(scope).toObject();
+    QDialog dialog(this);
+    dialog.setObjectName("knowledgeDialog");
+    dialog.setWindowTitle(scope.isEmpty() ? QStringLiteral("新增群知识配置") : QStringLiteral("编辑群知识配置"));
+    dialog.resize(570, 700);
+    auto *outer = new QVBoxLayout(&dialog);
+    auto *scroll = new QScrollArea(&dialog);
+    scroll->setWidgetResizable(true);
+    auto *content = new QWidget(scroll);
+    auto *form = new QFormLayout(content);
+    scroll->setWidget(content);
+    outer->addWidget(scroll);
+    auto *groupId = new QLineEdit(scope.mid(6), content);
+    groupId->setObjectName("knowledgeGroupId");
+    groupId->setReadOnly(!scope.isEmpty());
+    form->addRow(QStringLiteral("群号"), groupId);
+    if (scope.isEmpty()) {
+        auto *choices = new QComboBox(content);
+        choices->setObjectName("knowledgeGroupChoices");
+        choices->addItem(QStringLiteral("可手动填写群号，或选择扫描到的群"), QString{});
+        for (const QString &id : m_knowledgeAvailableGroups)
+            choices->addItem(m_groupNames.value(id).isEmpty() ? id : m_groupNames.value(id) + " · " + id, id);
+        form->addRow(QStringLiteral("已扫描群"), choices);
+        connect(choices, &QComboBox::currentIndexChanged, groupId, [choices, groupId] {
+            if (!choices->currentData().toString().isEmpty()) groupId->setText(choices->currentData().toString());
+        });
+    }
+    auto *groupEnabled = new QCheckBox(QStringLiteral("启用此群（不改变子功能开关）"), content);
+    groupEnabled->setObjectName("knowledgeGroupEnabled");
+    groupEnabled->setChecked(explicitEnabled(original));
+    form->addRow(groupEnabled);
+    auto *topics = new QPlainTextEdit(content);
+    topics->setObjectName("knowledgeTopics");
+    topics->setMaximumHeight(90);
+    topics->setPlaceholderText(QStringLiteral("每行一个主题；空列表表示不限制主题"));
+    QStringList topicNames;
+    const QJsonArray topicValues = original.contains("topics") ? original.value("topics").toArray()
+                                                               : m_knowledgeDefaults.value("topics").toArray();
+    for (const QJsonValue &value : topicValues) topicNames.append(value.toString());
+    topics->setPlainText(topicNames.join('\n'));
+    form->addRow(QStringLiteral("主题"), topics);
+    auto *matchMode = new QComboBox(content);
+    matchMode->setObjectName("knowledgeMatchMode");
+    matchMode->addItems({"specialist", "generic", "hybrid"});
+    const QString match = original.value("match_mode").toString(m_knowledgeDefaults.value("match_mode").toString("hybrid"));
+    matchMode->setCurrentText(match);
+    form->addRow(QStringLiteral("匹配模式"), matchMode);
+    QMap<QString, QCheckBox *> featureBoxes;
+    const QPair<QString, QString> features[] = {
+        {"summary", QStringLiteral("总结")}, {"extraction", QStringLiteral("知识提取")},
+        {"glossary", QStringLiteral("术语学习")}, {"files", QStringLiteral("文件保留")},
+        {"history", QStringLiteral("历史回放")}, {"notifications", QStringLiteral("通知外发（尚不支持）")}
+    };
+    for (const auto &feature : features) {
+        auto *box = new QCheckBox(feature.second, content);
+        box->setObjectName("knowledgeFeature_" + feature.first);
+        box->setChecked(feature.first != "notifications" && explicitEnabled(original.value(feature.first).toObject()));
+        if (feature.first == "notifications") {
+            box->setEnabled(false);
+            box->setToolTip(QStringLiteral("当前仅支持本地结果，不会向群或个人发送通知。"));
+        }
+        form->addRow(box);
+        featureBoxes.insert(feature.first, box);
+    }
+    const QJsonObject summary = original.value("summary").toObject();
+    auto *daily = new QCheckBox(QStringLiteral("每日计划"), content);
+    daily->setObjectName("knowledgeDaily");
+    daily->setChecked(explicitEnabled(summary, "daily"));
+    auto *weekly = new QCheckBox(QStringLiteral("每周计划"), content);
+    weekly->setObjectName("knowledgeWeekly");
+    weekly->setChecked(explicitEnabled(summary, "weekly"));
+    form->addRow(daily);
+    form->addRow(weekly);
+    const QJsonObject files = original.value("files").toObject();
+    const QJsonObject defaultFiles = m_knowledgeDefaults.value("files").toObject();
+    auto *filesMode = new QComboBox(content);
+    filesMode->setObjectName("knowledgeFilesMode");
+    filesMode->addItems({"high_value", "review", "index_only"});
+    filesMode->setCurrentText(files.value("mode").toString(defaultFiles.value("mode").toString("high_value")));
+    form->addRow(QStringLiteral("文件模式"), filesMode);
+    auto *maxFile = new QSpinBox(content);
+    maxFile->setObjectName("knowledgeMaxFileMb");
+    maxFile->setRange(1, 102400);
+    maxFile->setValue(files.value("max_file_mb").toInt(defaultFiles.value("max_file_mb").toInt(512)));
+    maxFile->setSuffix(" MB");
+    form->addRow(QStringLiteral("单文件上限"), maxFile);
+    auto *budget = new QDoubleSpinBox(content);
+    budget->setObjectName("knowledgeBudgetGb");
+    budget->setRange(0, 100000);
+    budget->setDecimals(3);
+    budget->setValue(files.value("budget_gb").toDouble(defaultFiles.value("budget_gb").toDouble(20)));
+    budget->setSuffix(" GB");
+    form->addRow(QStringLiteral("群容量预算"), budget);
+    const QJsonObject models = original.value("models").toObject();
+    auto *tiered = new QCheckBox(QStringLiteral("启用分层模型"), content);
+    tiered->setObjectName("knowledgeTieredEnabled");
+    tiered->setChecked(explicitEnabled(models, "tiered_enabled"));
+    auto *review = new QCheckBox(QStringLiteral("启用模型复审"), content);
+    review->setObjectName("knowledgeReviewEnabled");
+    review->setChecked(explicitEnabled(models, "review_enabled"));
+    auto *feedback = new QCheckBox(QStringLiteral("启用反馈优化"), content);
+    feedback->setObjectName("knowledgeOptimizationEnabled");
+    feedback->setChecked(explicitEnabled(original.value("feedback").toObject(), "optimization_enabled"));
+    auto *feedbackEnabled = new QCheckBox(QStringLiteral("启用反馈收集"), content);
+    feedbackEnabled->setObjectName("knowledgeFeedbackEnabled");
+    feedbackEnabled->setChecked(explicitEnabled(original.value("feedback").toObject()));
+    auto *circuit = new QCheckBox(QStringLiteral("启用模型故障自动切换"), content);
+    circuit->setObjectName("knowledgeCircuitEnabled");
+    circuit->setChecked(explicitEnabled(models, "circuit_enabled"));
+    const QJsonObject defaultModels = m_knowledgeDefaults.value("models").toObject();
+    auto *primaryModel = new QLineEdit(models.value("primary_model").toString(defaultModels.value("primary_model").toString()), content);
+    primaryModel->setObjectName("knowledgePrimaryModel");
+    auto *reviewModel = new QLineEdit(models.value("review_model").toString(defaultModels.value("review_model").toString()), content);
+    reviewModel->setObjectName("knowledgeReviewModel");
+    auto *provider = new QComboBox(content);
+    provider->setObjectName("knowledgeProvider");
+    provider->addItems({"default", "ds_v4_flash"});
+    provider->setCurrentText(models.value("primary_provider").toString(defaultModels.value("primary_provider").toString("default")));
+    auto *preview = new QCheckBox(QStringLiteral("启用小文件正文预览"), content);
+    preview->setObjectName("knowledgePreviewEnabled");
+    preview->setChecked(explicitEnabled(files, "preview_enabled"));
+    form->addRow(tiered);
+    form->addRow(review);
+    form->addRow(circuit);
+    form->addRow(QStringLiteral("模型提供方"), provider);
+    form->addRow(QStringLiteral("主模型（可空）"), primaryModel);
+    form->addRow(QStringLiteral("复审模型（可空）"), reviewModel);
+    form->addRow(feedbackEnabled);
+    form->addRow(feedback);
+    form->addRow(preview);
+    auto *hint = new QLabel(QStringLiteral("全局、此群及具体子功能需分别开启。默认参数只提供主题、模式和容量；开关及计划不会继承默认值。历史回放还需开启至少一项处理功能。反馈优化需同时启用反馈收集和知识提取；正文预览需启用文件保留。依赖项不会自动开启。"), content);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+    auto *validation = new QLabel(&dialog);
+    validation->setObjectName("knowledgeValidation");
+    outer->addWidget(validation);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->setObjectName("knowledgeDialogButtons");
+    outer->addWidget(buttons);
+    auto validate = [this, groupId, validation, buttons, scope] {
+        const QString id = groupId->text().trimmed();
+        const bool valid = QRegularExpression(QStringLiteral("^[1-9][0-9]*$")).match(id).hasMatch();
+        const bool duplicate = scope.isEmpty() && m_knowledgeGroups.contains("group:" + id)
+                               && !m_removedKnowledgeGroups.contains("group:" + id);
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(valid && !duplicate);
+        validation->setText(duplicate ? QStringLiteral("此群已选，请从列表编辑。")
+                                     : valid ? QString{} : QStringLiteral("请输入有效的数字群号。"));
+    };
+    connect(groupId, &QLineEdit::textChanged, &dialog, validate);
+    validate();
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString newScope = "group:" + groupId->text().trimmed();
+    QJsonObject group = scope.isEmpty() ? disabledKnowledgeGroup(m_knowledgeGroups.value(newScope).toObject()) : original;
+    group.insert("enabled", groupEnabled->isChecked());
+    QJsonArray topicArray;
+    for (const QString &line : topics->toPlainText().split('\n')) {
+        if (!line.trimmed().isEmpty()) topicArray.append(line.trimmed());
+    }
+    group.insert("topics", topicArray);
+    group.insert("match_mode", matchMode->currentText());
+    for (auto it = featureBoxes.constBegin(); it != featureBoxes.constEnd(); ++it) {
+        QJsonObject child = group.value(it.key()).toObject();
+        child.insert("enabled", it.value()->isChecked());
+        group.insert(it.key(), child);
+    }
+    QJsonObject newSummary = group.value("summary").toObject();
+    newSummary.insert("daily", daily->isChecked());
+    newSummary.insert("weekly", weekly->isChecked());
+    group.insert("summary", newSummary);
+    QJsonObject newFiles = group.value("files").toObject();
+    newFiles.insert("mode", filesMode->currentText());
+    newFiles.insert("max_file_mb", maxFile->value());
+    newFiles.insert("budget_gb", budget->value());
+    newFiles.insert("preview_enabled", preview->isChecked());
+    group.insert("files", newFiles);
+    QJsonObject newModels = group.value("models").toObject();
+    newModels.insert("tiered_enabled", tiered->isChecked());
+    newModels.insert("review_enabled", review->isChecked());
+    newModels.insert("circuit_enabled", circuit->isChecked());
+    newModels.insert("primary_provider", provider->currentText());
+    newModels.insert("primary_model", primaryModel->text().trimmed());
+    newModels.insert("review_model", reviewModel->text().trimmed());
+    group.insert("models", newModels);
+    QJsonObject newFeedback = group.value("feedback").toObject();
+    newFeedback.insert("enabled", feedbackEnabled->isChecked());
+    newFeedback.insert("optimization_enabled", feedback->isChecked());
+    group.insert("feedback", newFeedback);
+    if (group == original && newScope == scope) return;
+    m_knowledgeGroups.insert(newScope, group);
+    m_removedKnowledgeGroups.remove(newScope);
+    rebuildKnowledgeList();
     markDirty();
 }
 

@@ -109,6 +109,16 @@ def test_invalid_identifiers_are_rejected_before_fetch(tmp_path):
         assert result["error"] == "InvalidSource"
 
 
+def test_leading_slash_canonical_onebot_uuid_is_valid(tmp_path, monkeypatch):
+    file_id = "/{550e8400-e29b-41d4-a716-446655440000}"
+    downloader(monkeypatch, b"uuid")
+    seen = []
+    result = call(tmp_path, source(file_id=file_id),
+                  fetch=lambda row: seen.append(row["file_id"]) or "https://refreshed.invalid/file")
+    assert result["status"] == "saved"
+    assert seen == [file_id]
+
+
 def test_declared_size_mismatch_is_not_promoted(tmp_path, monkeypatch):
     downloader(monkeypatch, b"five!")
     result = call(tmp_path)

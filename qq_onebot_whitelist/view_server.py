@@ -209,6 +209,31 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
             self._json(404, {'error': 'not found'})
 
         def do_POST(self) -> None:  # noqa: N802
+            if urlsplit(self.path).path == '/api/knowledge/feedback':
+                from .config import load_config
+                from .knowledge_feedback import submit_feedback
+                import secrets
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= _MAX_BODY:
+                        raise ValueError('请求体过大或为空')
+                    payload = json.loads(self.rfile.read(length).decode('utf-8'))
+                    if not isinstance(payload, dict):
+                        raise ValueError('需要JSON对象')
+                    config_path = project_dir / 'config.yaml'
+                    config = load_config(config_path)
+                    token_path = config.data_dir / 'knowledge-feedback-token.txt'
+                    if not token_path.is_file() or not secrets.compare_digest(str(payload.get('token') or ''), token_path.read_text(encoding='ascii').strip()):
+                        self._json(403, {'error': '页面已过期，请重新生成群知识页面'})
+                        return
+                    result = submit_feedback(config_path, payload.get('scope',''), payload.get('kind'), payload.get('notes',''),
+                                             item_key=payload.get('item_key'), message_id=payload.get('message_id'))
+                    self._json(200, result)
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    self._json(400, {'error': '反馈格式或来源不正确'})
+                except Exception:
+                    self._json(500, {'error': '反馈保存失败'})
+                return
             if urlsplit(self.path).path != '/api/export':
                 self._json(404, {'error': 'not found'})
                 return

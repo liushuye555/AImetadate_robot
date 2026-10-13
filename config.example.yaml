@@ -145,8 +145,24 @@ knowledge:
       enabled: false
     files:
       enabled: false
+      # 小文本、工作流JSON、ZIP文本成员和PDF仅做有界预览，不执行文件。
+      preview_enabled: false
       max_file_mb: 512
       budget_gb: 20
+      mode: high_value
+    models:
+      circuit_enabled: false
+      failure_threshold: 3
+      cooldown_seconds: 300
+      tiered_enabled: false
+      primary_provider: default
+      primary_model: ""
+      review_enabled: false
+      review_provider: ds_v4_flash
+      review_model: ""
+    feedback:
+      enabled: false
+      optimization_enabled: false
     history:
       enabled: false
     notifications:

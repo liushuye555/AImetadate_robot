@@ -18,6 +18,11 @@ _LOCK_NAME = ".knowledge-files.lock"
 _MIN_FREE_BYTES = 64 * 1024 * 1024
 _SCOPE_RE = re.compile(r"^group:\d+$")
 _EXT_RE = re.compile(r"^\.[A-Za-z0-9]{1,16}$")
+_OPAQUE_ONEBOT_FILE_ID_RE = re.compile(
+    r"^/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|"
+    r"\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\})$",
+    re.IGNORECASE,
+)
 
 
 def _result(status: str, *, name: str = "", sha256: str = "", path: str = "",
@@ -109,7 +114,8 @@ def archive_file(source: dict, root: Path, *, max_bytes: int, budget_bytes: int,
     file_id = source.get("file_id")
     file_id_text = str(file_id).strip() if file_id is not None else ""
     # IDs are opaque, but a URL/path/name is never a valid substitute for one.
-    looks_like_url_or_path = ("://" in file_id_text or "/" in file_id_text or
+    looks_like_url_or_path = ("://" in file_id_text or
+                              ("/" in file_id_text and not _OPAQUE_ONEBOT_FILE_ID_RE.fullmatch(file_id_text)) or
                               "\\" in file_id_text or bool(re.search(r"\.[A-Za-z0-9]{1,16}$", file_id_text)))
     if (not _SCOPE_RE.fullmatch(scope) or not file_id_text or
             any(ch.isspace() for ch in file_id_text) or looks_like_url_or_path):

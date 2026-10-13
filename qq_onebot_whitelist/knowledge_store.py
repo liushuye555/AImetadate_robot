@@ -222,7 +222,7 @@ class KnowledgeDB:
 
     def asset(self, source: dict, result: dict):
         with self.conn() as conn:
-            compact = {k: source.get(k) for k in ('scope','file_id','message_id','file_name','file_size')}
+            compact = {k: source.get(k) for k in ('scope','file_id','message_id','file_name','file_size','busid')}
             conn.execute('INSERT OR REPLACE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                          (source['scope'], source['file_id'], source['message_id'], source['file_name'],
                           result.get('sha256'), result.get('path'), result.get('size'), result['status'], result.get('error'), json.dumps(compact),

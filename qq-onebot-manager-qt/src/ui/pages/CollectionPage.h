@@ -16,6 +16,7 @@ class CollectionPage : public QWidget {
 public:
     explicit CollectionPage(QWidget *parent = nullptr);
     void setSchema(bool ok, const QVariant &schema);
+    void setConfig(const QJsonObject &config);
     void setGroups(const QVariantList &groups);
     void setCollectionPaused(bool paused);
     void setSavedMessage(const QString &text);
@@ -28,6 +29,9 @@ private:
     QJsonObject buildPatch() const;
     void openCollectionDialog(const QString &editGroup);
     void openCustomRuleDialog(int editIndex);
+    void openKnowledgeDialog(const QString &scope);
+    void rebuildKnowledgeList();
+    void removeKnowledgeGroup();
     void rebuildCollectionList();
     void rebuildCustomRuleList();
     void batchSetEnabled(bool enabled);
@@ -38,6 +42,15 @@ private:
     QPushButton *m_collectionToggle = nullptr;
     bool m_collectionPaused = false;
     QCheckBox *m_expandForwards = nullptr;
+    QCheckBox *m_knowledgeEnabled = nullptr;
+    QListWidget *m_knowledgeList = nullptr;
+    QJsonObject m_knowledgeGroups;
+    QJsonObject m_knowledgeDefaults;
+    QSet<QString> m_removedKnowledgeGroups;
+    QStringList m_knowledgeAvailableGroups;
+    bool m_knowledgeScanPending = false;
+    bool m_suppressKnowledgeChange = false;
+    bool m_loadingConfig = false;
     QListWidget *m_collectionList = nullptr;
     QMap<QString, QJsonObject> m_collectionMap;
     QListWidget *m_customRuleList = nullptr;

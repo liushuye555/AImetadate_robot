@@ -75,3 +75,35 @@ if (WIN32)
         copy_qt_runtime(${test_target})
     endforeach()
 endif()
+
+add_executable(tst_knowledgegroups
+    tst_knowledgegroups.cpp
+    ../src/ui/pages/CollectionPage.cpp
+    ../src/ui/widgets/GroupItemRow.cpp
+    ../src/core/AvatarCache.h
+    ../src/ui/Strings.cpp
+)
+target_include_directories(tst_knowledgegroups PRIVATE ../src)
+target_link_libraries(tst_knowledgegroups PRIVATE Qt6::Test Qt6::Widgets Qt6::Network)
+add_test(NAME tst_knowledgegroups COMMAND tst_knowledgegroups -platform offscreen)
+set_tests_properties(tst_knowledgegroups PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms"
+    TIMEOUT 30
+)
+if (WIN32)
+    foreach(module Core Gui Widgets Network Test)
+        add_custom_command(TARGET tst_knowledgegroups POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:Qt6::${module}>" "$<TARGET_FILE_DIR:tst_knowledgegroups>"
+            VERBATIM)
+    endforeach()
+    get_filename_component(KNOWLEDGE_MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    foreach(runtime_dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+        if (EXISTS "${KNOWLEDGE_MINGW_BIN}/${runtime_dll}")
+            add_custom_command(TARGET tst_knowledgegroups POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${KNOWLEDGE_MINGW_BIN}/${runtime_dll}" "$<TARGET_FILE_DIR:tst_knowledgegroups>"
+                VERBATIM)
+        endif()
+    endforeach()
+endif()

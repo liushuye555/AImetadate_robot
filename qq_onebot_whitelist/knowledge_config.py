@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 
 
-FEATURES = ('summary', 'extraction', 'glossary', 'files', 'history')
+FEATURES = ('summary', 'extraction', 'glossary', 'files', 'history', 'feedback')
 
 
 def group_scope(value: str) -> str:
@@ -50,6 +50,10 @@ class GroupProfile:
         if not lower <= value <= upper:
             raise ValueError(f'{key} 超出范围 {lower}—{upper}')
         return value
+
+    def option_enabled(self, section: str, key: str) -> bool:
+        options = self.explicit.get(section)
+        return self.global_enabled and self.group_enabled and isinstance(options, dict) and options.get(key) is True
 
 
 def profile_for(config, scope: str) -> GroupProfile:
