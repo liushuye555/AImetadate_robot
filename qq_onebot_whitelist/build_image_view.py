@@ -27,6 +27,7 @@ CATEGORY_NAMES = {
 
 # 跨分组合并图库目录：所有分组的主落位条目汇成一页，默认"不限分组"，页内可再按分组筛选
 ALL_GALLERY_DIR = '00_全部'
+UNKNOWN_AI_CATEGORY = '01_AI元数据_来源未识别'
 
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
 
@@ -35,6 +36,17 @@ SOURCE_DISPLAY = {
     'A1111': 'StableDiffusion_WebUI',
     'suspect:NovelAI': '疑似NovelAI',
 }
+
+
+def image_category(reason: str, ai_source: object = None) -> str:
+    """One category mapping for report placement and dataset export."""
+    cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
+    if reason == 'ai_metadata':
+        source = str(ai_source or '').strip()
+        if not source:
+            return UNKNOWN_AI_CATEGORY
+        cat += '_' + safe_name(SOURCE_DISPLAY.get(source, source))
+    return cat
 
 def stale_view_counts(view: Path) -> dict[str, int]:
     """不重建视图，直接从现有视图目录统计各分类图片数（低开销，供负载忙时兜底）。"""
@@ -132,14 +144,20 @@ def member_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
 
 CATEGORY_ICONS = {'00': '🌐', '01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
 CATEGORY_DESC = {
-    '00': '全部图片合并浏览；筛选与导出默认不限分组，可再按分组收窄',
-    '01': '自带 ComfyUI/Stable Diffusion WebUI/NovelAI 等生成元数据，可信度最高',
+    '00': '包含归档图片与04候选待观察；默认不限分组，可按分组筛选',
+    '01': '文件中保留生成参数或工作流，便于查看与复用；不代表图像质量评级',
     '02': '被引用、好评或求提示词后晋升',
     '03': '图片与提示词/参数成对出现',
     '04': '暂存候选，等待后续反馈',
     '05': 'Gilbert 曲线验证的混淆还原图片',
     '06': '聊天记录中显式保存的图片',
 }
+
+
+def category_description(category: str) -> str:
+    if category in (CATEGORY_NAMES['ai_metadata'], UNKNOWN_AI_CATEGORY):
+        return '文件中保留生成参数或工作流，但未识别生成工具；这里不是所有元数据图片的总数'
+    return CATEGORY_DESC.get(category[:2], '图片分类视图')
 
 
 def _index_card(href: str, icon: str, title: str, desc: str, count: str) -> str:
@@ -225,8 +243,8 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
     ) if view.exists() else []
     link_total = int(counts.get('resource_links') or 0)
     file_total = int(counts.get('resource_files') or 0)
-    image_total = sum(int(v) for key, v in counts.items()
-                      if key not in ('resource_links', 'resource_files', ALL_GALLERY_DIR))
+    image_total = int(counts[ALL_GALLERY_DIR]) if ALL_GALLERY_DIR in counts else sum(
+        int(v) for key, v in counts.items() if key not in ('resource_links', 'resource_files'))
     chips = (
         f'<span class="chip">图片 <b>{image_total}</b> 张</span>'
         f'<span class="chip">分类 <b>{len(categories) - (1 if ALL_GALLERY_DIR in {c.name for c in categories} else 0)}</b> 个</span>'
@@ -255,7 +273,7 @@ def write_view_index(view: Path, counts: dict[str, int]) -> None:
             target,
             CATEGORY_ICONS.get(prefix, '🗂️'),
             cat_dir.name,
-            CATEGORY_DESC.get(prefix, '图片分类视图'),
+            category_description(cat_dir.name),
             f'{int(count)} 张',
         ))
     if not cards:
@@ -671,6 +689,7 @@ def _gallery_page(
     build_token: str = '',
     category_id: str = '',
     view_base_url: str = '',
+    candidate_count: int = 0,
 ) -> str:
     '''生成单页图库壳；图片卡片由滚动/按钮触发的本地 chunk 按需追加。'''
     doc = r'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
@@ -783,6 +802,7 @@ __THEME_TOGGLE__
   <label class="muted" for="searchBox">搜索</label>
   <input id="searchBox" type="search" placeholder="关键词 / QQ号 / ID" autocomplete="off">
   <button id="filterToggle" type="button" title="展开更多筛选">筛选</button>
+__CANDIDATE_BUTTON__
   <label class="muted" for="thumbSel">缩略图</label>
   <select id="thumbSel">
     <option value="small">小</option>
@@ -849,6 +869,7 @@ __CAT_TOOLBAR__
   const overlay=document.getElementById('overlay'), lightbox=document.getElementById('lightbox');
   const cells=[], itemData=[], groups=new Map(), chunkPromises=new Map();
   let nextChunk=0, loading=false, activeRequest=null, currentIndex=-1, errorMessage='';
+  let viewGeneration=0,requestSerial=0;
   let masked=true;
   let chunkBase='';
   const buildToken='?v=__BUILD_TOKEN__';
@@ -885,6 +906,9 @@ __CAT_TOOLBAR__
   }
   const filtersActive=()=>Boolean(userFilter||catFilter||sizeFilter||minRes||monthFilter||dupOnly||searchQuery);
   function resetGrid(){
+    viewGeneration++;
+    if(activeRequest&&!activeRequest.settled){activeRequest.settled=true;activeRequest.reject(new Error('gallery view changed'));}
+    activeRequest=null;loading=false;
     cells.length=0;itemData.length=0;itemCards.length=0;groups.clear();chunkPromises.clear();nextChunk=0;currentIndex=-1;errorMessage='';
     groupNav=null;groupToken++;closeGroupLayer();hintDefault();
     overlay.style.display='none';grid.textContent='';syncInfoVisibility();
@@ -999,29 +1023,32 @@ __CAT_TOOLBAR__
   window.__galleryAcceptChunk=(index,items)=>{
     const request=activeRequest;
     // base 校验：排序切换后，旧排序的 in-flight chunk 不得混入新排序的视图
-    if(!request||request.base!==chunkBase||request.index!==index||request.settled)return;
+    if(!request||request.base!==chunkBase||request.index!==index||request.settled
+       ||request.generation!==viewGeneration||document.currentScript?.dataset.galleryRequest!==String(request.id))return;
     request.settled=true;request.accepted=true;request.resolve(items);
   };
   function loadChunk(index){
     if(index>=chunkCount)return Promise.resolve([]);
     if(chunkPromises.has(index))return chunkPromises.get(index);
+    let request;
     const promise=new Promise((resolve,reject)=>{
-      const request={index:index,base:chunkBase,resolve:resolve,reject:reject,accepted:false,settled:false};activeRequest=request;
+      request={index:index,base:chunkBase,generation:viewGeneration,id:++requestSerial,resolve:resolve,reject:reject,accepted:false,settled:false};activeRequest=request;
       const script=document.createElement('script');script.async=true;
+      script.dataset.galleryRequest=String(request.id);
       // ?v= 构建指纹：file:// 页面没有缓存校验，不带版本号浏览器会用旧构建的 chunk
       script.src=(chunkBase?chunkBase+'/':'chunks/')+'chunk-'+String(index+1).padStart(4,'0')+'.js'+buildToken;
       script.onload=()=>{if(request&&!request.accepted&&!request.settled){request.settled=true;reject(new Error('chunk callback missing'));}};
       script.onerror=()=>{if(!request.settled){request.settled=true;reject(new Error('chunk load failed'));}};
       document.head.appendChild(script);
-    }).then(items=>{renderItems(items);nextChunk=Math.max(nextChunk,index+1);return items;}).finally(()=>{if(activeRequest&&activeRequest.index===index)activeRequest=null;});
+    }).then(items=>{if(request.generation!==viewGeneration)return [];renderItems(items);nextChunk=Math.max(nextChunk,index+1);return items;}).finally(()=>{if(activeRequest===request)activeRequest=null;});
     chunkPromises.set(index,promise);return promise;
   }
   async function loadNext(){
     if(loading||nextChunk>=chunkCount){updateProgress();return;}
     loading=true;errorMessage='';updateProgress();
-    const index=nextChunk;
-    try{await loadChunk(index);}catch(error){chunkPromises.delete(index);errorMessage='本批加载失败，点击“继续加载”重试';console.warn(error);}
-    finally{loading=false;updateProgress();}
+    const index=nextChunk,generation=viewGeneration;
+    try{await loadChunk(index);}catch(error){if(generation===viewGeneration){chunkPromises.delete(index);errorMessage='本批加载失败，点击“继续加载”重试';console.warn(error);}}
+    finally{if(generation===viewGeneration){loading=false;updateProgress();}}
   }
   async function ensureLoaded(index){
     while(cells.length<=index&&nextChunk<chunkCount)await loadChunk(nextChunk);
@@ -1169,6 +1196,17 @@ __CAT_TOOLBAR__
   });
   if(userSel)userSel.addEventListener('change',()=>{userFilter=userSel.value;resetGrid();});
   if(catSel)catSel.addEventListener('change',()=>{catFilter=catSel.value;resetGrid();});
+  function showCandidates(){
+    if(!catSel)return;
+    userFilter='';sizeFilter='';minRes=0;monthFilter='';dupOnly=false;searchQuery='';
+    if(userSel)userSel.value='';if(sizeSel)sizeSel.value='';if(resSel)resSel.value='';
+    if(monthSel)monthSel.value='';if(dupBox)dupBox.checked=false;if(searchBox)searchBox.value='';
+    catFilter='04_候选待观察';catSel.value=catFilter;
+    if(advFilters)advFilters.hidden=false;if(filterToggle)filterToggle.classList.add('open');
+    resetGrid();
+  }
+  const candidateButton=document.getElementById('candidateQuick');
+  if(candidateButton)candidateButton.addEventListener('click',showCandidates);
   if(filterToggle)filterToggle.addEventListener('click',()=>{const open=advFilters.hidden;advFilters.hidden=!open;filterToggle.classList.toggle('open',open);});
   if(sizeSel)sizeSel.addEventListener('change',()=>{sizeFilter=sizeSel.value;resetGrid();});
   if(resSel)resSel.addEventListener('change',()=>{minRes=Number(resSel.value||0);resetGrid();});
@@ -1367,6 +1405,9 @@ __THEME_TOGGLE_JS__
         '__THEME_TOGGLE_JS__': THEME_TOGGLE_JS,
         '__USER_TOOLBAR__': user_toolbar,
         '__CAT_TOOLBAR__': cat_toolbar,
+        '__CANDIDATE_BUTTON__': (
+            f'  <button id="candidateQuick" type="button" title="清除其他筛选，只看04候选待观察">待观察 {int(candidate_count)} 张</button>'
+        ) if candidate_count and cat_options else '',
         '__MONTH_OPTIONS__': month_options,
         '__BUILD_TOKEN__': build_token,
         '__CATEGORY_JSON__': json.dumps(category_id, ensure_ascii=False),
@@ -1762,6 +1803,7 @@ def write_all_gallery(
                       month_options=_month_options_html(month_counts),
                       build_token=build_token,
                       category_id='',
+                      candidate_count=cat_counts.get(CATEGORY_NAMES['candidate'], 0),
                       view_base_url=_view_server_base(project_dir)),
         encoding='utf-8',
     )
@@ -1772,12 +1814,14 @@ def write_all_gallery(
     for item in gallery_items:
         info_id = str(item.get('id') or '')
         dst = info_dir / f'{info_id}.js'
-        if not info_id or dst.exists():
+        if not info_id:
             continue
         src_info = view / str(item.get('cat') or '') / 'info' / f'{info_id}.js'
         if src_info.exists():
             try:
-                shutil.copyfile(src_info, dst)
+                # Category renames must also refresh an existing all-page popup.
+                # Reuse prepared info rather than re-parsing every original image.
+                _write_if_changed(dst, src_info.read_text(encoding='utf-8'))
             except OSError:
                 pass
     _write_item_info(info_dir, gallery_items, all_dir, '', user_names, project_dir)
@@ -1811,12 +1855,7 @@ def _place_context_display(
     discussion = discussion or {}
     if context_reason == 'params_discussion' and discussion.get('status') in {'pending', 'rejected'}:
         return
-    context_cat = CATEGORY_NAMES[context_reason]
-    if context_reason == 'ai_metadata':
-        source = str(row['ai_source'] or '')
-        if source:
-            display = SOURCE_DISPLAY.get(source, source)
-            context_cat = context_cat + '_' + safe_name(display)
+    context_cat = image_category(context_reason, row['ai_source'])
     seen_ctx = dedup_seen.setdefault(context_cat, set())
     if sha256 and sha256 in seen_ctx:
         return
@@ -1860,7 +1899,7 @@ def write_params_gallery(cat_dir: Path, entries: list[dict[str, object]], **kwar
     _write_context_gallery(cat_dir, entries, '03 参数讨论', **kwargs)
 
 
-GENERATOR_VERSION = 32  # 参数讨论页按人工结论展示，旧数据库仍沿用原字段。
+GENERATOR_VERSION = 33  # 明确未知元数据来源，并重建修复筛选加载的图库页。
 
 _CONTEXT_CAT_NAMES = {CATEGORY_NAMES['prompt_bound'], CATEGORY_NAMES['params_discussion']}
 _SAVED_ROOT = '06_聊天记录收藏'
@@ -2109,10 +2148,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 "WHERE kept_path IS NOT NULL AND merged_into IS NULL AND sha256 != '' "
                 "GROUP BY retention_reason, COALESCE(ai_source, ''), sha256 HAVING COUNT(*) > 1"
             ):
-                cat_val = CATEGORY_NAMES.get(str(reason_val), '90_' + safe_name(str(reason_val)))
-                if str(reason_val) == 'ai_metadata' and source_val:
-                    display = SOURCE_DISPLAY.get(str(source_val), str(source_val))
-                    cat_val = cat_val + '_' + safe_name(display)
+                cat_val = image_category(str(reason_val), source_val)
                 occurrences.setdefault(cat_val, {})[str(sha_val)] = int(cnt)
         except sqlite3.OperationalError:
             occurrences = {}
@@ -2155,10 +2191,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
             ))
             all_entries.append(saved_plan.entries[-1])
             continue
-        cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
-        if reason == 'ai_metadata' and row['ai_source']:
-            display = SOURCE_DISPLAY.get(str(row['ai_source']), str(row['ai_source']))
-            cat = cat + '_' + safe_name(display)
+        cat = image_category(reason, row['ai_source'])
         if sha256 and not hide_params_main:
             seen = dedup_seen.setdefault(cat, set())
             if sha256 in seen:
@@ -2334,7 +2367,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '这是图片分类视图，按数据库筛选结果生成。\n'
         '优先使用 NTFS 硬链接，通常不额外占空间；不要在这里编辑原始数据库。\n\n'
         '分类：\n'
-        '01_AI元数据_*：图片本身带 ComfyUI/Stable Diffusion WebUI/NovelAI 等元数据，可信度最高。\n'
+        '01_AI元数据_*：文件保留生成参数或工作流，便于查看与复用；不代表图像质量评级。\n'
+        '01_AI元数据_来源未识别：有参数或工作流，但未识别生成工具；不是元数据图片总览。\n'
         '02_群友好评：被引用/附近好评、求提示词等晋升。\n'
         '03_提示词绑定：图片与明确提示词成对绑定（时序/引用）。\n'
         '03_参数讨论：无提示词但附近提到模型/采样器/显卡等参数。\n'
@@ -2342,7 +2376,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
         '带元数据的确认混淆图：还原后元数据保留在文件上，并同时显示回其来源 01 分类。\n'
-        '00_全部：跨分组合并图库，筛选与导出默认不限分组，页内可再按分组收窄。\n\n'
+        '00_全部：包含各分组主展示图片及04候选待观察，交叉展示副本不重复计数；可按分组筛选。\n\n'
         '每个图库页面支持按用户（发送者）、尺寸（横/竖/方）、分辨率短边、月份、\n'
         '关键词（元数据文本/QQ号/ID）与"只看重复/同批"组合筛选；可切换缩略图大小、\n'
         '按分辨率/大小/名称排序。导出训练数据集用：\n'

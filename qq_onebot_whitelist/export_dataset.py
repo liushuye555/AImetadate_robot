@@ -30,7 +30,14 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from .build_image_view import _SAVED_ROOT, CATEGORY_NAMES, SOURCE_DISPLAY, safe_name, saved_category_name, source_path
+from .build_image_view import (
+    _SAVED_ROOT,
+    SOURCE_DISPLAY,
+    image_category,
+    safe_name,
+    saved_category_name,
+    source_path,
+)
 from .image_meta import parse_image_metadata
 
 # 来源显示名反查存储值（视图层换名后，命令行两种写法都接受）
@@ -175,11 +182,7 @@ def row_category(row: sqlite3.Row) -> str:
     reason = str(row['retention_reason'] or 'unknown')
     if reason == 'chat_record_saved':
         return f'{_SAVED_ROOT}/{saved_category_name(row["saved_category"] if "saved_category" in row.keys() else "")}'
-    cat = CATEGORY_NAMES.get(reason, '90_' + safe_name(reason))
-    if reason == 'ai_metadata' and row['ai_source']:
-        display = SOURCE_DISPLAY.get(str(row['ai_source']), str(row['ai_source']))
-        cat = cat + '_' + safe_name(display)
-    return cat
+    return image_category(reason, row['ai_source'])
 
 
 def _display_out(out_dir: Path, project_dir: Path) -> str:
