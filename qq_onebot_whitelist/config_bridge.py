@@ -43,6 +43,13 @@ def config_schema(data: dict[str, Any], *, env_path: Path | None = None) -> list
         if isinstance(value, dict)
     }
     merged_providers = {**(_env_providers() if env_path is None else _env_providers(env_path)), **configured_providers}
+    credentials = _load_env(env_path or Path('.env'))
+    for name, settings in merged_providers.items():
+        key_name = str(settings.get('api_key_env') or '').strip()
+        present = bool(key_name and (os.environ.get(key_name) or credentials.get(key_name)))
+        # Transient diagnostics: the settings editor removes these before saving.
+        settings['_credential_status'] = ('configured' if present else
+                                          'missing_key' if key_name else 'missing_reference')
 
     return [
         field('onebot.ws_url', 'text', data.get('onebot', {}).get('ws_url', 'ws://127.0.0.1:3001'), 'OneBot WebSocket', 'OneBot WebSocket', section='runtime'),
@@ -162,8 +169,12 @@ def _merge(target: dict[str, Any], patch: dict[str, Any], path: tuple[str, ...] 
     for key, value in patch.items():
         if path == ('ai_context',) and key == 'providers':
             # The editor sends its complete registry; merging resurrects deleted providers.
-            target[key] = value
-        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            target[key] = {name: {field: item for field, item in settings.items()
+                                 if field != '_credential_status'}
+                           if isinstance(settings, dict) else settings for name, settings in value.items()} if isinstance(value, dict) else value
+        elif isinstance(value, dict):
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
             _merge(target[key], value, (*path, key))
         else:
             target[key] = value

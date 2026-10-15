@@ -5,6 +5,12 @@ import pytest
 from qq_onebot_whitelist.content_utils import redact_secrets, redacted_json
 
 
+def test_workbuddy_credential_is_redacted_without_an_assignment_label():
+    fictional = 'wb-' + 'a' * 64
+    assert fictional not in redact_secrets('连接凭据 ' + fictional)
+    assert 'workbuddy' in redact_secrets('workbuddy 日常讨论')
+
+
 @pytest.mark.parametrize('text', ['password=fictional_credential_12345" next',
     'api_key="fictional_credential_12345"', '{"api_key":"fictional_credential_12345"}',
     "pwd='fictional_credential_12345' trailing"])

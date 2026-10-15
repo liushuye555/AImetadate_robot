@@ -123,11 +123,13 @@ void TestSettingsPage::providerWithoutKeyLocationCannotBeSaved() {
 void TestSettingsPage::providerEditPreservesSettingsAndExistingKeyReference() {
     SettingsPage page;
     const QJsonObject original{{"base_url", "https://example.invalid/v1"}, {"model", "kept"},
-        {"api_key_env", "EXISTING_KEY"}, {"timeout_seconds", 91}, {"extra_setting", "preserved"}};
+        {"api_key_env", "EXISTING_KEY"}, {"timeout_seconds", 91}, {"extra_setting", "preserved"},
+        {"_credential_status", "configured"}};
     const QJsonArray schema{QJsonObject{{"key", "ai_context.providers"}, {"kind", "provider-list"},
         {"default", QJsonObject{{"freewb", original}}}}};
     page.setSchema(schema.toVariantList());
     page.findChild<QListWidget *>("providerList")->setCurrentRow(0);
+    QVERIFY(page.findChild<QListWidget *>("providerList")->item(0)->text().contains(QStringLiteral("接口未验证")));
     QSignalSpy changed(&page, &SettingsPage::providersChanged);
     QTimer::singleShot(0, &page, [&page] {
         auto *dialog = page.findChild<QDialog *>();
@@ -147,6 +149,7 @@ void TestSettingsPage::providerEditPreservesSettingsAndExistingKeyReference() {
     QCOMPARE(saved.value("extra_setting").toString(), QStringLiteral("preserved"));
     QCOMPARE(saved.value("api_key_env").toString(), QStringLiteral("EXISTING_KEY"));
     QCOMPARE(saved.value("timeout_seconds").toInt(), 91);
+    QVERIFY(!saved.contains("_credential_status"));
     QCOMPARE(args.at(2).toString(), QString{});
 }
 

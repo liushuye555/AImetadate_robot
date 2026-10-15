@@ -346,8 +346,11 @@ QJsonObject SettingsPage::buildPatch() const {
 
 QJsonObject SettingsPage::buildProvidersObject() const {
     QJsonObject providers;
-    for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it)
-        providers.insert(it.key(), it.value());
+    for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it) {
+        QJsonObject provider = it.value();
+        provider.remove("_credential_status");
+        providers.insert(it.key(), provider);
+    }
     return providers;
 }
 
@@ -357,8 +360,12 @@ void SettingsPage::rebuildProviderList() {
     m_providerList->clear();
     for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it) {
         const QJsonObject p = it.value();
+        const QString state = p.value("_credential_status").toString();
+        const QString credential = state == "configured" ? QStringLiteral("密钥已配置，接口未验证")
+            : state == "missing_key" ? QStringLiteral("密钥变量未找到")
+            : state == "missing_reference" ? QStringLiteral("尚未保存密钥") : QStringLiteral("密钥状态待检查");
         const QString summary = it.key() + "  ·  " + p.value("base_url").toString()
-            + "  ·  " + p.value("model").toString();
+            + "  ·  " + p.value("model").toString() + "  ·  " + credential;
         auto *item = new QListWidgetItem(summary, m_providerList);
         item->setData(Qt::UserRole, it.key());
         m_providerList->addItem(item);
