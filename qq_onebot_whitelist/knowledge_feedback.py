@@ -86,7 +86,8 @@ def _call(config_path, scope, db, key, kind, messages, request=None, model=None,
     p = profile_for(config, scope)
     settings = deepcopy(p.settings)
     settings.setdefault('models', {})['tiered_enabled'] = p.option_enabled('models', 'tiered_enabled')
-    configs = [model] if model else resolve_models(settings)
+    from .llm_providers import routing_settings
+    configs = [model] if model else resolve_models(routing_settings(config, settings['models']))
     breaker = CircuitBreaker(config.data_dir / 'knowledge-model-health.db') if p.option_enabled('models', 'circuit_enabled') else None
     reserved = len(json.dumps(messages, ensure_ascii=False).encode()) + MAX_COMPLETION + 256
     for index, cfg in enumerate(configs):

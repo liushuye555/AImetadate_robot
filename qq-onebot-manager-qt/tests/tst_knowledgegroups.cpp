@@ -43,6 +43,7 @@ private slots:
     void scanDoesNotSelectOrEnableGroups();
     void schemaLoadsGroupObjects();
     void primaryProviderRoundTrip();
+    void providerOptionsAndReviewProviderRoundTrip();
     void knowledgeOptInsRoundTrip();
 };
 
@@ -77,6 +78,36 @@ void TestKnowledgeGroups::primaryProviderRoundTrip() {
     const QJsonObject saved = groupsOf(savePatch(page)).value("group:123").toObject().value("models").toObject();
     QCOMPARE(saved.value("primary_provider").toString(), QStringLiteral("default"));
     QCOMPARE(saved.value("primary_model").toString(), QStringLiteral("chosen-model"));
+}
+
+void TestKnowledgeGroups::providerOptionsAndReviewProviderRoundTrip() {
+    CollectionPage page;
+    const QJsonArray schema{
+        QJsonObject{{"key", "ai_context.providers"}, {"kind", "provider-list"},
+                    {"default", QJsonObject{{"freewb", QJsonObject{}}, {"ds_v4_flash", QJsonObject{}}, {"private-x", QJsonObject{}}}}},
+        QJsonObject{{"key", "knowledge.defaults"}, {"default", QJsonObject{}}},
+        QJsonObject{{"key", "knowledge.groups"}, {"default", QJsonObject{}}}
+    };
+    const QJsonObject models{{"primary_provider", "private-x"}, {"review_provider", "legacy-review"}};
+    page.setSchema(true, schema.toVariantList());
+    page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"groups", QJsonObject{{"group:123", QJsonObject{{"models", models}}}}}}}});
+    selectGroup(page, "group:123");
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>("knowledgeDialog");
+        QVERIFY(dialog);
+        auto *primary = dialog->findChild<QComboBox *>("knowledgeProvider");
+        auto *review = dialog->findChild<QComboBox *>("knowledgeReviewProvider");
+        QVERIFY(primary->findText("freewb") >= 0);
+        QVERIFY(primary->findText("ds_v4_flash") >= 0);
+        QCOMPARE(primary->currentText(), QStringLiteral("private-x"));
+        QCOMPARE(review->currentData().toString(), QStringLiteral("legacy-review"));
+        review->setCurrentIndex(0);
+        dialog->findChild<QDialogButtonBox *>("knowledgeDialogButtons")->button(QDialogButtonBox::Ok)->click();
+    });
+    page.findChild<QPushButton *>("knowledgeEdit")->click();
+    const QJsonObject saved = groupsOf(savePatch(page)).value("group:123").toObject().value("models").toObject();
+    QCOMPARE(saved.value("primary_provider").toString(), QStringLiteral("private-x"));
+    QCOMPARE(saved.value("review_provider").toString(), QString{});
 }
 
 void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {

@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 
-def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
+def config_schema(data: dict[str, Any], *, env_path: Path | None = None) -> list[dict[str, Any]]:
     ai = data.get('ai_context') or {}
     reply = data.get('reply') or {}
     listen = data.get('listen') or {}
@@ -37,11 +37,12 @@ def config_schema(data: dict[str, Any]) -> list[dict[str, Any]]:
         return item
 
     configured_providers = {
-        str(key): {str(k): str(v) for k, v in (value or {}).items()}
+        str(key): {str(k): v for k, v in (value or {}).items()
+                   if str(k).casefold() not in {'api_key', 'secret', 'password', 'access_token'}}
         for key, value in (ai.get('providers') or {}).items()
         if isinstance(value, dict)
     }
-    merged_providers = {**_env_providers(), **configured_providers}
+    merged_providers = {**(_env_providers() if env_path is None else _env_providers(env_path)), **configured_providers}
 
     return [
         field('onebot.ws_url', 'text', data.get('onebot', {}).get('ws_url', 'ws://127.0.0.1:3001'), 'OneBot WebSocket', 'OneBot WebSocket', section='runtime'),
@@ -157,20 +158,33 @@ def _load(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _merge(target: dict[str, Any], patch: dict[str, Any]) -> None:
+def _merge(target: dict[str, Any], patch: dict[str, Any], path: tuple[str, ...] = ()) -> None:
     for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(target.get(key), dict):
-            _merge(target[key], value)
+        if path == ('ai_context',) and key == 'providers':
+            # The editor sends its complete registry; merging resurrects deleted providers.
+            target[key] = value
+        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value, (*path, key))
         else:
             target[key] = value
 
 
 def patch_env(path: Path, values: dict[str, str]) -> None:
+    import re
+    if any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', str(key))
+           or '\n' in str(value) or '\r' in str(value) for key, value in values.items()):
+        raise ValueError('Invalid environment variable name or multiline value')
     existing = _load_env(path)
     existing.update({str(key): str(value) for key, value in values.items() if value is not None})
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f'{key}={value}' for key, value in existing.items()]
-    path.write_text(('\n'.join(lines) + '\n') if lines else '', encoding='utf-8')
+    fd, temporary = tempfile.mkstemp(prefix='.env.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write(('\n'.join(lines) + '\n') if lines else '')
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _load_env(path: Path) -> dict[str, str]:
@@ -193,9 +207,9 @@ def _load_env(path: Path) -> dict[str, str]:
 _ENV_PROVIDER_PREFIXES = ('DS_V4_FLASH', 'HUANYAN', 'OPENROUTER', 'SUMMARY_LLM', 'OPENAI')
 
 
-def _env_providers() -> dict[str, dict[str, str]]:
+def _env_providers(env_path: Path | None = None) -> dict[str, dict[str, str]]:
     """从 .env 发现已配置的 AI 供应商（密钥留在 .env，面板只读元信息）。"""
-    values = _load_env(Path('.env'))
+    values = _load_env(env_path or Path('.env'))
     providers: dict[str, dict[str, str]] = {}
     for prefix in _ENV_PROVIDER_PREFIXES:
         base_url = values.get(f'{prefix}_BASE_URL') or ''
@@ -235,18 +249,20 @@ def main() -> int:
     parser.add_argument('--json', default='{}')
     args = parser.parse_args()
     path = Path(args.config)
+    env_path = path.resolve().parent / '.env'
     if args.action == 'env-get':
-        print(json.dumps(_load_env(Path('.env')), ensure_ascii=False))
+        print(json.dumps({key: {'configured': bool(value)} for key, value in _load_env(env_path).items()}, ensure_ascii=False))
         return 0
     if args.action == 'env-patch':
-        values = json.loads(args.json)
+        import sys
+        values = json.loads(sys.stdin.read() if args.json == '-' else args.json)
         if not isinstance(values, dict):
             raise SystemExit('env patch must be a JSON object')
-        patch_env(Path('.env'), {str(key): str(value) for key, value in values.items()})
-        print(json.dumps(_load_env(Path('.env')), ensure_ascii=False))
+        patch_env(env_path, {str(key): str(value) for key, value in values.items()})
+        print(json.dumps({'saved': True, 'updated_keys': list(values)}, ensure_ascii=False))
         return 0
     if args.action == 'schema':
-        print(json.dumps(config_schema(_load(path)), ensure_ascii=False))
+        print(json.dumps(config_schema(_load(path), env_path=env_path), ensure_ascii=False))
         return 0
     if args.action == 'get':
         print(json.dumps(_load(path), ensure_ascii=False))

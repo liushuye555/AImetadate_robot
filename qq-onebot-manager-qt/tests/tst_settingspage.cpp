@@ -8,6 +8,11 @@
 #include <QPlainTextEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QRegularExpression>
+#include <QLabel>
 #include "ui/pages/SettingsPage.h"
 
 class TestSettingsPage : public QObject {
@@ -17,6 +22,9 @@ private slots:
     void emptySchemaKeepsGeneralSection();
     void listFieldsRenderLines();
     void providerListRendersEditor();
+    void providerSecretGetsStableEnvironmentName();
+    void providerWithoutKeyLocationCannotBeSaved();
+    void providerEditPreservesSettingsAndExistingKeyReference();
     void numericFieldsValidateOpenBoundsAndDecimals();
 };
 
@@ -66,6 +74,80 @@ void TestSettingsPage::providerListRendersEditor() {
         }
     }
     QVERIFY(foundProvider);                                     // 现有供应商显示在列表中
+}
+
+void TestSettingsPage::providerSecretGetsStableEnvironmentName() {
+    SettingsPage page;
+    page.setSchema(QJsonDocument::fromJson(sampleSchema()).toVariant());
+    QSignalSpy changed(&page, &SettingsPage::providersChanged);
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>();
+        QVERIFY(dialog);
+        auto closeOnFailure = qScopeGuard([dialog] { dialog->reject(); });
+        dialog->findChild<QLineEdit *>("providerId")->setText(QStringLiteral("绘图-provider"));
+        dialog->findChild<QLineEdit *>("providerUrl")->setText(QStringLiteral("https://example.invalid"));
+        dialog->findChild<QLineEdit *>("providerModel")->setText(QStringLiteral("model-x"));
+        dialog->findChild<QLineEdit *>("providerSecret")->setText(QStringLiteral("secret-value"));
+        dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        closeOnFailure.dismiss();
+    });
+    page.findChild<QPushButton *>("addProvider")->click();
+    QCOMPARE(changed.count(), 1);
+    const QList<QVariant> args = changed.takeFirst();
+    const QString envName = args.at(1).toString();
+    QVERIFY(envName.startsWith(QStringLiteral("AI_PROVIDER_")));
+    QVERIFY(envName.endsWith(QStringLiteral("_API_KEY")));
+    QVERIFY(!envName.contains(QRegularExpression(QStringLiteral("[^A-Z0-9_]"))));
+    QCOMPARE(args.at(2).toString(), QStringLiteral("secret-value"));
+    const QJsonObject providers = args.at(0).toJsonObject();
+    QCOMPARE(providers.value(QStringLiteral("绘图-provider")).toObject().value("api_key_env").toString(), envName);
+}
+
+void TestSettingsPage::providerWithoutKeyLocationCannotBeSaved() {
+    SettingsPage page;
+    page.setSchema(QJsonDocument::fromJson(sampleSchema()).toVariant());
+    QSignalSpy changed(&page, &SettingsPage::providersChanged);
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>();
+        auto *name = dialog->findChild<QLineEdit *>();
+        name->setText(QStringLiteral("empty-key-provider"));
+        auto *buttons = dialog->findChild<QDialogButtonBox *>();
+        QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
+        QVERIFY(dialog->findChild<QLabel *>("providerValidation")->text().contains(QStringLiteral("API Key")));
+        dialog->reject();
+    });
+    page.findChild<QPushButton *>("addProvider")->click();
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestSettingsPage::providerEditPreservesSettingsAndExistingKeyReference() {
+    SettingsPage page;
+    const QJsonObject original{{"base_url", "https://example.invalid/v1"}, {"model", "kept"},
+        {"api_key_env", "EXISTING_KEY"}, {"timeout_seconds", 91}, {"extra_setting", "preserved"}};
+    const QJsonArray schema{QJsonObject{{"key", "ai_context.providers"}, {"kind", "provider-list"},
+        {"default", QJsonObject{{"freewb", original}}}}};
+    page.setSchema(schema.toVariantList());
+    page.findChild<QListWidget *>("providerList")->setCurrentRow(0);
+    QSignalSpy changed(&page, &SettingsPage::providersChanged);
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>();
+        QVERIFY(dialog);
+        auto closeOnFailure = qScopeGuard([dialog] { dialog->reject(); });
+        QVERIFY(dialog->findChild<QLineEdit *>("providerId")->isReadOnly());
+        dialog->findChild<QLineEdit *>("providerModel")->setText(QStringLiteral("updated"));
+        auto *ok = dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+        QVERIFY(ok->isEnabled());
+        ok->click();
+        closeOnFailure.dismiss();
+    });
+    page.findChild<QPushButton *>("editProvider")->click();
+    QCOMPARE(changed.count(), 1);
+    const auto args = changed.takeFirst();
+    const auto saved = args.at(0).toJsonObject().value("freewb").toObject();
+    QCOMPARE(saved.value("extra_setting").toString(), QStringLiteral("preserved"));
+    QCOMPARE(saved.value("api_key_env").toString(), QStringLiteral("EXISTING_KEY"));
+    QCOMPARE(saved.value("timeout_seconds").toInt(), 91);
+    QCOMPARE(args.at(2).toString(), QString{});
 }
 
 void TestSettingsPage::numericFieldsValidateOpenBoundsAndDecimals() {

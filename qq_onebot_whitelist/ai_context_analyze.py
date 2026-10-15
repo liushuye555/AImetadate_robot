@@ -122,19 +122,23 @@ def target_image_message_ids(db_path: Path, *, scope: str, start_id: int, end_id
 
 def llm_configs_for_provider(provider: str, config: AppConfig | None = None) -> tuple[LLMConfig | None, LLMConfig | None]:
     provider = (provider or '').lower()
+    from .llm_providers import configured_provider
+    if config:
+        resolved = configured_provider(provider, config.ai_context_providers,
+            config.source_path.parent / '.env' if config.source_path else None)
+        if resolved is not None:
+            return resolved, None
+    env_path = config.source_path.parent / '.env' if config and config.source_path else None
+    def default_connection():
+        return LLMConfig.from_env_file(env_path) if env_path else LLMConfig.from_env()
+    def ds_connection():
+        return LLMConfig.ds_fallback_from_env_file(env_path) if env_path else LLMConfig.ds_fallback_from_env_file()
     if provider in {'ds', 'ds_v4_flash', 'deepseek', 'deepseek_v4_flash'}:
-        return LLMConfig.ds_fallback_from_env_file(), None
+        return ds_connection(), None
     if provider in {'openrouter', 'free', 'openrouter_free'}:
-        return LLMConfig.from_env(), LLMConfig.ds_fallback_from_env_file()
-    if provider in {'auto', 'default'}:
-        return LLMConfig.from_env(), LLMConfig.ds_fallback_from_env_file()
-    custom = (config.ai_context_providers if config else {}).get(provider)
-    if custom:
-        key_name = custom.get('api_key_env', '')
-        api_key = os.environ.get(key_name) or _read_env_values(Path.cwd() / '.env').get(key_name)
-        if api_key and custom.get('base_url'):
-            return LLMConfig(base_url=custom['base_url'], api_key=api_key, model=custom.get('model', provider), timeout_seconds=int(custom.get('timeout_seconds', 60))), None
-        return None, None
+        return default_connection(), ds_connection()
+    if provider in {'auto', 'default', 'openai_compatible'}:
+        return default_connection(), ds_connection()
     raise SystemExit(f'Unknown ai_context.provider: {provider}')
 
 

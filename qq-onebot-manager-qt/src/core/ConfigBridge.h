@@ -24,10 +24,12 @@ private:
     struct Pending {
         Mode mode;
         QStringList args;
+        QByteArray input;
     };
-    void runArgs(const QStringList &args, Mode mode);
+    void runArgs(const QStringList &args, Mode mode, const QByteArray &input = {});
     void startNext();
     QProcess m_proc;
     Mode m_mode = Mode::Fetch;
     QQueue<Pending> m_queue;
+    QByteArray m_input;
 };

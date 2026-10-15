@@ -24,6 +24,7 @@ from .knowledge_term_inference import prepare_inference, decorate_term
 from .llm_summary import LLMConfig
 from .knowledge_quality import QUALITY_SYSTEM, normalize_quality
 from . import knowledge_topic_decisions
+from .llm_providers import routing_settings
 
 
 VERSION = 7
@@ -387,8 +388,9 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     messages = [{'role': 'system', 'content': SYSTEM},
                 {'role': 'user', 'content': redacted_json(task)}]
     policy = _model_policy(profile)
-    configs = [model] if model is not None else resolve_models({'models': policy})
-    review_cfg = resolve_review_model({'models': policy})
+    routing = routing_settings(config, policy)
+    configs = [model] if model is not None else resolve_models(routing)
+    review_cfg = resolve_review_model(routing)
     preview_settings = profile.settings.get('files') or {}
     preview_policy = {**preview_settings, 'preview_enabled': profile.option_enabled('files', 'preview_enabled')}
     identity = [VERSION, profile.settings.get('analysis_revision', 1), scope, kind, wanted,
@@ -401,8 +403,11 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     breaker = None
 
     def fresh_profile():
-        current = profile_for(load_config(config_path), scope)
+        current_config = load_config(config_path)
+        current = profile_for(current_config, scope)
         if (not current.allows(feature) or (kind == 'history' and not current.allows('history'))
+                or current_config.ai_context_provider != config.ai_context_provider
+                or current_config.ai_context_providers != config.ai_context_providers
                 or any(enabled and not current.allows(k) for k, enabled in wanted.items())
                 or _model_policy(current) != policy
                 or capabilities != {

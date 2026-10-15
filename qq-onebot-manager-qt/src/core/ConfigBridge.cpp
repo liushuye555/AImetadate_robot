@@ -4,6 +4,13 @@
 #include <QProcessEnvironment>
 
 ConfigBridge::ConfigBridge(QObject *parent) : QObject(parent) {
+    connect(&m_proc, &QProcess::started, this, [this] {
+        if (m_mode == Mode::EnvSave) {
+            m_proc.write(m_input);
+            m_proc.closeWriteChannel();
+            m_input.clear();
+        }
+    });
     connect(&m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
         const QString output = QString::fromUtf8(m_proc.readAllStandardOutput());
         const Mode doneMode = m_mode;
@@ -34,12 +41,11 @@ void ConfigBridge::save(const QJsonObject &patch) {
 void ConfigBridge::saveEnv(const QJsonObject &values) {
     runArgs({"-m", "qq_onebot_whitelist.config_bridge", "env-patch", "--config",
              Paths::repoRoot() + "/config.yaml", "--json",
-             QString::fromUtf8(QJsonDocument(values).toJson(QJsonDocument::Compact))},
-            Mode::EnvSave);
+             "-"}, Mode::EnvSave, QJsonDocument(values).toJson(QJsonDocument::Compact));
 }
 
-void ConfigBridge::runArgs(const QStringList &args, Mode mode) {
-    m_queue.enqueue({mode, args});
+void ConfigBridge::runArgs(const QStringList &args, Mode mode, const QByteArray &input) {
+    m_queue.enqueue({mode, args, input});
     startNext();
 }
 
@@ -47,6 +53,7 @@ void ConfigBridge::startNext() {
     if (m_queue.isEmpty() || m_proc.state() != QProcess::NotRunning) return;
     const Pending op = m_queue.dequeue();
     m_mode = op.mode;
+    m_input = op.input;
     m_proc.setProgram(Paths::pythonExe());
     m_proc.setArguments(op.args);
     m_proc.setWorkingDirectory(Paths::repoRoot());

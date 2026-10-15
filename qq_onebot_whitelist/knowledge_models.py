@@ -19,6 +19,7 @@ from typing import Any, Iterator
 import uuid
 
 from .llm_summary import LLMConfig, normalize_base_url
+from .llm_providers import configured_provider, builtin_provider_name
 
 
 def _model_settings(settings: dict[str, Any]) -> dict[str, Any]:
@@ -26,12 +27,15 @@ def _model_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return values if isinstance(values, dict) else {}
 
 
-def _provider(name: Any, env_path: Path | None) -> LLMConfig | None:
+def _provider(name: Any, env_path: Path | None, providers: dict | None = None) -> LLMConfig | None:
+    if providers and (configured := configured_provider(str(name), providers, env_path)) is not None:
+        return configured
+    name = builtin_provider_name(str(name))
     if name == 'default':
         return LLMConfig.from_env() if env_path is None else LLMConfig.from_env_file(env_path)
     if name == 'ds_v4_flash':
         return LLMConfig.ds_fallback_from_env_file() if env_path is None else LLMConfig.ds_fallback_from_env_file(env_path)
-    raise ValueError('supported model providers are default and ds_v4_flash')
+    raise ValueError('supported model providers are default, ds_v4_flash and saved AI provider IDs')
 
 
 def _identity(cfg: LLMConfig) -> str:
@@ -60,13 +64,25 @@ def resolve_models(settings: dict[str, Any], *, env_path: Path | None = None) ->
     existing LLMConfig behavior.
     """
     values = _model_settings(settings)
+    env_path = env_path or settings.get('_env_path')
+    providers = settings.get('_providers') or {}
     tiered = values.get('tiered_enabled') is True
     primary_name = values.get('primary_provider', 'default') if tiered else 'default'
-    fallback_name = 'default' if primary_name == 'ds_v4_flash' else 'ds_v4_flash'
-    primary = _provider(primary_name, env_path)
+    if primary_name == 'default':
+        primary_name = settings.get('_default_provider') or 'default'
+    fallback_name = values.get('fallback_provider')
+    custom_primary = any(str(key).casefold() == str(primary_name).casefold() for key in providers)
+    builtin_primary = builtin_provider_name(str(primary_name))
+    if 'fallback_provider' not in values and not custom_primary and builtin_primary in ('default', 'ds_v4_flash'):
+        fallback_name = 'default' if builtin_primary == 'ds_v4_flash' else 'ds_v4_flash'
+    primary = _provider(primary_name, env_path, providers)
     if tiered:
         primary = _override_model(primary, values.get('primary_model'))
-    configs = [primary, _provider(fallback_name, env_path)]
+    configs = [primary]
+    if fallback_name:
+        if fallback_name == 'default':
+            fallback_name = settings.get('_default_provider') or 'default'
+        configs.append(_provider(fallback_name, env_path, providers))
     result: list[LLMConfig] = []
     seen: set[str] = set()
     for cfg in configs:
@@ -81,7 +97,20 @@ def resolve_review_model(settings: dict[str, Any], *, env_path: Path | None = No
     values = _model_settings(settings)
     if values.get('review_enabled') is not True:
         return None
-    cfg = _provider(values.get('review_provider', 'ds_v4_flash'), env_path)
+    env_path = env_path or settings.get('_env_path')
+    providers = settings.get('_providers') or {}
+    default = settings.get('_default_provider') or 'default'
+    primary = values.get('primary_provider', 'default') if values.get('tiered_enabled') is True else 'default'
+    if primary == 'default':
+        primary = default
+    custom_primary = any(str(key).casefold() == str(primary).casefold() for key in providers)
+    if 'review_provider' in values:
+        review = values.get('review_provider') or primary
+    else:
+        review = primary if custom_primary or primary not in ('default', 'ds_v4_flash') else 'ds_v4_flash'
+    if review == 'default':
+        review = default
+    cfg = _provider(review, env_path, providers)
     return _override_model(cfg, values.get('review_model'))
 
 

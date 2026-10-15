@@ -22,6 +22,9 @@
 #include <QSpinBox>
 #include <QStyle>
 #include <QEvent>
+#include <QCryptographicHash>
+#include <QRegularExpression>
+#include <QUrl>
 
 SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
     auto *outer = new QVBoxLayout(this);
@@ -149,11 +152,15 @@ QWidget *SettingsPage::buildProviderEditor() {
     auto *group = new QGroupBox(Strings::zh("providers"), container);
     auto *v = new QVBoxLayout(group);
     m_providerList = new QListWidget(group);
+    m_providerList->setObjectName("providerList");
     v->addWidget(m_providerList);
     auto *buttons = new QHBoxLayout;
     auto *add = new QPushButton(Strings::zh("addProvider"), group);
     auto *edit = new QPushButton(Strings::zh("editProvider"), group);
     auto *remove = new QPushButton(Strings::zh("removeProvider"), group);
+    add->setObjectName("addProvider");
+    edit->setObjectName("editProvider");
+    remove->setObjectName("removeProvider");
     buttons->addWidget(add);
     buttons->addWidget(edit);
     buttons->addWidget(remove);
@@ -372,6 +379,11 @@ void SettingsPage::openProviderDialog(const QString &editName) {
     timeoutSpin->setRange(1, 3600);
     timeoutSpin->setValue(60);
     auto *secretEdit = new QLineEdit(&dialog);
+    nameEdit->setObjectName("providerId");
+    urlEdit->setObjectName("providerUrl");
+    modelEdit->setObjectName("providerModel");
+    keyEnvEdit->setObjectName("providerKeyEnv");
+    secretEdit->setObjectName("providerSecret");
     secretEdit->setEchoMode(QLineEdit::Password);
     secretEdit->setPlaceholderText(Strings::zh("secretPlaceholder"));
     form->addRow("供应商 ID", nameEdit);
@@ -380,29 +392,76 @@ void SettingsPage::openProviderDialog(const QString &editName) {
     form->addRow("Key 环境变量", keyEnvEdit);
     form->addRow(Strings::zh("providerTimeout"), timeoutSpin);
     form->addRow("API Key", secretEdit);
-    if (!editName.isEmpty() && m_providerMap.contains(editName)) {
+    auto *validation = new QLabel(&dialog);
+    validation->setObjectName("providerValidation");
+    form->addRow(validation);
+    const bool editingExisting = !editName.isEmpty() && m_providerMap.contains(editName);
+    if (editingExisting) {
         const QJsonObject p = m_providerMap.value(editName);
         nameEdit->setText(editName);
         urlEdit->setText(p.value("base_url").toString());
         modelEdit->setText(p.value("model").toString());
         keyEnvEdit->setText(p.value("api_key_env").toString());
         timeoutSpin->setValue(p.value("timeout_seconds").toInt(60));
+        nameEdit->setReadOnly(true);
     }
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    auto validateName = [this, nameEdit, urlEdit, modelEdit, keyEnvEdit, secretEdit, validation, buttons, editingExisting] {
+        const QString name = nameEdit->text().trimmed();
+        bool duplicate = false;
+        if (!editingExisting)
+            for (auto it = m_providerMap.constBegin(); it != m_providerMap.constEnd(); ++it)
+                duplicate |= it.key().compare(name, Qt::CaseInsensitive) == 0;
+        const bool hasKeyLocation = !keyEnvEdit->text().trimmed().isEmpty() || !secretEdit->text().isEmpty();
+        const QString envName = keyEnvEdit->text().trimmed();
+        const bool validEnv = envName.isEmpty() || QRegularExpression(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$")).match(envName).hasMatch();
+        const QUrl url(urlEdit->text().trimmed());
+        const bool validConnection = url.isValid() && !url.host().isEmpty()
+            && (url.scheme() == "http" || url.scheme() == "https") && !modelEdit->text().trimmed().isEmpty();
+        const bool nameValid = !name.isEmpty() && !duplicate;
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(nameValid && hasKeyLocation && validEnv && validConnection);
+        validation->setText(duplicate ? QStringLiteral("该供应商 ID 已存在。")
+                             : !nameValid ? QStringLiteral("请输入唯一的供应商 ID。")
+                             : !hasKeyLocation ? QStringLiteral("请填写 Key 环境变量名，或输入 API Key 以自动生成。")
+                             : !validEnv ? QStringLiteral("Key 环境变量名仅可使用字母、数字和下划线，且不能以数字开头。")
+                             : !validConnection ? QStringLiteral("请填写有效的 HTTP/HTTPS 接口地址和模型名称。")
+                             : QString{});
+    };
+    connect(nameEdit, &QLineEdit::textChanged, &dialog, validateName);
+    connect(urlEdit, &QLineEdit::textChanged, &dialog, validateName);
+    connect(modelEdit, &QLineEdit::textChanged, &dialog, validateName);
+    connect(keyEnvEdit, &QLineEdit::textChanged, &dialog, validateName);
+    connect(secretEdit, &QLineEdit::textChanged, &dialog, validateName);
+    validateName();
     form->addRow(buttons);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     if (dialog.exec() != QDialog::Accepted) return;
     const QString name = nameEdit->text().trimmed();
-    if (name.isEmpty()) return;
-    QJsonObject p;
+    if (name.isEmpty() || (!editingExisting && m_providerMap.contains(name))) return;
+    QJsonObject p = editingExisting ? m_providerMap.value(editName) : QJsonObject{};
+    QString keyEnv = keyEnvEdit->text().trimmed();
+    const QString secret = secretEdit->text();
+    if (keyEnv.isEmpty() && !secret.isEmpty()) {
+        QString safe = name.toUpper();
+        safe.replace(QRegularExpression(QStringLiteral("[^A-Z0-9]+")), QStringLiteral("_"));
+        safe.remove(QRegularExpression(QStringLiteral("^_+|_+$")));
+        if (safe.isEmpty()) safe = QStringLiteral("PROVIDER");
+        // Add a stable suffix whenever normalization changed the ID, preventing
+        // collisions such as "my-provider" and "my_provider".
+        if (safe != name) {
+            const QByteArray hash = QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256).toHex().left(10).toUpper();
+            safe += QStringLiteral("_") + QString::fromLatin1(hash);
+        }
+        keyEnv = QStringLiteral("AI_PROVIDER_") + safe + QStringLiteral("_API_KEY");
+    }
     p.insert("base_url", urlEdit->text().trimmed());
     p.insert("model", modelEdit->text().trimmed());
-    p.insert("api_key_env", keyEnvEdit->text().trimmed());
+    p.insert("api_key_env", keyEnv);
     p.insert("timeout_seconds", timeoutSpin->value());
     m_providerMap.insert(name, p);
     rebuildProviderList();
-    emit providersChanged(buildProvidersObject(), keyEnvEdit->text().trimmed(), secretEdit->text());
+    emit providersChanged(buildProvidersObject(), keyEnv, secret);
 }
 
 void SettingsPage::setSavedMessage(const QString &text) {

@@ -65,6 +65,11 @@ def test_review_empty_model_preserves_connection_model(configs):
     assert models.resolve_review_model({'review_enabled': True, 'review_model': ''}) is fallback
 
 
+def test_explicit_empty_review_provider_inherits_primary(configs):
+    primary, _, _ = configs
+    assert models.resolve_review_model({'review_enabled': True, 'review_provider': ''}) is primary
+
+
 def test_missing_connections_and_duplicate_identity(monkeypatch):
     primary = LLMConfig('https://api.deepseek.com', 'key', 'same')
     duplicate = LLMConfig('https://api.deepseek.com/v1/', 'key', 'same')

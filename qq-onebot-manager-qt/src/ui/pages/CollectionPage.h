@@ -46,6 +46,7 @@ private:
     QListWidget *m_knowledgeList = nullptr;
     QJsonObject m_knowledgeGroups;
     QJsonObject m_knowledgeDefaults;
+    QStringList m_knowledgeProviderOptions;
     QSet<QString> m_removedKnowledgeGroups;
     QStringList m_knowledgeAvailableGroups;
     bool m_knowledgeScanPending = false;

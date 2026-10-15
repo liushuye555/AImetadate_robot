@@ -118,6 +118,8 @@ class AppConfig:
     file_sync_backfill: bool = True
     file_sync_scan_interval_minutes: int = 360
     knowledge: dict = field(default_factory=dict)
+    source_path: Path | None = None
+    ai_context_provider_explicit: bool = False
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -148,6 +150,8 @@ def load_config(path: str | Path) -> AppConfig:
     file_sync = raw.get('file_sync') or {}
     configured_language = normalize_language(ui.get('language'))
     return AppConfig(
+        source_path=path.resolve(),
+        ai_context_provider_explicit=bool(ai_context.get('provider')),
         onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
         data_dir=Path(storage.get('data_dir') or 'data'),
         bot=BotConfig(

@@ -327,11 +327,22 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
 void CollectionPage::setSchema(bool ok, const QVariant &schemaVariant) {
     if (!ok) return;
     m_loadingConfig = true;
+    m_knowledgeProviderOptions.clear();
     const QJsonArray items = QJsonDocument::fromVariant(schemaVariant).array();
     QJsonObject knowledge;
     for (const QJsonValue &value : items) {
         const QJsonObject obj = value.toObject();
         const QString key = obj.value("key").toString();
+        if (key == "ai_context.provider") {
+            for (const QJsonValue &option : obj.value("options").toArray()) {
+                const QString name = option.toString();
+                if (!name.isEmpty() && !m_knowledgeProviderOptions.contains(name)) m_knowledgeProviderOptions << name;
+            }
+        } else if (key == "ai_context.providers" && obj.value("kind").toString() == "provider-list") {
+            const QJsonObject providers = obj.value("default").toObject();
+            for (auto it = providers.constBegin(); it != providers.constEnd(); ++it)
+                if (!m_knowledgeProviderOptions.contains(it.key())) m_knowledgeProviderOptions << it.key();
+        }
         if (key == "knowledge") knowledge = obj.value("default").toObject();
         else if (key.startsWith("knowledge."))
             insertPath(knowledge, key.mid(10).split('.'), obj.value("default"));
@@ -593,8 +604,21 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     reviewModel->setObjectName("knowledgeReviewModel");
     auto *provider = new QComboBox(content);
     provider->setObjectName("knowledgeProvider");
-    provider->addItems({"default", "ds_v4_flash"});
-    provider->setCurrentText(models.value("primary_provider").toString(defaultModels.value("primary_provider").toString("default")));
+    QStringList providerOptions = m_knowledgeProviderOptions;
+    if (providerOptions.isEmpty()) providerOptions = {QStringLiteral("default"), QStringLiteral("ds_v4_flash")};
+    const QString primaryProvider = models.value("primary_provider").toString(defaultModels.value("primary_provider").toString("default"));
+    if (!providerOptions.contains(primaryProvider)) providerOptions << primaryProvider;
+    provider->addItems(providerOptions);
+    provider->setCurrentText(primaryProvider);
+    auto *reviewProvider = new QComboBox(content);
+    reviewProvider->setObjectName("knowledgeReviewProvider");
+    reviewProvider->addItem(QStringLiteral("（继承主供应商）"), QString{});
+    for (const QString &option : providerOptions) reviewProvider->addItem(option, option);
+    const QString selectedReviewProvider = models.value("review_provider").toString(defaultModels.value("review_provider").toString());
+    if (!selectedReviewProvider.isEmpty() && !providerOptions.contains(selectedReviewProvider))
+        reviewProvider->addItem(selectedReviewProvider, selectedReviewProvider);
+    const int reviewIndex = reviewProvider->findData(selectedReviewProvider);
+    reviewProvider->setCurrentIndex(reviewIndex >= 0 ? reviewIndex : 0);
     auto *preview = new QCheckBox(QStringLiteral("启用小文件正文预览"), content);
     preview->setObjectName("knowledgePreviewEnabled");
     preview->setChecked(explicitEnabled(files, "preview_enabled"));
@@ -602,6 +626,7 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     form->addRow(review);
     form->addRow(circuit);
     form->addRow(QStringLiteral("模型提供方"), provider);
+    form->addRow(QStringLiteral("复核供应商（可空，继承主供应商）"), reviewProvider);
     form->addRow(QStringLiteral("主模型（可空）"), primaryModel);
     form->addRow(QStringLiteral("复审模型（可空）"), reviewModel);
     form->addRow(feedbackEnabled);
@@ -665,6 +690,7 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     newModels.insert("review_enabled", review->isChecked());
     newModels.insert("circuit_enabled", circuit->isChecked());
     newModels.insert("primary_provider", provider->currentText());
+    newModels.insert("review_provider", reviewProvider->currentData().toString());
     newModels.insert("primary_model", primaryModel->text().trimmed());
     newModels.insert("review_model", reviewModel->text().trimmed());
     group.insert("models", newModels);
