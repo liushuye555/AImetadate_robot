@@ -73,6 +73,7 @@ def effective_term(term: dict) -> dict:
     except (ValueError, TypeError):
         contexts = []
     if (result.get('origin') != 'user' and result.get('status') == 'active'
-            and (not isinstance(contexts, list) or not independent_definitions(contexts))):
+            and (result.get('inference_kind') in ('inferred', 'ambiguous')
+                 or not isinstance(contexts, list) or not independent_definitions(contexts))):
         result['status'] = 'candidate'
     return result

@@ -69,19 +69,23 @@ const vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('nod
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const elements={group:{value:''},search:{value:''},'filter-empty':{hidden:true}};
 if(input.filename==='knowledge.html')elements.value={value:''};
+if(input.filename==='knowledge.html')elements.category={value:'durable'};
 if(input.filename==='glossary.html')elements['term-status']={value:''};
+if(input.filename==='glossary.html')elements['term-kind']={value:''};
 for(const element of Object.values(elements))element.addEventListener=()=>{};
-const cards=[{dataset:{group:'A',value:'high',status:'active',origin:'ai'},textContent:'Alpha',hidden:false},
- {dataset:{group:'B',value:'candidate',status:'candidate',origin:'ai'},textContent:'Beta',hidden:false}];
+const cards=[{dataset:{group:'A',value:'high',status:'active',origin:'ai',inference:'explicit'},textContent:'Alpha',hidden:false},
+ {dataset:{group:'B',value:'candidate',status:'candidate',origin:'ai',inference:'inferred'},textContent:'Beta',hidden:false}];
 const context={document:{getElementById:id=>elements[id]||null,querySelectorAll:()=>cards}};
 vm.createContext(context);vm.runInContext(input.script,context);
 context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[false,false]);
+if(elements.category){cards.push({dataset:{group:'A',category:'transient'},textContent:'Service status',hidden:false});context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[false,false,true]);elements.category.value='transient';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[true,true,false]);elements.category.value='durable';cards.pop();}
 elements.group.value='A';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[false,true]);
 elements.group.value='';elements.search.value='beta';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[true,false]);
 elements.search.value='missing';context.filterRows();assert.equal(elements['filter-empty'].hidden,false);
 elements.search.value='';
 if(elements.value){elements.value.value='candidate';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[true,false]);}
 if(elements['term-status']){elements['term-status'].value='active';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[false,true]);}
+if(elements['term-kind']){elements['term-status'].value='';elements['term-kind'].value='inferred';context.filterRows();assert.deepEqual(cards.map(c=>c.hidden),[true,false]);}
 '''
     completed = subprocess.run([node, '-e', harness], input=json.dumps({'filename': filename, 'script': script}),
                                text=True, encoding='utf-8', capture_output=True, timeout=15)

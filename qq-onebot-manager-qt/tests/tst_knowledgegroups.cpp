@@ -43,6 +43,7 @@ private slots:
     void scanDoesNotSelectOrEnableGroups();
     void schemaLoadsGroupObjects();
     void primaryProviderRoundTrip();
+    void knowledgeOptInsRoundTrip();
 };
 
 static QJsonObject savePatch(CollectionPage &page) {
@@ -78,6 +79,40 @@ void TestKnowledgeGroups::primaryProviderRoundTrip() {
     QCOMPARE(saved.value("primary_model").toString(), QStringLiteral("chosen-model"));
 }
 
+void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {
+    CollectionPage page;
+    const QJsonObject extraction{{"enabled", true}, {"track_topics", true}, {"unknown", "keep"}};
+    const QJsonObject glossary{{"enabled", true}, {"infer_context", true}, {"unknown", "keep"}};
+    const QJsonObject defaults{{"extraction", QJsonObject{{"enabled", true}, {"track_topics", true}}},
+                               {"glossary", QJsonObject{{"enabled", true}, {"infer_context", true}}}};
+    const QJsonObject original{{"extraction", extraction}, {"glossary", glossary}};
+    page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"defaults", defaults},
+        {"groups", QJsonObject{{"group:123", original}}}}}});
+    selectGroup(page, "group:123");
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>("knowledgeDialog");
+        QVERIFY(dialog);
+        const auto closeDialog = qScopeGuard([dialog] {
+            if (dialog->result() != QDialog::Accepted) dialog->reject();
+        });
+        auto *trackTopics = dialog->findChild<QCheckBox *>("knowledgeTrackTopics");
+        auto *inferContext = dialog->findChild<QCheckBox *>("knowledgeInferContext");
+        QVERIFY(trackTopics);
+        QVERIFY(inferContext);
+        QVERIFY(trackTopics->isChecked());
+        QVERIFY(inferContext->isChecked());
+        trackTopics->setChecked(false);
+        inferContext->setChecked(false);
+        dialog->findChild<QDialogButtonBox *>("knowledgeDialogButtons")->button(QDialogButtonBox::Ok)->click();
+    });
+    page.findChild<QPushButton *>("knowledgeEdit")->click();
+    QJsonObject saved = groupsOf(savePatch(page)).value("group:123").toObject();
+    QCOMPARE(saved.value("extraction").toObject().value("track_topics"), QJsonValue(false));
+    QCOMPARE(saved.value("glossary").toObject().value("infer_context"), QJsonValue(false));
+    QCOMPARE(saved.value("extraction").toObject().value("unknown").toString(), QStringLiteral("keep"));
+    QCOMPARE(saved.value("glossary").toObject().value("unknown").toString(), QStringLiteral("keep"));
+}
+
 void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
     CollectionPage page;
     QJsonObject defaults{{"enabled", true}, {"match_mode", "specialist"},
@@ -86,8 +121,9 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
                          {"files", QJsonObject{{"enabled", true}, {"preview_enabled", true}, {"max_file_mb", 99}}},
                          {"models", QJsonObject{{"tiered_enabled", true}, {"review_enabled", true}, {"circuit_enabled", true}}},
                          {"feedback", QJsonObject{{"enabled", true}, {"optimization_enabled", true}}}};
-    for (const QString &feature : {QStringLiteral("extraction"), QStringLiteral("glossary"),
-                                  QStringLiteral("history"), QStringLiteral("notifications")})
+    defaults.insert("extraction", QJsonObject{{"enabled", true}, {"track_topics", true}});
+    defaults.insert("glossary", QJsonObject{{"enabled", true}, {"infer_context", true}});
+    for (const QString &feature : {QStringLiteral("history"), QStringLiteral("notifications")})
         defaults.insert(feature, QJsonObject{{"enabled", true}});
     page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"defaults", defaults},
                                   {"groups", QJsonObject{{"group:123", QJsonObject{}}}}}}});
@@ -101,6 +137,8 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
         QVERIFY(dialog);
         const auto closeDialog = qScopeGuard([dialog] { dialog->reject(); });
         for (auto *box : dialog->findChildren<QCheckBox *>()) QVERIFY(!box->isChecked());
+        QVERIFY(dialog->findChild<QCheckBox *>("knowledgeTrackTopics"));
+        QVERIFY(dialog->findChild<QCheckBox *>("knowledgeInferContext"));
         QCOMPARE(dialog->findChild<QComboBox *>("knowledgeMatchMode")->currentText(), QStringLiteral("specialist"));
         QCOMPARE(dialog->findChild<QPlainTextEdit *>("knowledgeTopics")->toPlainText(), QStringLiteral("研究"));
         QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeMaxFileMb")->value(), 99);
@@ -137,6 +175,10 @@ void TestKnowledgeGroups::newGroupOnlyEnablesItsOwnSwitch() {
     QVERIFY(!group.value("summary").toObject().value("weekly").toBool());
     QVERIFY(!group.value("files").toObject().value("preview_enabled").toBool());
     QVERIFY(!group.value("feedback").toObject().value("optimization_enabled").toBool());
+    QVERIFY(group.value("extraction").toObject().value("track_topics").isBool());
+    QVERIFY(!group.value("extraction").toObject().value("track_topics").toBool());
+    QVERIFY(group.value("glossary").toObject().value("infer_context").isBool());
+    QVERIFY(!group.value("glossary").toObject().value("infer_context").toBool());
     for (const QString &flag : {QStringLiteral("tiered_enabled"), QStringLiteral("review_enabled"), QStringLiteral("circuit_enabled")})
         QVERIFY(!group.value("models").toObject().value(flag).toBool());
     auto *list = page.findChild<QListWidget *>("knowledgeGroups");

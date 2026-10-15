@@ -11,6 +11,8 @@ import sqlite3
 from .resources import extract_file_segments
 from .store import reply_to_message_id
 from .knowledge_grounding import effective_term, independent_definitions
+from . import knowledge_layers, knowledge_topics
+from .knowledge_term_inference import SCHEMA as TERM_SCHEMA, save_annotation, decorate_term
 
 
 LOCAL_TZ = timezone(timedelta(hours=8))
@@ -125,6 +127,9 @@ class KnowledgeDB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.conn() as conn:
             conn.executescript(SCHEMA)
+            conn.execute(TERM_SCHEMA)
+            knowledge_layers.ensure_schema(conn)
+            knowledge_topics.ensure_schema(conn)
             for table, column, default in [('items','evidence_state',"'reported'"), ('terms', 'contexts_json', "'[]'"), ('terms','origin',"'ai'"), ('assets', 'source_json', "'{}'"), ('assets','last_attempt_at',"''")]:
                 if column not in {r[1] for r in conn.execute('PRAGMA table_info(' + table + ')')}:
                     conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}')
@@ -166,7 +171,9 @@ class KnowledgeDB:
         with self.conn() as conn:
             conn.execute("UPDATE runs SET status='failed',error=? WHERE key=?", (error[:160], key))
 
-    def finish(self, key: str, scope: str, result: dict, tokens: int, *, extraction: bool, glossary: bool):
+    def finish(self, key: str, scope: str, result: dict, tokens: int, *, extraction: bool, glossary: bool,
+               track_topics: bool = False, records: list[dict] | None = None,
+               allowed_threads: list[dict] | None = None):
         now = datetime.now(LOCAL_TZ).isoformat()
         with self.conn() as conn:
             conn.execute("UPDATE runs SET status='completed',tokens=?,result_json=? WHERE key=?",
@@ -178,6 +185,10 @@ class KnowledgeDB:
                     conn.execute('INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                                  (ikey, scope, now, item['title'], item['summary'], item['kind'], item['topic'], item['value'],
                                   json.dumps(item['evidence_ids']), json.dumps(item.get('file_ids', [])),item.get('evidence_state','reported')))
+                    knowledge_layers.save_details(conn, ikey, item)
+                if track_topics:
+                    knowledge_topics.record_updates(conn, scope, result.get('items', []), records or [],
+                        allowed_threads=allowed_threads or [], now=now, run_key=key)
             if glossary:
                 for term in result.get('terms', []):
                     if conn.execute("SELECT 1 FROM terms WHERE scope=? AND term=? AND origin='user' AND status='active'",
@@ -189,11 +200,13 @@ class KnowledgeDB:
                     contexts = sorted(set(term.get('supporting_contexts', [])) | set(json.loads(old[1]) if old else []))
                     conflict = conn.execute('SELECT 1 FROM terms WHERE scope=? AND term=? AND meaning!=?',
                                             (scope, term['term'], term['meaning'])).fetchone()
-                    status = 'candidate' if conflict or not independent_definitions(contexts) else 'active'
+                    status = ('candidate' if conflict or term.get('inference_kind') in ('inferred', 'ambiguous')
+                              or not independent_definitions(contexts) else 'active')
                     if conflict:
                         conn.execute("UPDATE terms SET status='candidate' WHERE scope=? AND term=?", (scope, term['term']))
                     conn.execute('INSERT OR REPLACE INTO terms VALUES (?,?,?,?,?,?,?,?)',
                                  (tkey, scope, term['term'], term['meaning'], json.dumps(evidence), status, json.dumps(contexts), 'ai'))
+                    save_annotation(conn, tkey, term)
 
     def items(self, scope: str | None = None, keyword: str = '', limit: int = 200) -> list[dict]:
         with self.conn() as conn:
@@ -205,13 +218,21 @@ class KnowledgeDB:
             if keyword:
                 query += " AND (instr(lower(title),lower(?))>0 OR instr(lower(body),lower(?))>0)"
                 args.extend([keyword, keyword])
-            return [dict(r) for r in conn.execute(query + ' ORDER BY created_at DESC LIMIT ?', [*args, limit])]
+            return [knowledge_layers.decorate_item(conn, dict(r)) for r in conn.execute(query + ' ORDER BY created_at DESC LIMIT ?', [*args, limit])]
 
     def terms(self, scope: str, keyword: str = '', limit: int = 60) -> list[dict]:
         with self.conn() as conn:
-            return [effective_term(dict(r)) for r in conn.execute(
+            return [effective_term(decorate_term(conn, dict(r))) for r in conn.execute(
                 'SELECT * FROM terms WHERE scope=? AND (instr(lower(term),lower(?))>0 OR instr(lower(meaning),lower(?))>0) ORDER BY term LIMIT ?',
                 (scope, keyword, keyword, limit))]
+
+    def thread_candidates(self, scope: str, limit: int = 12) -> list[dict]:
+        with self.conn() as conn:
+            return knowledge_topics.thread_candidates(conn, scope, limit=limit)
+
+    def threads(self, scope: str | None = None, limit: int = 200) -> list[dict]:
+        with self.conn() as conn:
+            return knowledge_topics.threads(conn, scope, limit=limit)
 
     def set_term(self, scope: str, term: str, meaning: str):
         key = sha256(json.dumps([scope,term,meaning],ensure_ascii=False).encode()).hexdigest()

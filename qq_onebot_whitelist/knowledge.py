@@ -19,10 +19,12 @@ from .knowledge_config import enabled_profiles, group_scope, profile_for
 from .knowledge_store import KnowledgeDB, LOCAL_TZ, date_bounds, read_records
 from .knowledge_models import CircuitBreaker, resolve_models, resolve_review_model
 from .knowledge_grounding import definition_contexts, definition_quotes, effective_term
+from .knowledge_layers import prepare_details
+from .knowledge_term_inference import prepare_inference, decorate_term
 from .llm_summary import LLMConfig
 
 
-VERSION = 4
+VERSION = 5
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -48,6 +50,11 @@ items是数组，每项含title,summary,kind,topic,value(high或candidate),evide
 知识items和术语terms独立整理。items只收录可复用的方法、具体经验、实测对比、资源用途或待解决问题；每项content_type必须为knowledge。
 仅解释一个词、缩写、黑话或别名含义的内容应放入terms，不要为了收录术语另造知识条目。同一段讨论可以分别贡献术语解释与知识，但知识正文必须有独立于词义的实际问题、方法、经验或资源内容。
 每个item增加evidence_state：unresolved（未解决）、reported（群友说法）、verified（原消息有验证反馈）或disputed（有分歧）。
+每个item增加category：knowledge（可复用知识）、question（待解决问题）、resource（资源线索）、transient（服务状态等时效信息）。known写本段确知什么，missing写缺少什么；不能编造环境、版本或操作结果。
+资源可增加resource对象{name,url,purpose,feedback}，url只取证据原消息中的链接；未打开链接只能作为未验证资源线索。
+如果capabilities.track_topics为true，根据threads识别旧话题的新进展。不同软件、版本、发言者或场景不能只因同词就合并；不确定时新建话题。
+更新旧话题填写thread_id（只取threads提供的id）和link_reason（说明相同问题的依据），status取open/in_progress/resolved/disputed。新话题不填thread_id。
+只有原消息出现实际解决反馈且evidence_state=verified，才能提出resolved；同时给resolution_evidence数组，每项含message_id与原句quote，必须来自当前批次。建议、到货、准备试不能算解决反馈。
 kind可用教程、排错、经验、资源、对比、公告、未解决。summary写明结论/步骤、适用条件与验证情况。
 未解决问题、有分歧或未经验证的猜测使用candidate；不得给未解决的问题补写“可能需要某工具/训练”等材料中没有的建议。
 file_ids只使用材料中实际存在且在证据消息中的文件ID；只有明确值得长期保留的文件才列入。
@@ -55,6 +62,7 @@ terms是数组，每项含term,meaning,evidence_ids。不同上下文有不同�
 术语用本群原话的规范名称，同一含义的别名合并，不把“养号”和“养号 / 号养好了”另存两条。
 meaning仅解释本段含义，不混入未经核实的技术常识、操作建议或个人经验；只提到词但没有解释时，明确含义待确认。
 每个term另给definition_evidence数组，每项为message_id和quote：仅摘录原消息中实际解释词义的完整短句，必须含术语本身；仅提及或提问不算释义证据，没有时返回空数组。
+如果capabilities.infer_context为true，可以从多个真实用例推断本群词义：inference_kind取inferred（上下文推断）或ambiguous（存在多义）；给inference_note解释依据、inference_evidence数组（message_id和原句quote，至少两条不同原文用例）、aliases（原文出现的别名）、alternatives（有多义时列出不同解释）。这些都是候选解释，不能冒充群友明确释义，不因提及多就断言含义确定。关闭此能力时不生成这些字段。
 topic只写简短领域/话题名称，不复制整段任务说明。summary优先技术话题和可行动结果，其他闲聊压缩概述，保留群友说法和未解决状态。
 没有对应内容时使用空数组；没有解决的问题可说明未解决，不能杜撰答案。
 仅输出当前任务要求的summary/items/terms；重叠上下文只辅助理解，避免重复收录已知知识。
@@ -84,7 +92,8 @@ def model_request(messages: list[dict], cfg: LLMConfig, *, max_tokens: int = MAX
     return value, int(usage) if isinstance(usage, int) and usage >= 0 else None
 
 
-def validate_result(value: dict, records: list[dict]) -> dict:
+def validate_result(value: dict, records: list[dict], *, allow_term_inference: bool = False,
+                    track_topics: bool = False) -> dict:
     if not isinstance(value, dict):
         raise ValueError('AI 输出必须是 JSON 对象')
     ids = {r['id'] for r in records} | {r['quoted_id'] for r in records if r.get('quoted_id')}
@@ -125,6 +134,13 @@ def validate_result(value: dict, records: list[dict]) -> dict:
                     {**quote, 'quote': redact_secrets(quote['quote'])}
                     for quote in definition_quotes(cleaned['term'], row.get('definition_evidence', []),
                                                    cleaned['evidence_ids'], records)]
+                inference_fields = {key: row.get(key) for key in (
+                    'inference_kind', 'inference_note', 'inference_evidence', 'aliases', 'alternatives')}
+                cleaned = prepare_inference({**cleaned, **inference_fields}, records, enabled=allow_term_inference)
+                if cleaned['inference_kind'] in ('inferred', 'ambiguous'):
+                    cleaned['supporting_contexts'] = []
+                elif cleaned['definition_evidence']:
+                    cleaned['inference_kind'] = 'explicit'
             if field == 'items':
                 for k in ('kind', 'topic'):
                     cleaned[k] = redact_secrets(str(row.get(k) or '其他'))[:120]
@@ -144,6 +160,35 @@ def validate_result(value: dict, records: list[dict]) -> dict:
                     and file_evidence[f].intersection(evidence) for f in fids):
                     raise ValueError('AI 文件关联缺少真实消息证据')
                 cleaned['file_ids'] = sorted(set(fids))
+                cleaned.update(prepare_details({**row, **cleaned}, records))
+                if track_topics:
+                    if row.get('thread_id'):
+                        if not isinstance(row['thread_id'], str) or len(row['thread_id']) > 256:
+                            raise ValueError('AI 话题编号无效')
+                        cleaned['thread_id'] = row['thread_id']
+                    if 'status' in row:
+                        if row['status'] not in ('open', 'in_progress', 'resolved', 'disputed'):
+                            raise ValueError('AI 话题状态无效')
+                        cleaned['status'] = row['status']
+                    cleaned['link_reason'] = redact_secrets(str(row.get('link_reason') or ''))[:1200]
+                    quotes = row.get('resolution_evidence', [])
+                    cleaned['resolution_evidence'] = [
+                        {'message_id': quote['message_id'], 'quote': redact_secrets(quote['quote'])[:2000]}
+                        for quote in quotes[:20] if isinstance(quote, dict)
+                        and type(quote.get('message_id')) is int and quote['message_id'] in cleaned['evidence_ids']
+                        and isinstance(quote.get('quote'), str) and quote['quote'].strip()
+                        and any(record['id'] == quote['message_id'] and not record.get('context_only')
+                                and quote['quote'] in record.get('text', '') for record in records)
+                    ] if isinstance(quotes, list) else []
+                    if cleaned.get('status') == 'resolved' and (
+                            cleaned['evidence_state'] != 'verified' or not cleaned['resolution_evidence']):
+                        cleaned['requested_status'] = 'resolved'
+                        cleaned['status'] = ('open' if cleaned['evidence_state'] == 'unresolved' else
+                                             'disputed' if cleaned['evidence_state'] == 'disputed' else 'in_progress')
+                        cleaned['value'] = 'candidate'
+                        cleaned['category'] = 'question'
+                        if cleaned['evidence_state'] == 'verified':
+                            cleaned['evidence_state'] = 'reported'
             result[field].append(cleaned)
     return result
 
@@ -273,6 +318,36 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     if not current_records:
         raise ValueError('没有当前批次消息')
     db = KnowledgeDB(config.data_dir / 'knowledge.db')
+    capabilities = {'track_topics': wanted['extraction'] and profile.option_enabled('extraction', 'track_topics'),
+                    'infer_context': wanted['glossary'] and profile.option_enabled('glossary', 'infer_context')}
+    threads = db.thread_candidates(scope) if capabilities['track_topics'] else []
+    for thread in threads:
+        thread['title'] = thread['title'][:200]
+        thread['known'] = thread['known'][:700]
+        thread['missing'] = thread['missing'][:400]
+    while len(json.dumps(threads, ensure_ascii=False).encode()) > 8000:
+        threads.pop()
+    if threads:
+        # Put bounded historical evidence into the same speaker-label space as
+        # the current batch. Labels must never imply a permanent member ID.
+        seen = {row['id'] for row in records}
+        context_count = sum(bool(row.get('context_only')) for row in records)
+        earlier = []
+        for thread in threads:
+            for mid in thread.get('evidence_ids', [])[:1]:
+                if mid in seen or context_count >= 40:
+                    continue
+                found = read_records(config.data_dir / 'bot.db', scope, after_id=mid-1, before_id=mid, limit=1)
+                if found:
+                    earlier.append({**found[0], 'context_only': True})
+                    context_count += 1
+                    seen.add(mid)
+        records = earlier + records
+        while len(records) > 1 and len(json.dumps(_material(records), ensure_ascii=False).encode()) > 26000:
+            records.pop(0 if records[0].get('context_only') else -1)
+        current_records = [row for row in records if not row.get('context_only')]
+        if not current_records:
+            raise ValueError('没有当前批次消息')
     known = ([{'title': r['title'], 'summary': r['body'][:350], 'value':r['value'],
               'evidence_state':r['evidence_state']} for r in db.items(scope, limit=8)]
              if wanted['extraction'] or wanted['files'] else [])
@@ -282,7 +357,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                 topics=[TOPICS.get(t, t) for t in profile.settings.get('topics', [])],
                 description=str(profile.settings.get('description') or '')[:2000],
                 requested=[k for k, enabled in wanted.items() if enabled], known=known, glossary=terms,
-                messages=_material(records))
+                capabilities=capabilities, threads=threads, messages=_material(records))
     messages = [{'role': 'system', 'content': SYSTEM},
                 {'role': 'user', 'content': redact_secrets(json.dumps(task, ensure_ascii=False))}]
     policy = _model_policy(profile)
@@ -291,7 +366,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     preview_settings = profile.settings.get('files') or {}
     preview_policy = {**preview_settings, 'preview_enabled': profile.option_enabled('files', 'preview_enabled')}
     identity = [VERSION, profile.settings.get('analysis_revision', 1), scope, kind, wanted,
-                task['mode'], task['topics'], task['description'], task['messages'], preview_policy]
+                task['mode'], task['topics'], task['description'], task['messages'], preview_policy, capabilities]
     primary_policy = {k: v for k, v in policy.items() if k not in ('review_provider', 'review_model')}
     primary_inputs = [_analysis_key([identity, 'primary', primary_policy, _model_identity(cfg)]) for cfg in configs]
     review_input = _analysis_key([identity, 'review', policy, [_model_identity(c) for c in configs], _model_identity(review_cfg)])
@@ -304,6 +379,9 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
         if (not current.allows(feature) or (kind == 'history' and not current.allows('history'))
                 or any(enabled and not current.allows(k) for k, enabled in wanted.items())
                 or _model_policy(current) != policy
+                or capabilities != {
+                    'track_topics': wanted['extraction'] and current.option_enabled('extraction', 'track_topics'),
+                    'infer_context': wanted['glossary'] and current.option_enabled('glossary', 'infer_context')}
                 or (preview_policy.get('preview_enabled') and not current.option_enabled('files', 'preview_enabled'))):
             return None
         return current
@@ -385,7 +463,8 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                 key = candidate_key
                 try:
                     value, usage = (request or model_request)(messages, cfg)
-                    result = validate_result(value, records)
+                    result = validate_result(value, records, allow_term_inference=capabilities['infer_context'],
+                                             track_topics=capabilities['track_topics'])
                     if breaker:
                         breaker.success(cfg)
                     primary_tokens = usage if usage is not None else reserved
@@ -438,7 +517,8 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                 review_key = candidate_key
                 try:
                     reviewed, review_usage = (request or model_request)(review_messages, review_cfg)
-                    result = validate_result(reviewed, records)
+                    result = validate_result(reviewed, records, allow_term_inference=capabilities['infer_context'],
+                                             track_topics=capabilities['track_topics'])
                     if breaker:
                         breaker.success(review_cfg)
                 except Exception:
@@ -472,7 +552,9 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
         if policy['review_enabled']:
             result.update(primary_model=primary_model, review_model=cfg.model, reviewed=True)
         db.finish(key, scope, result, usage_tokens, extraction=wanted['extraction'] and fresh.allows('extraction'),
-                  glossary=wanted['glossary'] and fresh.allows('glossary'))
+                  glossary=wanted['glossary'] and fresh.allows('glossary'),
+                  track_topics=capabilities['track_topics'], records=records,
+                  allowed_threads=task.get('threads', []) if capabilities['track_topics'] else [])
         if wanted['files'] and fresh.allows('files'):
             retain_selected_files(config_path, db, records, result)
         write_view(config.data_dir)
@@ -558,11 +640,11 @@ def write_view(data_dir: Path) -> Path:
     with db.conn() as conn:
         runs = [dict(r) for r in conn.execute("SELECT * FROM runs WHERE status='completed' AND kind NOT LIKE 'model:%' AND kind NOT IN ('optimize','compare') ORDER BY created_at DESC LIMIT 100")]
         assets = [dict(r) for r in conn.execute('SELECT * FROM assets ORDER BY scope,name LIMIT 500')]
-        glossary = [effective_term(dict(r)) for r in conn.execute('SELECT * FROM terms ORDER BY scope,term LIMIT 300')]
+        glossary = [effective_term(decorate_term(conn, dict(r))) for r in conn.execute('SELECT * FROM terms ORDER BY scope,term LIMIT 300')]
     for asset in assets:
         if asset['status'] == 'saved' and not db.asset_saved(asset['scope'], asset['file_id']):
             asset['status'] = '文件缺失或校验失败'
-    pages = render_views(data_dir, items=db.items(limit=500), runs=runs, assets=assets, glossary=glossary)
+    pages = render_views(data_dir, items=db.items(limit=500), runs=runs, assets=assets, glossary=glossary, threads=db.threads())
     directory = data_dir / 'view'
     directory.mkdir(parents=True, exist_ok=True)
     for filename, page in pages.items():

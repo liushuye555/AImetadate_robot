@@ -61,6 +61,12 @@ QJsonObject disabledKnowledgeGroup(QJsonObject group) {
         }
         group.insert(feature, child);
     }
+    QJsonObject extraction = group.value("extraction").toObject();
+    extraction.insert("track_topics", false);
+    group.insert("extraction", extraction);
+    QJsonObject glossary = group.value("glossary").toObject();
+    glossary.insert("infer_context", false);
+    group.insert("glossary", glossary);
     QJsonObject models = group.value("models").toObject();
     models.insert("tiered_enabled", false);
     models.insert("review_enabled", false);
@@ -525,6 +531,16 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
         form->addRow(box);
         featureBoxes.insert(feature.first, box);
     }
+    const QJsonObject extraction = original.value("extraction").toObject();
+    auto *trackTopics = new QCheckBox(QStringLiteral("追踪话题与后续反馈"), content);
+    trackTopics->setObjectName("knowledgeTrackTopics");
+    trackTopics->setChecked(explicitEnabled(extraction, "track_topics"));
+    form->addRow(trackTopics);
+    const QJsonObject glossary = original.value("glossary").toObject();
+    auto *inferContext = new QCheckBox(QStringLiteral("从上下文推断术语"), content);
+    inferContext->setObjectName("knowledgeInferContext");
+    inferContext->setChecked(explicitEnabled(glossary, "infer_context"));
+    form->addRow(inferContext);
     const QJsonObject summary = original.value("summary").toObject();
     auto *daily = new QCheckBox(QStringLiteral("每日计划"), content);
     daily->setObjectName("knowledgeDaily");
@@ -591,7 +607,7 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     form->addRow(feedbackEnabled);
     form->addRow(feedback);
     form->addRow(preview);
-    auto *hint = new QLabel(QStringLiteral("全局、此群及具体子功能需分别开启。默认参数只提供主题、模式和容量；开关及计划不会继承默认值。历史回放还需开启至少一项处理功能。反馈优化需同时启用反馈收集和知识提取；正文预览需启用文件保留。依赖项不会自动开启。"), content);
+    auto *hint = new QLabel(QStringLiteral("全局、此群及具体子功能需分别开启。默认参数只提供主题、模式和容量；开关及计划不会继承默认值。历史回放还需开启至少一项处理功能。反馈优化需同时启用反馈收集和知识提取；正文预览需启用文件保留；话题追踪需分别启用知识提取，术语推断需分别启用术语学习。依赖项不会自动开启。"), content);
     hint->setWordWrap(true);
     form->addRow(hint);
     auto *validation = new QLabel(&dialog);
@@ -628,6 +644,12 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
         child.insert("enabled", it.value()->isChecked());
         group.insert(it.key(), child);
     }
+    QJsonObject newExtraction = group.value("extraction").toObject();
+    newExtraction.insert("track_topics", trackTopics->isChecked());
+    group.insert("extraction", newExtraction);
+    QJsonObject newGlossary = group.value("glossary").toObject();
+    newGlossary.insert("infer_context", inferContext->isChecked());
+    group.insert("glossary", newGlossary);
     QJsonObject newSummary = group.value("summary").toObject();
     newSummary.insert("daily", daily->isChecked());
     newSummary.insert("weekly", weekly->isChecked());
