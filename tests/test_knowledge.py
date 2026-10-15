@@ -143,9 +143,14 @@ def test_disabling_during_model_call_prevents_persistence(tmp_path):
 
 def test_glossary_multiple_evidence_and_conflicts_stay_group_local(tmp_path):
     path, store = configured(tmp_path)
-    record(store, '跑图时节点出错', mid=1)
-    record(store, '跑图调整节点后恢复', mid=2)
-    analyze(path, '123', kind='batch', request=request, model=MODEL)
+    record(store, '跑图就是生成图像', mid=1)
+    record(store, '跑图在这里指生成图像', time='2026-10-12T13:00:00+08:00', mid=2)
+    def definitions(messages, model):
+        rows = json.loads(messages[1]['content'])['messages']
+        value = response([r['id'] for r in rows])
+        value['terms'][0]['definition_evidence'] = [{'message_id': r['id'], 'quote': r['text']} for r in rows]
+        return value, 80
+    analyze(path, '123', kind='batch', request=definitions, model=MODEL)
     db = KnowledgeDB(store.path.parent / 'knowledge.db')
     assert db.terms('group:123')[0]['status'] == 'active'
     assert not db.terms('group:999')

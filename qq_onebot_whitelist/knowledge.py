@@ -19,10 +19,12 @@ from .content_utils import redact_secrets
 from .knowledge_config import enabled_profiles, group_scope, profile_for
 from .knowledge_store import KnowledgeDB, LOCAL_TZ, date_bounds, read_records
 from .knowledge_models import CircuitBreaker, resolve_models, resolve_review_model
+from .knowledge_grounding import definition_contexts, definition_quotes, effective_term
+from .knowledge_evidence import render_evidence
 from .llm_summary import LLMConfig
 
 
-VERSION = 2
+VERSION = 3
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -38,6 +40,10 @@ speaker和quoted_speaker为本批匿名成员标签。分开记录不同成员�
 只出现术语、夸赞、空泛猜测或处理进度不能作为高价值结论；缺少回答的问题留为未解决。
 依据匹配模式：specialist 聚焦给定主题；generic 自行识别领域；hybrid 兼顾专群主题和跨主题可复用信息。
 黑话须结合本群上下文解释，不因术语或夸赞就判断高价值。普通闲聊不用入库。
+先判断说话者的实际指向：例如调整自己看到的推荐内容，不能解释成提升自己发布内容的曝光权重。
+词义与个人经历分开；单人的体验不能概括为平台、模型或硬件的普遍规律。
+只有“到了、准备试、应该可行”不算使用反馈；没有操作结果的讨论不能写成成功经验。
+不能补充原文没有的接口规格、工具需求、训练方案、算法机制或因果关系；“若成立、可能需要”也不能绕过证据要求。
 区分群友说法、验证反馈和争议。缺少证据的细节不要编造；不可输出密钥、密码、token。
 严格返回JSON对象。summary是数组，每项含text和evidence_ids；只使用材料中出现的整数消息编号。
 items是数组，每项含title,summary,kind,topic,value(high或candidate),evidence_ids,file_ids。
@@ -46,6 +52,10 @@ kind可用教程、排错、经验、资源、对比、公告、未解决。summ
 未解决问题、有分歧或未经验证的猜测使用candidate；不得给未解决的问题补写“可能需要某工具/训练”等材料中没有的建议。
 file_ids只使用材料中实际存在且在证据消息中的文件ID；只有明确值得长期保留的文件才列入。
 terms是数组，每项含term,meaning,evidence_ids。不同上下文有不同含义时保留歧义，不全局硬套。
+术语用本群原话的规范名称，同一含义的别名合并，不把“养号”和“养号 / 号养好了”另存两条。
+meaning仅解释本段含义，不混入未经核实的技术常识、操作建议或个人经验；只提到词但没有解释时，明确含义待确认。
+每个term另给definition_evidence数组，每项为message_id和quote：仅摘录原消息中实际解释词义的完整短句，必须含术语本身；仅提及或提问不算释义证据，没有时返回空数组。
+topic只写简短领域/话题名称，不复制整段任务说明。summary优先技术话题和可行动结果，其他闲聊压缩概述，保留群友说法和未解决状态。
 没有对应内容时使用空数组；没有解决的问题可说明未解决，不能杜撰答案。
 仅输出当前任务要求的summary/items/terms；重叠上下文只辅助理解，避免重复收录已知知识。
 requested中的extraction对应items，glossary对应terms；files开启时可输出items以判断文件用途。
@@ -80,8 +90,6 @@ def validate_result(value: dict, records: list[dict]) -> dict:
     ids = {r['id'] for r in records} | {r['quoted_id'] for r in records if r.get('quoted_id')}
     current_ids = {r['id'] for r in records if not r.get('context_only')}
     file_evidence: dict[str, set[int]] = {}
-    text_by_id = {r['id']: r['text'] for r in records}
-    text_by_id.update({r['quoted_id']: r['quoted_text'] for r in records if r.get('quoted_id')})
     for record in records:
         for f in record['files']:
             if f.get('file_id'):
@@ -105,8 +113,12 @@ def validate_result(value: dict, records: list[dict]) -> dict:
             cleaned = {k: redact_secrets(row[k].strip())[:5000] for k in needed}
             cleaned['evidence_ids'] = sorted(set(evidence))
             if field == 'terms':
-                cleaned['supporting_contexts'] = sorted({sha256(text_by_id[i].encode()).hexdigest()
-                    for i in evidence if cleaned['term'].casefold() in text_by_id.get(i, '').casefold()})
+                cleaned['supporting_contexts'] = definition_contexts(
+                    cleaned['term'], row.get('definition_evidence', []), cleaned['evidence_ids'], records)
+                cleaned['definition_evidence'] = [
+                    {**quote, 'quote': redact_secrets(quote['quote'])}
+                    for quote in definition_quotes(cleaned['term'], row.get('definition_evidence', []),
+                                                   cleaned['evidence_ids'], records)]
             if field == 'items':
                 for k in ('kind', 'topic'):
                     cleaned[k] = redact_secrets(str(row.get(k) or '其他'))[:120]
@@ -538,22 +550,9 @@ def write_view(data_dir: Path) -> Path:
     with db.conn() as conn:
         runs = [dict(r) for r in conn.execute("SELECT * FROM runs WHERE status='completed' AND kind NOT LIKE 'model:%' AND kind NOT IN ('optimize','compare') ORDER BY created_at DESC LIMIT 100")]
         assets = [dict(r) for r in conn.execute('SELECT * FROM assets ORDER BY scope,name LIMIT 500')]
-        glossary = [dict(r) for r in conn.execute('SELECT * FROM terms ORDER BY scope,term LIMIT 300')]
+        glossary = [effective_term(dict(r)) for r in conn.execute('SELECT * FROM terms ORDER BY scope,term LIMIT 300')]
     def evidence_html(scope, ids):
-        details = []
-        aliases = {}
-        for mid in ids[:6]:
-            rows = read_records(data_dir / 'bot.db', scope, after_id=mid-1, before_id=mid, limit=1)
-            if not rows:
-                details.append(f'<p>#{mid} · 原记录不可用</p>')
-                continue
-            r = rows[0]
-            speaker = _speaker_label(aliases, r.get('actor_key'))
-            details.append(f'<p>#{mid} · {escape(r["time"] or "时间未知")} · {speaker}</p><pre>{escape(redact_secrets(r["text"])[:1500])}</pre>')
-            if r['quoted_text']:
-                quoted_speaker = _speaker_label(aliases, r.get('quoted_actor_key'))
-                details.append(f'<p>引用 #{r["quoted_id"]} · {quoted_speaker}：</p><pre>' + escape(redact_secrets(r['quoted_text'])[:800]) + '</pre>')
-        return '<details><summary>展开原消息证据</summary>' + ''.join(details) + '</details>'
+        return render_evidence(data_dir, scope, ids)
     cards = []
     for item in db.items(limit=500):
         evidence = ', '.join('#' + str(v) for v in json.loads(item['evidence_json']))

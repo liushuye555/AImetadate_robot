@@ -10,6 +10,7 @@ import sqlite3
 
 from .resources import extract_file_segments
 from .store import reply_to_message_id
+from .knowledge_grounding import effective_term, independent_definitions
 
 
 LOCAL_TZ = timezone(timedelta(hours=8))
@@ -188,7 +189,7 @@ class KnowledgeDB:
                     contexts = sorted(set(term.get('supporting_contexts', [])) | set(json.loads(old[1]) if old else []))
                     conflict = conn.execute('SELECT 1 FROM terms WHERE scope=? AND term=? AND meaning!=?',
                                             (scope, term['term'], term['meaning'])).fetchone()
-                    status = 'candidate' if conflict or len(contexts) < 2 else 'active'
+                    status = 'candidate' if conflict or not independent_definitions(contexts) else 'active'
                     if conflict:
                         conn.execute("UPDATE terms SET status='candidate' WHERE scope=? AND term=?", (scope, term['term']))
                     conn.execute('INSERT OR REPLACE INTO terms VALUES (?,?,?,?,?,?,?,?)',
@@ -208,7 +209,7 @@ class KnowledgeDB:
 
     def terms(self, scope: str) -> list[dict]:
         with self.conn() as conn:
-            return [dict(r) for r in conn.execute('SELECT * FROM terms WHERE scope=? ORDER BY term LIMIT 60', (scope,))]
+            return [effective_term(dict(r)) for r in conn.execute('SELECT * FROM terms WHERE scope=? ORDER BY term LIMIT 60', (scope,))]
 
     def set_term(self, scope: str, term: str, meaning: str):
         key = sha256(json.dumps([scope,term,meaning],ensure_ascii=False).encode()).hexdigest()
