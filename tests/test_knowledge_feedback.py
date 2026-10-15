@@ -124,6 +124,7 @@ def test_report_feedback_controls_escape_and_internal_runs_are_hidden(tmp_path):
     db.finish('internal','group:123',{'summary':[{'text':'must-not-show','evidence_ids':[1]}]},10,extraction=False,glossary=False)
     html=write_view(data).read_text(encoding='utf-8')
     assert 'must-not-show' not in html
+    assert 'must-not-show' not in (data/'view'/'knowledge-summary.html').read_text(encoding='utf-8')
     assert 'missed-submit' in html and '/api/knowledge/feedback' in html
     assert '" onclick=' not in feedback_controls('group:123','" onclick="bad')
 

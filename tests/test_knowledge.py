@@ -320,7 +320,8 @@ def test_missing_asset_does_not_display_saved(tmp_path):
     db = KnowledgeDB(store.path.parent / 'knowledge.db')
     db.asset({'scope': 'group:123', 'file_id': 'fid', 'message_id': 1, 'file_name': 'gone.pdf'},
              {'status': 'saved', 'path': str(tmp_path / 'does-not-exist'), 'sha256': 'hash', 'size': 9})
-    page = write_view(store.path.parent).read_text(encoding='utf-8')
+    write_view(store.path.parent)
+    page = (store.path.parent / 'view' / 'knowledge-files.html').read_text(encoding='utf-8')
     assert '文件缺失或校验失败' in page
     assert ' · saved · ' not in page
 

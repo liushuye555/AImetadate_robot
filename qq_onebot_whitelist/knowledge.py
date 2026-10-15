@@ -5,7 +5,6 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta
 from hashlib import sha256
-from html import escape
 import json
 import math
 from pathlib import Path
@@ -20,11 +19,10 @@ from .knowledge_config import enabled_profiles, group_scope, profile_for
 from .knowledge_store import KnowledgeDB, LOCAL_TZ, date_bounds, read_records
 from .knowledge_models import CircuitBreaker, resolve_models, resolve_review_model
 from .knowledge_grounding import definition_contexts, definition_quotes, effective_term
-from .knowledge_evidence import render_evidence
 from .llm_summary import LLMConfig
 
 
-VERSION = 3
+VERSION = 4
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -47,6 +45,8 @@ speaker和quoted_speaker为本批匿名成员标签。分开记录不同成员�
 区分群友说法、验证反馈和争议。缺少证据的细节不要编造；不可输出密钥、密码、token。
 严格返回JSON对象。summary是数组，每项含text和evidence_ids；只使用材料中出现的整数消息编号。
 items是数组，每项含title,summary,kind,topic,value(high或candidate),evidence_ids,file_ids。
+知识items和术语terms独立整理。items只收录可复用的方法、具体经验、实测对比、资源用途或待解决问题；每项content_type必须为knowledge。
+仅解释一个词、缩写、黑话或别名含义的内容应放入terms，不要为了收录术语另造知识条目。同一段讨论可以分别贡献术语解释与知识，但知识正文必须有独立于词义的实际问题、方法、经验或资源内容。
 每个item增加evidence_state：unresolved（未解决）、reported（群友说法）、verified（原消息有验证反馈）或disputed（有分歧）。
 kind可用教程、排错、经验、资源、对比、公告、未解决。summary写明结论/步骤、适用条件与验证情况。
 未解决问题、有分歧或未经验证的猜测使用candidate；不得给未解决的问题补写“可能需要某工具/训练”等材料中没有的建议。
@@ -107,6 +107,12 @@ def validate_result(value: dict, records: list[dict]) -> dict:
                 raise ValueError('AI 引用了不存在或不属于本次材料的消息')
             if not current_ids.intersection(evidence):
                 raise ValueError('AI 仅引用了旧上下文，缺少本批消息证据')
+            if field == 'items':
+                content_type = row.get('content_type', 'knowledge')
+                if content_type in ('term', 'glossary', 'definition'):
+                    continue
+                if content_type != 'knowledge':
+                    raise ValueError('AI 知识内容类型必须为 knowledge')
             needed = {'summary': ('text',), 'items': ('title', 'summary'), 'terms': ('term', 'meaning')}[field]
             if any(not isinstance(row.get(k), str) or not row[k].strip() for k in needed):
                 raise ValueError('AI 条目缺少正文')
@@ -267,9 +273,11 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     if not current_records:
         raise ValueError('没有当前批次消息')
     db = KnowledgeDB(config.data_dir / 'knowledge.db')
-    known = [{'title': r['title'], 'summary': r['body'][:350], 'value':r['value'],
+    known = ([{'title': r['title'], 'summary': r['body'][:350], 'value':r['value'],
               'evidence_state':r['evidence_state']} for r in db.items(scope, limit=8)]
-    terms = [{'term': r['term'], 'meaning': r['meaning']} for r in db.terms(scope) if r['status'] == 'active']
+             if wanted['extraction'] or wanted['files'] else [])
+    terms = ([{'term': r['term'], 'meaning': r['meaning']} for r in db.terms(scope) if r['status'] == 'active']
+             if wanted['glossary'] else [])
     task = dict(mode=profile.settings.get('match_mode', 'hybrid'),
                 topics=[TOPICS.get(t, t) for t in profile.settings.get('topics', [])],
                 description=str(profile.settings.get('description') or '')[:2000],
@@ -545,60 +553,27 @@ def retain_file(config_path: Path | str, scope: str, message_id: int, file_id: s
 
 
 def write_view(data_dir: Path) -> Path:
-    from .knowledge_feedback import feedback_controls, feedback_script, feedback_token
+    from .knowledge_view import render_views
     db = KnowledgeDB(data_dir / 'knowledge.db')
     with db.conn() as conn:
         runs = [dict(r) for r in conn.execute("SELECT * FROM runs WHERE status='completed' AND kind NOT LIKE 'model:%' AND kind NOT IN ('optimize','compare') ORDER BY created_at DESC LIMIT 100")]
         assets = [dict(r) for r in conn.execute('SELECT * FROM assets ORDER BY scope,name LIMIT 500')]
         glossary = [effective_term(dict(r)) for r in conn.execute('SELECT * FROM terms ORDER BY scope,term LIMIT 300')]
-    def evidence_html(scope, ids):
-        return render_evidence(data_dir, scope, ids)
-    cards = []
-    for item in db.items(limit=500):
-        evidence = ', '.join('#' + str(v) for v in json.loads(item['evidence_json']))
-        value = '精选' if item['value']=='high' else '待确认'
-        state = {'unresolved':'未解决','reported':'群友说法','verified':'原消息有验证反馈','disputed':'存在分歧'}.get(item['evidence_state'],'群友说法')
-        value_key = 'high' if item['value'] == 'high' else 'candidate'
-        cards.append(f'<article data-group="{escape(item["scope"], quote=True)}" data-value="{value_key}"><h3>{escape(item["title"])}</h3>'
-                     f'<p>{escape(item["scope"])} · {escape(item["topic"])} · {value} · {state} · {evidence}</p>'
-                     f'<pre>{escape(item["body"])}</pre>' + evidence_html(item['scope'], json.loads(item['evidence_json'])) + feedback_controls(item['scope'],item['key']) + '</article>')
-    for run in runs:
-        result = json.loads(run['result_json'])
-        if result.get('summary'):
-            text = '\n'.join(s['text'] + ' [' + ','.join('#' + str(i) for i in s['evidence_ids']) + ']' for s in result['summary'])
-            cards.append(f'<article data-group="{escape(run["scope"], quote=True)}"><h3>群总结 · {escape(run["scope"])}</h3>'
-                         f'<p>{escape(run["created_at"])} · {escape(run["kind"])} · 覆盖 {result["input_count"]} 条消息</p><pre>{escape(text)}</pre>'
-                         + evidence_html(run['scope'], sorted({i for s in result['summary'] for i in s['evidence_ids']})) + '</article>')
     for asset in assets:
         if asset['status'] == 'saved' and not db.asset_saved(asset['scope'], asset['file_id']):
             asset['status'] = '文件缺失或校验失败'
-        cards.append(f'<article data-group="{escape(asset["scope"], quote=True)}"><h3>文件 · {escape(asset["name"] or "")}</h3>'
-                     f'<p>{escape(asset["scope"])} · {escape(asset["status"])} · 原消息 #{asset["message_id"]}</p>'
-                     f'<pre>{escape(asset["path"] or asset["error"] or "未保存本体")}</pre></article>')
-    for term in glossary:
-        status = '人工解释' if term['origin'] == 'user' else ('已用于本群分析' if term['status'] == 'active' else '候选解释')
-        cards.append(f'<article data-group="{escape(term["scope"], quote=True)}"><h3>术语 · {escape(term["term"])}</h3>'
-                     f'<p>{escape(term["scope"])} · {status}</p><pre>{escape(term["meaning"])}</pre>'
-                     + evidence_html(term['scope'], json.loads(term['evidence_json'])) + '</article>')
-    scopes = sorted({r['scope'] for r in db.items(limit=500)} | {r['scope'] for r in runs} | {r['scope'] for r in assets} | {r['scope'] for r in glossary})
-    options = ''.join(f'<option>{escape(s)}</option>' for s in scopes)
-    page = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>群知识与总结</title>
-<style>body{font:16px system-ui;background:#f5f6f8;max-width:1000px;margin:30px auto;padding:0 20px}article{background:white;padding:20px;margin:16px 0;border-radius:12px}pre{white-space:pre-wrap;font:inherit;overflow-wrap:anywhere}input,select{padding:10px}p{color:#586174}</style>
-<h1>群知识与总结</h1><p>文字讨论可独立收录，不要求图片或附件。基于已记录消息；来源编号为本地数据库消息编号。仅本地展示，不自动发送。</p>
-<select id="group" aria-label="按群筛选"><option value="">全部群</option>''' + options + '''</select>
-<select id="value" aria-label="按讨论价值筛选"><option value="">全部内容</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select>
-<input id="search" aria-label="搜索内容" placeholder="搜索标题、内容或消息编号">
-<main>''' + (''.join(cards) or '<p>暂无结果。各群功能默认关闭，请主动配置后分析。</p>') + '''</main>
-<script>function filter(){let g=document.getElementById('group').value,v=document.getElementById('value').value,q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('article').forEach(a=>a.hidden=!!((g&&a.dataset.group!==g)||(v&&a.dataset.value!==v)||!a.textContent.toLowerCase().includes(q)))}document.getElementById('group').onchange=filter;document.getElementById('value').onchange=filter;document.getElementById('search').oninput=filter;</script>''' + feedback_script(feedback_token(data_dir)) + '</html>'
-    target = data_dir / 'view' / 'knowledge.html'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name('knowledge-' + uuid.uuid4().hex + '.tmp')
-    try:
-        tmp.write_text(page, encoding='utf-8')
-        tmp.replace(target)
-    finally:
-        tmp.unlink(missing_ok=True)
-    return target
+    pages = render_views(data_dir, items=db.items(limit=500), runs=runs, assets=assets, glossary=glossary)
+    directory = data_dir / 'view'
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename, page in pages.items():
+        target = directory / filename
+        tmp = target.with_name(target.stem + '-' + uuid.uuid4().hex + '.tmp')
+        try:
+            tmp.write_text(page, encoding='utf-8')
+            tmp.replace(target)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return directory / 'knowledge.html'
 
 
 def history(config_path: Path | str, scope: str, start: str, end: str, *, max_batches: int = 3, request=None, model=None) -> dict:
@@ -773,7 +748,7 @@ async def knowledge_loop(config_path: Path | str):
 
 def command_reply(text: str, event: dict, config_path: Path | str) -> str | None:
     command = text.strip().lstrip('/').strip()
-    m = re.match(r'^(群总结|群知识)(?:\s+(.*))?$', command)
+    m = re.match(r'^(群总结|群知识|群术语)(?:\s+(.*))?$', command)
     if not m:
         return None
     name, args = m.group(1), (m.group(2) or '').strip()
@@ -782,16 +757,23 @@ def command_reply(text: str, event: dict, config_path: Path | str) -> str | None
     else:
         gid, _, args = args.partition(' ')
         if not gid:
-            return '私聊用法：群总结 群号 今天；群知识 群号 关键词。'
+            return '私聊用法：群总结 群号 今天；群知识 群号 关键词；群术语 群号 关键词。'
         scope = group_scope(gid)
     config = load_config(config_path)
-    feature = 'summary' if name == '群总结' else 'extraction'
+    feature = {'群总结': 'summary', '群知识': 'extraction', '群术语': 'glossary'}[name]
     if not profile_for(config, scope).allows(feature):
         return '该群功能尚未开启，请主动开启全局、群及对应功能。'
     if name == '群知识':
         db = KnowledgeDB(config.data_dir / 'knowledge.db')
         rows = db.items(scope, keyword=args, limit=8)
         return '\n\n'.join(r['title'] + '\n' + r['body'][:600] + '\n来源：' + r['evidence_json'] for r in rows) or '本群暂无匹配知识。'
+    if name == '群术语':
+        db = KnowledgeDB(config.data_dir / 'knowledge.db')
+        rows = db.terms(scope, keyword=args, limit=8)
+        def term_reply(row):
+            status = '人工解释' if row['origin'] == 'user' else ('已用于本群分析' if row['status'] == 'active' else '候选解释')
+            return row['term'] + ' · ' + status + '\n' + row['meaning'][:600] + '\n来源：' + row['evidence_json']
+        return '\n\n'.join(term_reply(row) for row in rows) or '本群暂无匹配术语。'
     limit = 100
     bounds = None
     if not args or args in ('今天', '昨天'):
@@ -823,6 +805,9 @@ def main():
     subs = parser.add_subparsers(dest='action', required=True)
     subs.add_parser('status')
     subs.add_parser('view')
+    terms_parser = subs.add_parser('terms')
+    terms_parser.add_argument('--group', required=True)
+    terms_parser.add_argument('--keyword', default='')
     retry_parser = subs.add_parser('retry-files')
     retry_parser.add_argument('--group', required=True)
     retain_parser = subs.add_parser('retain-file')
@@ -837,6 +822,8 @@ def main():
     analyze_parser.add_argument('--group', required=True)
     analyze_parser.add_argument('--date')
     analyze_parser.add_argument('--limit', type=int, default=100)
+    analyze_parser.add_argument('--feature', choices=('summary', 'extraction', 'glossary', 'files'),
+                                help='只运行指定子功能；未指定时处理已开启的功能')
     history_parser = subs.add_parser('history')
     history_parser.add_argument('--group', required=True)
     history_parser.add_argument('--start', required=True)
@@ -850,6 +837,14 @@ def main():
                           groups=[{'scope': p.scope, 'features': [f for f in ('summary','extraction','glossary','files','history') if p.allows(f)]} for p in enabled_profiles(cfg)])
         elif args.action == 'view':
             result = {'path': str(write_view(cfg.data_dir).resolve())}
+        elif args.action == 'terms':
+            scope = group_scope(args.group)
+            if not profile_for(cfg, scope).allows('glossary'):
+                result = {'status': 'disabled', 'message': '术语学习尚未开启。'}
+            else:
+                rows = KnowledgeDB(cfg.data_dir / 'knowledge.db').terms(scope, keyword=args.keyword)
+                result = {'status': 'completed', 'terms': [
+                    {key: row[key] for key in ('term', 'meaning', 'status', 'origin', 'evidence_json')} for row in rows]}
         elif args.action == 'retry-files':
             result = retry_files(args.config, args.group)
         elif args.action == 'retain-file':
@@ -873,8 +868,9 @@ def main():
             if not 1 <= args.limit <= 200:
                 parser.error('limit 必须在 1—200 之间')
             p = profile_for(cfg, group_scope(args.group))
-            feature = next((f for f in ('extraction','summary','glossary','files') if p.allows(f)), 'summary')
-            result = analyze(args.config, args.group, feature=feature, kind='batch', limit=args.limit,
+            feature = args.feature or next((f for f in ('extraction','summary','glossary','files') if p.allows(f)), 'summary')
+            result = analyze(args.config, args.group, feature=feature,
+                             kind='manual:' + feature if args.feature else 'batch', limit=args.limit,
                              bounds=date_bounds(args.date) if args.date else None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except Exception as exc:

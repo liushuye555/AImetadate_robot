@@ -207,9 +207,11 @@ class KnowledgeDB:
                 args.extend([keyword, keyword])
             return [dict(r) for r in conn.execute(query + ' ORDER BY created_at DESC LIMIT ?', [*args, limit])]
 
-    def terms(self, scope: str) -> list[dict]:
+    def terms(self, scope: str, keyword: str = '', limit: int = 60) -> list[dict]:
         with self.conn() as conn:
-            return [effective_term(dict(r)) for r in conn.execute('SELECT * FROM terms WHERE scope=? ORDER BY term LIMIT 60', (scope,))]
+            return [effective_term(dict(r)) for r in conn.execute(
+                'SELECT * FROM terms WHERE scope=? AND (instr(lower(term),lower(?))>0 OR instr(lower(meaning),lower(?))>0) ORDER BY term LIMIT ?',
+                (scope, keyword, keyword, limit))]
 
     def set_term(self, scope: str, term: str, meaning: str):
         key = sha256(json.dumps([scope,term,meaning],ensure_ascii=False).encode()).hexdigest()
