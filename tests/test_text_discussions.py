@@ -58,7 +58,9 @@ def test_live_answer_to_old_text_thread_is_extracted_without_images(tmp_path):
         return {'summary': [], 'terms': [], 'items': [{
             'title': 'Krea2量化设置对比', 'summary': '成员分别报告INT8和FP8，LoRA不同；速度为群友实测反馈，不能混为同一设置。',
             'kind': '对比', 'topic': 'AI绘图', 'value': 'high', 'evidence_state': 'verified',
-            'evidence_ids': [question, prior, answer], 'file_ids': []}]}, 80
+            'evidence_ids': [question, prior, answer], 'file_ids': [],
+            'quality': {'basis': 'firsthand_result', 'conditions': ['FP8', 'LoRA为0.6'],
+                        'actions': ['实测FP8'], 'result_quote': {'message_id': answer, 'quote': '我实测FP8更快'}}}]}, 80
 
     result = automatic_tick(config, request=request, model=MODEL)[0]
     assert result['status'] == 'completed' and result['input_count'] == 1

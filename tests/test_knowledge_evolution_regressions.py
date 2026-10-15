@@ -47,6 +47,10 @@ def test_topic_metadata_survives_the_global_items_display_window(tmp_path, categ
     original = item(1, category=category, value=value,
                     resource={'name': 'Original tool', 'url': url, 'purpose': 'Debugging'})
     sources = [record(1, links=[url])]
+    if value == 'high':
+        sources[0]['text'] = 'On v1 update the node: recovered'
+        original['quality'] = {'basis': 'reproducible_method', 'conditions': ['v1'],
+            'actions': ['update the node'], 'result_quote': {'message_id': 1, 'quote': 'recovered'}}
     validated = knowledge.validate_result({'items': [original]}, sources, track_topics=True)
     db.finish('seed', SCOPE, validated, 1, extraction=True, glossary=False,
               track_topics=True, records=sources)
@@ -81,6 +85,9 @@ def test_review_retry_uses_the_candidate_snapshot_shown_in_its_cached_task(tmp_p
         assert old_id in {thread['id'] for thread in task['threads']}
         if calls == ['primary', 'review']:
             raise TimeoutError('Simulated review outage')
+        if task.get('task_type') == 'topic_decisions':
+            return {'decisions': [{'index': 0, 'action': 'existing', 'thread_id': old_id,
+                    'reason': 'Same issue with actual progress', 'status': 'in_progress'}]}, 7
         return {'items': [item(2, thread_id=old_id, link_reason='Same issue followup',
                                status='in_progress')]}, 20
 
@@ -95,7 +102,7 @@ def test_review_retry_uses_the_candidate_snapshot_shown_in_its_cached_task(tmp_p
     assert old_id not in {thread['id'] for thread in db.thread_candidates(SCOPE)}
     result = knowledge.analyze(path, SCOPE, **kwargs)
     assert result['status'] == 'completed' and result['reviewed']
-    assert calls == ['primary', 'review', 'review']
+    assert calls == ['primary', 'review', 'review', 'review']
     original = next(thread for thread in db.threads(SCOPE) if thread['id'] == old_id)
     assert len(original['events']) == 2
     assert original['status'] == 'in_progress'

@@ -51,7 +51,7 @@ body{{font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif;background:#f4f6f8;c
 </style></head><body><header><h1>{title}</h1><p>共 {count} 项。来源编号为本地消息数据库编号。</p>{_nav(filename)}</header>
 <div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}<label>搜索 <input id="search" type="search" placeholder="搜索本页内容" aria-label="搜索本页内容"></label></div>
 <p>当前显示 <span id="shown-count">{count}</span> 项</p><main>{content}</main><p id="filter-empty" hidden>没有符合筛选条件的内容。</p><footer>内容来自本地群消息记录与分析结果；引用编号仅在本机数据库中有效。</footer>
-<script>const group=document.getElementById('group'),search=document.getElementById('search');function filterRows(){{const g=group.value,q=search.value.toLocaleLowerCase(),v=document.getElementById('value')?.value||'',s=document.getElementById('term-status')?.value||'',c=document.getElementById('category')?.value||'',k=document.getElementById('term-kind')?.value||'';let count=0;document.querySelectorAll('article').forEach(card=>{{const category=card.dataset.category||'knowledge';card.hidden=!!((g&&card.dataset.group!==g)||!card.textContent.toLocaleLowerCase().includes(q)||(v&&card.dataset.value!==v)||(s&&card.dataset.status!==s&&card.dataset.origin!==s)||(k&&card.dataset.inference!==k)||(c==='durable'&&category==='transient')||(c&&c!=='durable'&&category!==c));if(!card.hidden)count++;}});document.getElementById('filter-empty').hidden=count>0;const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;}}group.addEventListener('change',filterRows);search.addEventListener('input',filterRows);document.getElementById('value')?.addEventListener('change',filterRows);document.getElementById('term-status')?.addEventListener('change',filterRows);document.getElementById('category')?.addEventListener('change',filterRows);document.getElementById('term-kind')?.addEventListener('change',filterRows);filterRows();</script>
+<script>const group=document.getElementById('group'),search=document.getElementById('search');function filterRows(){{const g=group.value,q=search.value.toLocaleLowerCase(),v=document.getElementById('value')?.value||'',s=document.getElementById('term-status')?.value||'',c=document.getElementById('category')?.value||'',k=document.getElementById('term-kind')?.value||'';let count=0;document.querySelectorAll('article').forEach(card=>{{const category=card.dataset.category||'knowledge',base=!(g&&card.dataset.group!==g)&&!(v&&card.dataset.value!==v)&&!(c==='durable'&&category==='transient')&&!(c&&c!=='durable'&&category!==c),variants=card.querySelectorAll?.('[data-term-variant]')||[];if(variants.length){{let any=false;const shared=(card.dataset.termShared||'').toLocaleLowerCase();variants.forEach(item=>{{const matchesSearch=!q||shared.includes(q)||(item.textContent||'').toLocaleLowerCase().includes(q);item.hidden=!(base&&matchesSearch&&(!s||(item.dataset.status===s||item.dataset.origin===s))&&(!k||item.dataset.inference===k));if(!item.hidden)any=true;}});card.hidden=!any;}}else{{card.hidden=!(base&&card.textContent.toLocaleLowerCase().includes(q)&&(!s||(card.dataset.status===s||card.dataset.origin===s))&&(!k||card.dataset.inference===k));}}if(!card.hidden)count++;}});document.getElementById('filter-empty').hidden=count>0;const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;}}group.addEventListener('change',filterRows);search.addEventListener('input',filterRows);document.getElementById('value')?.addEventListener('change',filterRows);document.getElementById('term-status')?.addEventListener('change',filterRows);document.getElementById('category')?.addEventListener('change',filterRows);document.getElementById('term-kind')?.addEventListener('change',filterRows);filterRows();</script>
 </body></html>'''
 
 
@@ -91,6 +91,9 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         latest = by_key.get(events[-1]['item_key'], {}) if events else {}
         category = category_for(thread)
         val = 'high' if thread.get('value') == 'high' else 'candidate'
+        current_state = events[-1].get('evidence_state', 'reported') if events else 'reported'
+        state_label = {'unresolved': '未解决', 'reported': '群友说法',
+                       'verified': '原消息有验证反馈', 'disputed': '存在分歧'}.get(current_state, '群友说法')
         timeline = []
         for event in events:
             timeline.append('<section><p>' + _time(event.get('source_time')) + ' · '
@@ -100,9 +103,10 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                             + evidence(thread['scope'], event['evidence_ids'])
                             + _feedback_controls(by_key.get(event['item_key'], {})) + '</section>')
         knowledge_cards.append(f'<article data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}">'
-            f'<h2>{_safe(thread["title"])}</h2><p class="meta">{CATEGORIES[category]} · {_status(thread["status"], category)} · 话题记录 {len(events)} 次</p>'
+            f'<h2>{_safe(thread["title"])}</h2><p class="meta">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state_label} · {_status(thread["status"], category)} · 话题记录 {len(events)} 次</p>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
-                        'resource': thread.get('resource')})
+                        'resource': thread.get('resource'), 'quality': latest.get('quality'),
+                        'quality_reason': latest.get('quality_reason')})
             + '<details><summary>查看讨论进展与证据</summary>' + ''.join(timeline) + '</details></article>')
     knowledge_filters = '<label>分类 <select id="category"><option value="durable">知识、问题与资源</option><option value="">全部内容</option>' + ''.join(
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
@@ -112,26 +116,40 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
     from .knowledge_feedback import feedback_script, feedback_token
     knowledge_html = knowledge_html.replace("</body>", feedback_script(feedback_token(data_dir)) + "</body>")
 
+    from .knowledge_glossary_groups import group_glossary
     term_cards = []
-    for term in glossary:
-        origin = term.get("origin") or "ai"
-        status = term.get("status") or "candidate"
-        label = "人工解释" if origin == "user" else ("已用于本群分析" if status == "active" else "候选解释")
-        meaning = term.get("meaning") or ""
-        # Effective terms are prepared by the caller; preserve the human wording for user-origin entries.
-        explanation = meaning
-        ids = _ids(term)
-        reftext = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
-        inferred = {'explicit': '原文明确解释', 'inferred': '上下文推断', 'ambiguous': '含义有分歧',
-                    'unconfirmed': '解释待确认'}.get(term.get('inference_kind'), '解释待确认')
-        annotation = ('<p>解释依据：' + inferred + '</p><pre>' + _safe(term.get('inference_note') or '') + '</pre>')
-        if term.get('aliases'):
-            annotation += '<p>原文别名：' + _safe('、'.join(term['aliases'])) + '</p>'
-        if term.get('alternatives'):
-            annotation += '<p>不同解释：</p><ul>' + ''.join('<li>' + _safe(text) + '</li>' for text in term['alternatives']) + '</ul>'
-        term_cards.append(f'<article data-group="{_safe(term.get("scope"))}" data-status="{_safe(status)}" data-origin="{_safe(origin)}" data-inference="{_safe(term.get("inference_kind") or "unconfirmed")}">'
-                          f'<h2>{_safe(term.get("term"))}</h2><p class="meta">{_safe(term.get("scope"))} · {label} · {reftext}</p>'
-                          f'<pre>{_safe(explanation)}</pre>{annotation}{evidence(term.get("scope"), ids)}</article>')
+    for group in group_glossary(glossary):
+        term = group["variants"][0]
+        term_scope = group["scope"]
+        variant_cards = []
+        spelling_count = len(group["spellings"])
+        for term in group["variants"]:
+            origin = term.get("origin") or "ai"
+            status = term.get("status") or "candidate"
+            label = "人工解释" if origin == "user" else ("已用于本群分析" if status == "active" else "候选解释")
+            meaning = term.get("meaning") or ""
+            explanation = meaning
+            ids = _ids(term)
+            reftext = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
+            inferred = {'explicit': '原文明确解释', 'inferred': '上下文推断', 'ambiguous': '含义有分歧',
+                        'unconfirmed': '解释待确认'}.get(term.get('inference_kind'), '解释待确认')
+            annotation = ('<p>解释依据：' + inferred + '</p><pre>' + _safe(term.get('inference_note') or '') + '</pre>')
+            if term.get('aliases'):
+                annotation += '<p>原文别名：' + _safe('、'.join(term['aliases'])) + '</p>'
+            if term.get('alternatives'):
+                annotation += '<p>不同解释：</p><ul>' + ''.join('<li>' + _safe(text) + '</li>' for text in term['alternatives']) + '</ul>'
+            for field, caption in (("definition_evidence", "释义原文"), ("inference_evidence", "推断用例")):
+                quotes = term.get(field) if isinstance(term.get(field), list) else []
+                if quotes:
+                    annotation += '<p>' + caption + '：</p><ul>' + ''.join(
+                        '<li>#' + _safe(item.get('message_id')) + '：' + _safe(item.get('quote')) + '</li>'
+                        for item in quotes if isinstance(item, dict) and item.get('quote')) + '</ul>'
+            variant_cards.append(f'<section data-term-variant="1" data-status="{_safe(status)}" data-origin="{_safe(origin)}" data-inference="{_safe(term.get("inference_kind") or "unconfirmed")}">'
+                                  f'<h3>{_safe(explanation)}</h3><p class="meta">{label} · {reftext}</p>{annotation}{evidence(term_scope, ids)}</section>')
+        spellings = '、'.join(_safe(value) for value in group["spellings"])
+        term_cards.append(f'<article data-group="{_safe(term_scope)}" data-term-shared="{_safe(term_scope + " " + " ".join(group["spellings"]))}"><h2>{_safe(group["term"])}</h2>'
+                          f'<p class="meta">{_safe(term_scope)} · \u8bcd\u5f62 {spelling_count} \u79cd · \u91ca\u4e49 {len(variant_cards)} \u79cd · {spellings}</p>'
+                          + ''.join(variant_cards) + '</article>')
     term_filters = '<label>解释状态 <select id="term-status"><option value="">全部</option><option value="candidate">候选</option><option value="active">已用于本群分析</option><option value="user">人工解释</option></select></label>'
     term_filters += '<label>解释依据 <select id="term-kind"><option value="">全部依据</option><option value="explicit">明确解释</option><option value="inferred">上下文推断</option><option value="ambiguous">含义有分歧</option><option value="unconfirmed">待确认</option></select></label>'
     glossary_html = _frame("glossary.html", "群内术语", term_cards, groups, term_filters)
@@ -192,6 +210,18 @@ def _status(value, category=None):
 
 def _details(item):
     pieces = []
+    quality = item.get('quality')
+    if isinstance(quality, dict):
+        basis = {'reproducible_method': '有具体步骤的方法', 'firsthand_result': '操作反馈',
+                 'resource_lead': '资源线索', 'announcement': '公告', 'service_status': '服务状态',
+                 'personal_opinion': '个人观点', 'promotion': '推广', 'request': '待解决请求',
+                 'unsupported': '依据不足'}.get(quality.get('basis'), '依据待确认')
+        pieces.append('<p>收录依据：' + _safe(basis) + '</p>')
+        if item.get('quality_reason') == 'insufficient_source_grounding_for_high':
+            pieces.append('<p class="meta">具体条件、步骤或结果依据尚不足，保留为候选。</p>')
+        quote = quality.get('result_quote')
+        if isinstance(quote, dict):
+            pieces.append('<p>内容依据 #' + _safe(quote.get('message_id')) + '：</p><pre>' + _safe(quote.get('quote')) + '</pre>')
     if item.get('known'):
         pieces.append('<p><strong>已知内容</strong></p><pre>' + _safe(item['known']) + '</pre>')
     if item.get('missing'):

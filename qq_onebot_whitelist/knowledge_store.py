@@ -171,6 +171,12 @@ class KnowledgeDB:
         with self.conn() as conn:
             conn.execute("UPDATE runs SET status='failed',error=? WHERE key=?", (error[:160], key))
 
+    def record_usage(self, key: str, tokens: int | None):
+        """Settle a returned usage before another stage claims its own budget."""
+        if type(tokens) is int and tokens >= 0:
+            with self.conn() as conn:
+                conn.execute('UPDATE runs SET tokens=? WHERE key=?', (tokens, key))
+
     def finish(self, key: str, scope: str, result: dict, tokens: int, *, extraction: bool, glossary: bool,
                track_topics: bool = False, records: list[dict] | None = None,
                allowed_threads: list[dict] | None = None):

@@ -44,6 +44,10 @@ def test_live_followup_updates_topic_without_losing_question_or_sources(tmp_path
     captured = []
     def followup(messages, model):
         task = json.loads(messages[1]['content']); captured.append(task)
+        if task.get('task_type') == 'topic_decisions':
+            return {'decisions': [{'index': 0, 'action': 'existing',
+                'thread_id': task['threads'][0]['id'], 'reason': '同一节点报错的实际恢复反馈',
+                'status': 'resolved'}]}, 7
         return {'items': [item(2, category='knowledge', status='resolved', evidence_state='verified',
             thread_id=task['threads'][0]['id'], link_reason='对同一节点报错补充验证结果',
             known='更新节点以后恢复', missing='具体版本仍未提供',

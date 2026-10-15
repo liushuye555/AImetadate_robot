@@ -49,6 +49,13 @@ def request(messages, model):
     return response([r['id'] for r in rows]), 80
 
 
+def grounded_file_response(ids, files):
+    result = response(ids, files=files)
+    result['items'][0]['quality'] = {'basis': 'reproducible_method', 'conditions': ['v1.2'],
+        'actions': ['调整节点'], 'result_quote': {'message_id': ids[0], 'quote': '正常了'}}
+    return result
+
+
 @pytest.mark.parametrize('raw', [{}, {'enabled': True}, {'enabled': True, 'groups': {'group:123': {'enabled': True}}},
                                     {'enabled': 'true', 'groups': {'group:123': {'enabled': True, 'summary': {'enabled': True}}}}])
 def test_default_gates_do_not_create_database_or_read_credentials(tmp_path, monkeypatch, raw):
@@ -237,7 +244,7 @@ def test_view_escapes_model_content_and_knowledge_search_is_group_scoped(tmp_pat
 
 def test_files_only_feature_does_not_persist_knowledge_cards(tmp_path, monkeypatch):
     path, store = configured(tmp_path, features=('files',))
-    record(store, file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    record(store, '资料记录了 v1.2 下调整节点后正常了的排错方法', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
     saved = []
     import qq_onebot_whitelist.knowledge_files as files
     import qq_onebot_whitelist.file_sync as sync
@@ -246,7 +253,7 @@ def test_files_only_feature_does_not_persist_knowledge_cards(tmp_path, monkeypat
         saved.append(source)
         return {'status': 'saved', 'path': str(root / 'file.pdf'), 'sha256': 'hash', 'size': 9}
     monkeypatch.setattr(files, 'archive_file', archive)
-    analyze(path, '123', feature='files', kind='batch', request=lambda *a: (response([1], files=['fid-1']), 50), model=MODEL)
+    analyze(path, '123', feature='files', kind='batch', request=lambda *a: (grounded_file_response([1], ['fid-1']), 50), model=MODEL)
     assert len(saved) == 1
     db = KnowledgeDB(store.path.parent / 'knowledge.db')
     assert not db.items('group:123')
@@ -300,14 +307,14 @@ def test_bad_group_config_does_not_starve_other_group(tmp_path):
 
 def test_file_failures_retry_independently_and_on_cache_hit(tmp_path, monkeypatch):
     path, store = configured(tmp_path, features=('files',))
-    record(store, file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    record(store, '资料记录了 v1.2 下调整节点后正常了的排错方法', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
     calls = []
     import qq_onebot_whitelist.knowledge_files as files
     def archive(*a, **kw):
         calls.append(1)
         return {'status': 'failed', 'error': 'TemporaryFailure'}
     monkeypatch.setattr(files, 'archive_file', archive)
-    fake = lambda *a: (response([1], files=['fid-1']), 50)
+    fake = lambda *a: (grounded_file_response([1], ['fid-1']), 50)
     analyze(path, '123', feature='files', kind='batch', request=fake, model=MODEL)
     assert analyze(path, '123', feature='files', kind='batch', request=fake, model=MODEL)['cached']
     assert len(calls) == 2
@@ -393,10 +400,10 @@ def test_bad_file_limits_are_rejected_before_model_or_budget(tmp_path):
 
 def test_zero_file_quota_skips_download_without_failing_analysis(tmp_path,monkeypatch):
     path,store=configured(tmp_path,features=('files',),files={'enabled':True,'budget_gb':0})
-    record(store,file={'name':'data.pdf','id':'fid','size':9})
+    record(store,'资料记录了 v1.2 下调整节点后正常了的排错方法',file={'name':'data.pdf','id':'fid','size':9})
     import qq_onebot_whitelist.file_sync as sync
     monkeypatch.setattr(sync,'fetch_download_url_once',lambda *a,**k:pytest.fail('no space, no URL fetch'))
-    result=analyze(path,'123',feature='files',kind='batch',request=lambda *a:(response([1],files=['fid']),50),model=MODEL)
+    result=analyze(path,'123',feature='files',kind='batch',request=lambda *a:(grounded_file_response([1],['fid']),50),model=MODEL)
     assert result['status']=='completed'
     with KnowledgeDB(store.path.parent/'knowledge.db').conn() as c:
         row=c.execute('SELECT status,error FROM assets').fetchone()
