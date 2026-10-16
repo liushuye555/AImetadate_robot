@@ -19,6 +19,7 @@ SYSTEM = '''
 progress_kind必须比较已有同一讨论：新条件、排查步骤、结果或有效资源线索可为new_information，但须用当前批次原文的连续精确引文支持；重复提问和改写不得算新进展。无法判断用unknown。
 organization.subject为{name,ambiguous,evidence:[{message_id,quote}]}。正文必须独立说明所用工具/服务、操作对象与反馈；避免“用在GPT上”“这个封了”等指代不明的结论。对象可确认时给出原文支持的名称和精确引文；缺少引用或只能从相邻聊天猜测时ambiguous=true、name为空，并在missing说明缺失信息。
 “我的已经封了”不证明被封的是哪个平台账号，也不证明某工具导致封禁；人物自述、相邻话题和因果关系必须分开。无法确认时标题和正文明确“对象待确认”，不要补造工具名或账号类型。
+organization.subjects用于按主题浏览，按主要对象优先列出最多3项{name,evidence:[{message_id,quote}]}。例如智谱（含GLM）、WorkBuddy、OpenCode；其他产品或技术也可成为主题。每项引文必须逐字来自本条证据消息且明确提及对象，不能只凭“封号、额度”等情形猜产品。subjects仅归类，不改变subject的指代确认、验证状态或话题关联；同主题的不同账号、版本、成员经历仍分别记录。
 '''.strip()
 
 
@@ -78,7 +79,11 @@ def prepare_organization(item, records):
     name = redact_secrets(raw_name.strip())[:300] if isinstance(raw_name, str) else ''
     if not name or not any(name in row['quote'] for row in evidence):
         name = ''
+    from .knowledge_subjects import prepare_subjects
     return {'topics': topics or ['other'], 'legacy_unassessed': legacy,
+            'subjects': prepare_subjects(raw.get('subjects'), item, records),
+            'subjects_version': 1 if isinstance(raw.get('subjects'), list) else 0,
+            'subjects_complete': isinstance(raw.get('subjects'), list),
             'retention_class': 'brief' if raw.get('retention_class') == 'brief' else 'detailed',
             'progress_kind': progress, 'progress_evidence': quote if progress == 'new_information' else None,
             'progress_time': progress_time.isoformat() if progress_time else None,

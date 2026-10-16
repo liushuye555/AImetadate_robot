@@ -8,10 +8,16 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QLabel>
 #include <QSpinBox>
 #include <QTimer>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QScopeGuard>
+#include <QFile>
+#include <QDir>
+#include <QApplication>
+#include <QPixmap>
 #include "ui/pages/CollectionPage.h"
 #include "core/AvatarCache.h"
 
@@ -48,6 +54,7 @@ private slots:
     void knowledgeOptInsRoundTrip();
     void lifecycleRoundTrip();
     void dialogTabsAndDescriptionRoundTrip();
+    void compactKnowledgeListAndThemeScreenshots();
 };
 
 static QJsonObject savePatch(CollectionPage &page);
@@ -76,6 +83,59 @@ void TestKnowledgeGroups::dialogTabsAndDescriptionRoundTrip() {
     page.findChild<QPushButton *>("knowledgeEdit")->click();
     QCOMPARE(groupsOf(savePatch(page)).value("group:123").toObject().value("description").toString(),
              QStringLiteral("新说明"));
+}
+
+void TestKnowledgeGroups::compactKnowledgeListAndThemeScreenshots() {
+    CollectionPage page;
+    page.resize(920, 620);
+    page.setConfig({});
+    auto *list = page.findChild<QListWidget *>("knowledgeGroups");
+    auto *empty = page.findChild<QLabel *>("knowledgeEmptyState");
+    auto *tabs = page.findChild<QTabWidget *>("collectionTabs");
+    QVERIFY(list && empty && tabs);
+    QVERIFY(!empty->isHidden());
+    QCOMPARE(list->maximumHeight(), 0);
+
+    page.setGroups(QVariantList{QJsonObject{{"id", "123"}, {"name", "周末读书会"}}.toVariantMap()});
+    page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"groups", QJsonObject{{
+        "group:123", QJsonObject{{"enabled", true}}
+    }}}}}});
+    QCOMPARE(list->count(), 1);
+    QVERIFY(list->height() >= 48);
+    QVERIFY(list->height() <= 56);
+    QVERIFY(list->item(0)->text().contains(QStringLiteral("周末读书会")));
+    QCOMPARE(list->item(0)->checkState(), Qt::Checked);
+    QCOMPARE(list->maximumHeight(), list->height());
+
+    const QString darkPath = QFINDTESTDATA("../resources/themes/dark.qss");
+    const QString lightPath = QFINDTESTDATA("../resources/themes/light.qss");
+    QVERIFY(!darkPath.isEmpty());
+    QVERIFY(!lightPath.isEmpty());
+    QDir().mkpath("data/tmp/knowledge-ui-20261016");
+    for (const auto &theme : {qMakePair(darkPath, QStringLiteral("dark")),
+                              qMakePair(lightPath, QStringLiteral("light"))}) {
+        QFile file(theme.first);
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString stylesheet = QString::fromUtf8(file.readAll());
+        QVERIFY(stylesheet.contains(QStringLiteral("QTabWidget#collectionTabs::pane")));
+        QVERIFY(stylesheet.contains(QStringLiteral("QTabWidget#collectionTabs QTabBar::tab:selected")) || theme.second == QStringLiteral("light"));
+        QVERIFY(stylesheet.contains(QStringLiteral("QListWidget#knowledgeGroups")));
+        QVERIFY(stylesheet.contains(QStringLiteral("QLabel#knowledgeEmptyState")));
+        qApp->setStyleSheet(stylesheet);
+        tabs->setCurrentIndex(0);
+        page.show();
+        QCoreApplication::processEvents();
+        const QPoint tabCorner = tabs->tabBar()->mapTo(&page, QPoint(tabs->tabBar()->tabRect(0).right() - 4,
+                                                                      tabs->tabBar()->tabRect(0).center().y()));
+        const QColor tabBackground = page.grab().toImage().pixelColor(tabCorner);
+        const int luminance = qGray(tabBackground.rgb());
+        if (theme.second == QStringLiteral("dark")) QVERIFY2(luminance < 90, qPrintable(tabBackground.name()));
+        else QVERIFY2(luminance > 220, qPrintable(tabBackground.name()));
+        const QString output = QStringLiteral("data/tmp/knowledge-ui-20261016/collection-%1.png").arg(theme.second);
+        QVERIFY2(page.grab().save(output), qPrintable(output));
+        page.hide();
+    }
+    qApp->setStyleSheet(QString());
 }
 
 static QJsonObject savePatch(CollectionPage &page) {

@@ -29,7 +29,7 @@ def test_knowledge_page_has_lane_topic_and_all_category_filters_and_keeps_term_j
     assert '<option value="followup">待跟进</option>' in html
     assert '<option value="archive">归档</option>' in html
     assert '<option value="">全部类型</option>' in html
-    assert '<select id="topic"><option value="">全部主题</option>' in html
+    assert '<select id="topic"><option value="">全部情形</option>' in html
     assert "variants.forEach(item=>" in html
     assert "item.dataset.inference===k" in html
 

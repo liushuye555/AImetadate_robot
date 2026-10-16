@@ -28,7 +28,7 @@ from .llm_providers import routing_settings
 from . import knowledge_organization
 
 
-VERSION = 8
+VERSION = 9
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -85,7 +85,7 @@ terms只解释词语在本群语境中的含义。产品计费、限流、部署
 def model_request(messages: list[dict], cfg: LLMConfig, *, max_tokens: int = MAX_COMPLETION) -> tuple[dict, int | None]:
     payload = dict(model=cfg.model, messages=messages, temperature=0.1,
                    max_tokens=max_tokens, response_format={'type': 'json_object'})
-    if cfg.model.casefold() == 'deepseek-flash':
+    if cfg.model.casefold() in ('deepseek-flash', 'cn:deepseek-v4.1-flash'):
         # This configured endpoint defaults to hidden thinking, which exhausted
         # the JSON completion allowance in the real history replay.
         payload['thinking'] = {'type': 'disabled'}
@@ -1018,6 +1018,10 @@ def main():
     publish_parser = subs.add_parser('publish-history', help='将已复核的离线历史结果发布到正式资料库；不调用 AI')
     publish_parser.add_argument('--source', type=Path, required=True, help='含 bot.db 与 knowledge.db 的独立分析目录')
     publish_parser.add_argument('--group', required=True)
+    subjects_parser = subs.add_parser('organize-subjects', help='使用当前主供应商复核已有知识的主题归类，不改写正文')
+    subjects_parser.add_argument('--group', required=True)
+    subjects_parser.add_argument('--max-batches', type=int, default=20)
+    subjects_parser.add_argument('--batch-size', type=int, default=10)
     archive_parser = subs.add_parser('archive', help='归档、保留或恢复自动策略；不删除原始记录')
     archive_parser.add_argument('--group', required=True)
     archive_target = archive_parser.add_mutually_exclusive_group(required=True)
@@ -1061,6 +1065,11 @@ def main():
             from .knowledge_publish import publish_history
             result = publish_history(args.source, cfg.data_dir, args.group)
             result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
+        elif args.action == 'organize-subjects':
+            from .knowledge_subject_review import review_subjects
+            result = review_subjects(args.config, args.group, max_batches=args.max_batches, batch_size=args.batch_size)
+            if result.get('processed') or result.get('status') == 'unchanged':
+                result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
         elif args.action == 'archive':
             scope = group_scope(args.group)
             result = knowledge_organization.set_archive(KnowledgeDB(cfg.data_dir / 'knowledge.db'), scope,

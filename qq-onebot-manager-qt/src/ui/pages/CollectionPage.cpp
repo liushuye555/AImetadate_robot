@@ -82,9 +82,11 @@ QJsonObject disabledKnowledgeGroup(QJsonObject group) {
 }
 
 CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
+    setObjectName("collectionPage");
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(24, 24, 24, 24);
     auto *scroll = new QScrollArea(this);
+    scroll->setObjectName("collectionScroll");
     scroll->setWidgetResizable(true);
     auto *container = new QWidget(scroll);
     auto *layout = new QVBoxLayout(container);
@@ -97,8 +99,10 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     tabs->setObjectName("collectionTabs");
     auto makeTab = [&](const QString &title) {
         auto *area = new QScrollArea(tabs);
+        if (title == QStringLiteral("群知识")) area->setObjectName("knowledgeScroll");
         area->setWidgetResizable(true);
         auto *page = new QWidget(area);
+        if (title == QStringLiteral("群知识")) page->setObjectName("knowledgePage");
         auto *pageLayout = new QVBoxLayout(page);
         pageLayout->setContentsMargins(8, 8, 8, 8);
         pageLayout->setSpacing(14);
@@ -201,13 +205,24 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     auto *knowledge = new QGroupBox(QStringLiteral("群知识"), knowledgeTab.first);
     knowledge->setObjectName("knowledgeGroupBox");
     auto *kv = new QVBoxLayout(knowledge);
+    kv->setContentsMargins(16, 14, 16, 14);
+    kv->setSpacing(9);
     m_knowledgeEnabled = new QCheckBox(QStringLiteral("启用群知识（独立总开关）"), knowledge);
     m_knowledgeEnabled->setObjectName("knowledgeEnabled");
     kv->addWidget(m_knowledgeEnabled);
+    auto *knowledgeDescription = new QLabel(QStringLiteral("按群管理知识功能。扫描只获取群列表，新增后仍需手动启用。"), knowledge);
+    knowledgeDescription->setObjectName("muted");
+    knowledgeDescription->setWordWrap(true);
+    kv->addWidget(knowledgeDescription);
     m_knowledgeList = new QListWidget(knowledge);
     m_knowledgeList->setObjectName("knowledgeGroups");
-    m_knowledgeList->setMinimumHeight(150);
+    m_knowledgeList->setMinimumHeight(0);
+    m_knowledgeList->setMaximumHeight(0);
     kv->addWidget(m_knowledgeList);
+    m_knowledgeEmpty = new QLabel(QStringLiteral("还没有群知识配置。点击“扫描群”后，可新增要管理的群。"), knowledge);
+    m_knowledgeEmpty->setObjectName("knowledgeEmptyState");
+    m_knowledgeEmpty->setWordWrap(true);
+    kv->addWidget(m_knowledgeEmpty);
     auto *kb = new QHBoxLayout;
     auto *kAdd = new QPushButton(QStringLiteral("新增群"), knowledge);
     kAdd->setObjectName("knowledgeAdd");
@@ -495,6 +510,15 @@ void CollectionPage::rebuildKnowledgeList() {
         item->setCheckState(explicitEnabled(it.value().toObject()) ? Qt::Checked : Qt::Unchecked);
     }
     m_suppressKnowledgeChange = false;
+    const int count = m_knowledgeList->count();
+    m_knowledgeEmpty->setVisible(count == 0);
+    m_knowledgeList->setVisible(count > 0);
+    if (count > 0) {
+        // Keep a short list compact while allowing larger collections to scroll.
+        const int rowHeight = m_knowledgeList->sizeHintForRow(0) > 0
+                                  ? m_knowledgeList->sizeHintForRow(0) : 28;
+        m_knowledgeList->setFixedHeight(qMin(220, qMax(48, count * qMax(rowHeight, 36) + 12)));
+    }
 }
 
 void CollectionPage::removeKnowledgeGroup() {

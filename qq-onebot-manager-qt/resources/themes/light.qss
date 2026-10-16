@@ -135,3 +135,13 @@ QListWidget#groupList::item:hover { background: #fdf0f7; }
 QListWidget#groupList::item:selected { background: #fbdfec; }
 QLabel#rowName { font-size: 13px; font-weight: 600; color: #2f2b38; }
 QLabel#rowSummary { font-size: 11px; color: #a09aaa; }
+
+/* 群知识采集页 */
+QTabWidget#collectionTabs::pane { background: #ffffff; border: 1px solid #e4dfe8; }
+QScrollArea#collectionTabs, QWidget#knowledgeGroupBox { background: #ffffff; }
+QGroupBox#knowledgeGroupBox { color: #302b38; border: 1px solid #e4dfe8; border-radius: 10px; margin-top: 10px; padding-top: 8px; }
+QGroupBox#knowledgeGroupBox::title { color: #302b38; }
+QListWidget#knowledgeGroups { background: #ffffff; color: #302b38; border: 1px solid #e4dfe8; border-radius: 6px; }
+QLabel#knowledgeEmptyState { color: #77717f; background: #faf9fb; border: 1px dashed #d8d2de; border-radius: 6px; padding: 12px; }
+
+CollectionPage#collectionPage, QScrollArea#collectionScroll, QScrollArea#knowledgeScroll, QWidget#knowledgePage { background: #ffffff; }

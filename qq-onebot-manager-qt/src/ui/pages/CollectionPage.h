@@ -44,6 +44,7 @@ private:
     QCheckBox *m_expandForwards = nullptr;
     QCheckBox *m_knowledgeEnabled = nullptr;
     QListWidget *m_knowledgeList = nullptr;
+    QLabel *m_knowledgeEmpty = nullptr;
     QJsonObject m_knowledgeGroups;
     QJsonObject m_knowledgeDefaults;
     QStringList m_knowledgeProviderOptions;

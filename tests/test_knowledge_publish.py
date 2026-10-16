@@ -92,6 +92,7 @@ def test_out_of_snapshot_evidence_is_refused(tmp_path):
     ('item_quality', 'quality_json', {'result_quote': {'message_id': 999, 'quote': '不同群'}}),
     ('item_organization', 'organization_json', {'progress_evidence': {'message_id': 999}}),
     ('item_organization', 'organization_json', {'subject': {'evidence': [{'message_id': 999}]}}),
+    ('item_organization', 'organization_json', {'subjects': [{'name': 'GLM', 'evidence': [{'message_id': 999}]}]}),
 ])
 def test_nested_annotation_evidence_must_also_be_in_snapshot(tmp_path, table, column, value):
     source, target, db = prepared(tmp_path)

@@ -7,7 +7,8 @@ from qq_onebot_whitelist import knowledge
 from qq_onebot_whitelist.llm_summary import LLMConfig
 
 
-@pytest.mark.parametrize('model,thinking', [('deepseek-flash', {'type': 'disabled'}), ('other-model', None)])
+@pytest.mark.parametrize('model,thinking', [('deepseek-flash', {'type': 'disabled'}),
+    ('cn:deepseek-v4.1-flash', {'type': 'disabled'}), ('other-model', None)])
 def test_known_ds_endpoint_preserves_completion_allowance_for_structured_output(monkeypatch, model, thinking):
     captured = []
     def open_url(req, **kwargs):
