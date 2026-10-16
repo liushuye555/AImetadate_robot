@@ -1015,6 +1015,9 @@ def main():
     subs = parser.add_subparsers(dest='action', required=True)
     subs.add_parser('status')
     subs.add_parser('view')
+    publish_parser = subs.add_parser('publish-history', help='将已复核的离线历史结果发布到正式资料库；不调用 AI')
+    publish_parser.add_argument('--source', type=Path, required=True, help='含 bot.db 与 knowledge.db 的独立分析目录')
+    publish_parser.add_argument('--group', required=True)
     archive_parser = subs.add_parser('archive', help='归档、保留或恢复自动策略；不删除原始记录')
     archive_parser.add_argument('--group', required=True)
     archive_target = archive_parser.add_mutually_exclusive_group(required=True)
@@ -1054,6 +1057,10 @@ def main():
                           groups=[{'scope': p.scope, 'features': [f for f in ('summary','extraction','glossary','files','history') if p.allows(f)]} for p in enabled_profiles(cfg)])
         elif args.action == 'view':
             result = {'path': str(write_view(cfg.data_dir, cfg).resolve())}
+        elif args.action == 'publish-history':
+            from .knowledge_publish import publish_history
+            result = publish_history(args.source, cfg.data_dir, args.group)
+            result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
         elif args.action == 'archive':
             scope = group_scope(args.group)
             result = knowledge_organization.set_archive(KnowledgeDB(cfg.data_dir / 'knowledge.db'), scope,

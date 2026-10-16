@@ -53,7 +53,7 @@ def test_views_escape_user_content_and_provide_empty_states(tmp_path, monkeypatc
     assert "<img src=x" not in views["knowledge.html"]
     assert "abcdefghijklmnopqrstuvwxyz0123456789" not in views["knowledge.html"]
     for filename in ("glossary.html", "knowledge-summary.html", "knowledge-files.html"):
-        assert "暂无内容。" in views[filename]
+        assert "本页暂无正式资料。" in views[filename]
 
 
 @pytest.mark.parametrize('filename', ['knowledge.html', 'glossary.html', 'knowledge-summary.html', 'knowledge-files.html'])

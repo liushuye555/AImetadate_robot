@@ -58,8 +58,10 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
         'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
         'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
     }
-    empty = ('<div class="empty"><strong>暂无内容。</strong><p>先在管理器的“采集 → 群知识”选择群，开启需要的整理功能。</p>'
-             '<p>已有结果时，可在资料中心更新报告后查看。</p></div>')
+    empty = ('<div class="empty"><strong>本页暂无正式资料。</strong>'
+             '<p>若已完成历史分析，请先发布整理结果。</p>'
+             '<p>如需持续整理，可在管理器的“采集 → 群知识”配置群并启用相应功能；启用功能不会自动生成现有资料。</p>'
+             '<p>查看已有资料无需启用自动分析。</p></div>')
     content = ''.join(cards) if cards else empty
     queues = ''
     if filename == 'knowledge.html':
