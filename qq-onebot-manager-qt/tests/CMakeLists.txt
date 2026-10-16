@@ -76,6 +76,22 @@ if (WIN32)
     endforeach()
 endif()
 
+add_executable(tst_reportsnavigation
+    tst_reportsnavigation.cpp
+    ../src/ui/pages/ReportsPage.cpp
+    ../src/ui/Strings.cpp
+)
+target_include_directories(tst_reportsnavigation PRIVATE ../src)
+target_link_libraries(tst_reportsnavigation PRIVATE Qt6::Test Qt6::Widgets)
+add_test(NAME tst_reportsnavigation COMMAND tst_reportsnavigation -platform offscreen)
+set_tests_properties(tst_reportsnavigation PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms"
+    TIMEOUT 30
+)
+if (WIN32)
+    copy_qt_runtime(tst_reportsnavigation)
+endif()
+
 add_executable(tst_knowledgegroups
     tst_knowledgegroups.cpp
     ../src/ui/pages/CollectionPage.cpp

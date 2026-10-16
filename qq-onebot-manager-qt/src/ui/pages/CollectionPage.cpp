@@ -28,6 +28,7 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QRegularExpression>
+#include <QTabWidget>
 #include <algorithm>
 
 namespace {
@@ -50,7 +51,7 @@ QJsonObject disabledKnowledgeGroup(QJsonObject group) {
     group.insert("enabled", false);
     for (const QString &feature : {QStringLiteral("summary"), QStringLiteral("extraction"),
                                   QStringLiteral("glossary"), QStringLiteral("files"),
-                                  QStringLiteral("history"), QStringLiteral("notifications")}) {
+                                  QStringLiteral("history"), QStringLiteral("notifications"), QStringLiteral("lifecycle")}) {
         QJsonObject child = group.value(feature).toObject();
         child.insert("enabled", false);
         if (feature == "summary") {
@@ -92,8 +93,27 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     scroll->setWidget(container);
     outer->addWidget(scroll, 1);
 
+    auto *tabs = new QTabWidget(container);
+    tabs->setObjectName("collectionTabs");
+    auto makeTab = [&](const QString &title) {
+        auto *area = new QScrollArea(tabs);
+        area->setWidgetResizable(true);
+        auto *page = new QWidget(area);
+        auto *pageLayout = new QVBoxLayout(page);
+        pageLayout->setContentsMargins(8, 8, 8, 8);
+        pageLayout->setSpacing(14);
+        area->setWidget(page);
+        tabs->addTab(area, title);
+        return qMakePair(page, pageLayout);
+    };
+    const auto knowledgeTab = makeTab(QStringLiteral("群知识"));
+    const auto rangeTab = makeTab(QStringLiteral("采集范围"));
+    const auto rulesTab = makeTab(QStringLiteral("高级规则"));
+    tabs->setCurrentIndex(0);
+    layout->addWidget(tabs);
+
     // 采集总开关
-    auto *stateCard = new QFrame(container);
+    auto *stateCard = new QFrame(rangeTab.first);
     stateCard->setObjectName("card");
     auto *stateLayout = new QHBoxLayout(stateCard);
     stateLayout->setContentsMargins(18, 12, 18, 12);
@@ -105,14 +125,14 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     m_collectionToggle = new QPushButton(Strings::zh("collectionOn"), stateCard);
     m_collectionToggle->setCheckable(true);
     stateLayout->addWidget(m_collectionToggle);
-    layout->addWidget(stateCard);
+    rangeTab.second->addWidget(stateCard);
     connect(m_collectionToggle, &QPushButton::clicked, this, [this] {
         setCollectionPaused(m_collectionToggle->isChecked());
         emit collectionToggle();
     });
 
     // 内置采集模板
-    auto *templates = new QGroupBox(Strings::zh("builtinTemplates"), container);
+    auto *templates = new QGroupBox(Strings::zh("builtinTemplates"), rangeTab.first);
     auto *templateForm = new QFormLayout(templates);
     const struct { const char *key; const char *labelKey; } rows[] = {
         {"features.image_processing", "imageProcessing"},
@@ -127,10 +147,10 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
         templateForm->addRow(Strings::zh(QLatin1String(row.labelKey)), box);
         m_templateBoxes.insert(QString::fromLatin1(row.key), box);
     }
-    layout->addWidget(templates);
+    rangeTab.second->addWidget(templates);
 
     // 群级采集
-    auto *groups = new QGroupBox(Strings::zh("groupCollection"), container);
+    auto *groups = new QGroupBox(Strings::zh("groupCollection"), rangeTab.first);
     auto *v = new QVBoxLayout(groups);
     m_expandForwards = new QCheckBox(Strings::zh("expandForwards"), groups);
     v->addWidget(m_expandForwards);
@@ -146,7 +166,7 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     gButtons->addWidget(scan);
     gButtons->addStretch();
     v->addLayout(gButtons);
-    layout->addWidget(groups);
+    rangeTab.second->addWidget(groups);
     auto *groupsHint = new QLabel(Strings::zh("collectionGroupsHint"), groups);
     groupsHint->setObjectName("muted");
     groupsHint->setWordWrap(true);
@@ -178,7 +198,7 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     });
     connect(m_expandForwards, &QCheckBox::toggled, this, [this] { markDirty(); });
 
-    auto *knowledge = new QGroupBox(QStringLiteral("群知识"), container);
+    auto *knowledge = new QGroupBox(QStringLiteral("群知识"), knowledgeTab.first);
     knowledge->setObjectName("knowledgeGroupBox");
     auto *kv = new QVBoxLayout(knowledge);
     m_knowledgeEnabled = new QCheckBox(QStringLiteral("启用群知识（独立总开关）"), knowledge);
@@ -195,6 +215,8 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     kEdit->setObjectName("knowledgeEdit");
     auto *kRemove = new QPushButton(QStringLiteral("移除群"), knowledge);
     kRemove->setObjectName("knowledgeRemove");
+    kEdit->setEnabled(false);
+    kRemove->setEnabled(false);
     auto *kScan = new QPushButton(Strings::zh("scanGroups"), knowledge);
     kScan->setObjectName("knowledgeScan");
     kb->addWidget(kAdd);
@@ -203,11 +225,11 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     kb->addWidget(kScan);
     kb->addStretch();
     kv->addLayout(kb);
-    auto *kHint = new QLabel(QStringLiteral("这里只列已选群；勾选仅控制该群开关，各子功能需分别启用。扫描和新增群不会自动开启知识功能。移除群会保存关闭标记及各子功能关闭状态（配置采用合并保存，不物理删除群键）。通知外发尚不支持，结果仅在本地查看。"), knowledge);
+    auto *kHint = new QLabel(QStringLiteral("勾选控制本群；子功能需单独开启。扫描或新增不会自动启用功能。"), knowledge);
     kHint->setWordWrap(true);
     kHint->setObjectName("muted");
     kv->addWidget(kHint);
-    layout->addWidget(knowledge);
+    knowledgeTab.second->addWidget(knowledge);
     connect(m_knowledgeEnabled, &QCheckBox::toggled, this, [this] { markDirty(); });
     connect(kAdd, &QPushButton::clicked, this, [this] { openKnowledgeDialog({}); });
     connect(kEdit, &QPushButton::clicked, this, [this] {
@@ -215,6 +237,11 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
             openKnowledgeDialog(m_knowledgeList->currentItem()->data(Qt::UserRole).toString());
     });
     connect(kRemove, &QPushButton::clicked, this, &CollectionPage::removeKnowledgeGroup);
+    connect(m_knowledgeList, &QListWidget::currentRowChanged, this, [kEdit, kRemove](int row) {
+        const bool selected = row >= 0;
+        kEdit->setEnabled(selected);
+        kRemove->setEnabled(selected);
+    });
     connect(kScan, &QPushButton::clicked, this, [this] {
         m_knowledgeScanPending = true;
         emit groupsScanRequested();
@@ -232,7 +259,7 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     });
 
     // 自定义采集规则
-    auto *rules = new QGroupBox(Strings::zh("customRules"), container);
+    auto *rules = new QGroupBox(Strings::zh("customRules"), rulesTab.first);
     auto *rv = new QVBoxLayout(rules);
     m_customRuleList = new QListWidget(rules);
     rv->addWidget(m_customRuleList);
@@ -254,12 +281,14 @@ CollectionPage::CollectionPage(QWidget *parent) : QWidget(parent) {
     rButtons->addWidget(rDown);
     rButtons->addStretch();
     rv->addLayout(rButtons);
-    layout->addWidget(rules);
-    auto *hint = new QLabel(Strings::zh("customRulesHint"), container);
+    rulesTab.second->addWidget(rules);
+    auto *hint = new QLabel(Strings::zh("customRulesHint"), rulesTab.first);
     hint->setObjectName("muted");
     hint->setWordWrap(true);
-    layout->addWidget(hint);
-    layout->addStretch();
+    rulesTab.second->addWidget(hint);
+    rulesTab.second->addStretch();
+    rangeTab.second->addStretch();
+    knowledgeTab.second->addStretch();
     connect(rAdd, &QPushButton::clicked, this, [this] { openCustomRuleDialog(-1); });
     connect(rEdit, &QPushButton::clicked, this, [this] {
         if (m_customRuleList->currentItem())
@@ -379,6 +408,7 @@ void CollectionPage::markDirty() {
     if (!m_schemaLoaded || m_loadingConfig) return;
     m_dirty = true;
     m_save->setEnabled(true);
+    m_message->setText(QStringLiteral("有未保存的更改"));
 }
 
 QJsonObject CollectionPage::buildPatch() const {
@@ -484,12 +514,24 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     dialog.setWindowTitle(scope.isEmpty() ? QStringLiteral("新增群知识配置") : QStringLiteral("编辑群知识配置"));
     dialog.resize(570, 700);
     auto *outer = new QVBoxLayout(&dialog);
-    auto *scroll = new QScrollArea(&dialog);
-    scroll->setWidgetResizable(true);
-    auto *content = new QWidget(scroll);
-    auto *form = new QFormLayout(content);
-    scroll->setWidget(content);
-    outer->addWidget(scroll);
+    auto *dialogTabs = new QTabWidget(&dialog);
+    dialogTabs->setObjectName("knowledgeDialogTabs");
+    auto makeSection = [&](const QString &title) {
+        auto *scroll = new QScrollArea(dialogTabs);
+        scroll->setWidgetResizable(true);
+        auto *content = new QWidget(scroll);
+        auto *form = new QFormLayout(content);
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        scroll->setWidget(content);
+        dialogTabs->addTab(scroll, title);
+        return qMakePair(content, form);
+    };
+    const auto basic = makeSection(QStringLiteral("基础设置"));
+    const auto contentSection = makeSection(QStringLiteral("内容与保留"));
+    const auto advanced = makeSection(QStringLiteral("AI高级设置"));
+    QWidget *content = basic.first;
+    QFormLayout *form = basic.second;
+    outer->addWidget(dialogTabs, 1);
     auto *groupId = new QLineEdit(scope.mid(6), content);
     groupId->setObjectName("knowledgeGroupId");
     groupId->setReadOnly(!scope.isEmpty());
@@ -505,6 +547,10 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
             if (!choices->currentData().toString().isEmpty()) groupId->setText(choices->currentData().toString());
         });
     }
+    auto *description = new QLineEdit(original.value("description").toString(), content);
+    description->setObjectName("knowledgeDescription");
+    description->setPlaceholderText(QStringLiteral("简要说明此群知识的用途（可选）"));
+    form->addRow(QStringLiteral("说明"), description);
     auto *groupEnabled = new QCheckBox(QStringLiteral("启用此群（不改变子功能开关）"), content);
     groupEnabled->setObjectName("knowledgeGroupEnabled");
     groupEnabled->setChecked(explicitEnabled(original));
@@ -525,6 +571,8 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     const QString match = original.value("match_mode").toString(m_knowledgeDefaults.value("match_mode").toString("hybrid"));
     matchMode->setCurrentText(match);
     form->addRow(QStringLiteral("匹配模式"), matchMode);
+    form = contentSection.second;
+    content = contentSection.first;
     const QJsonObject lifecycle = original.value("lifecycle").toObject();
     const QJsonObject defaultLifecycle = m_knowledgeDefaults.value("lifecycle").toObject();
     auto *lifecycleEnabled = new QCheckBox(QStringLiteral("自动归档过期讨论"), content);
@@ -551,6 +599,8 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     lifecycleHint->setObjectName("knowledgeLifecycleHint");
     lifecycleHint->setWordWrap(true);
     form->addRow(lifecycleHint);
+    form = basic.second;
+    content = basic.first;
     QMap<QString, QCheckBox *> featureBoxes;
     const QPair<QString, QString> features[] = {
         {"summary", QStringLiteral("总结")}, {"extraction", QStringLiteral("知识提取")},
@@ -568,6 +618,8 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
         form->addRow(box);
         featureBoxes.insert(feature.first, box);
     }
+    form = contentSection.second;
+    content = contentSection.first;
     const QJsonObject extraction = original.value("extraction").toObject();
     auto *trackTopics = new QCheckBox(QStringLiteral("追踪话题与后续反馈"), content);
     trackTopics->setObjectName("knowledgeTrackTopics");
@@ -600,6 +652,8 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     maxFile->setValue(files.value("max_file_mb").toInt(defaultFiles.value("max_file_mb").toInt(512)));
     maxFile->setSuffix(" MB");
     form->addRow(QStringLiteral("单文件上限"), maxFile);
+    form = advanced.second;
+    content = advanced.first;
     auto *budget = new QDoubleSpinBox(content);
     budget->setObjectName("knowledgeBudgetGb");
     budget->setRange(0, 100000);
@@ -608,6 +662,8 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     budget->setSuffix(" GB");
     form->addRow(QStringLiteral("群容量预算"), budget);
     const QJsonObject models = original.value("models").toObject();
+    form = advanced.second;
+    content = advanced.first;
     auto *tiered = new QCheckBox(QStringLiteral("启用分层模型"), content);
     tiered->setObjectName("knowledgeTieredEnabled");
     tiered->setChecked(explicitEnabled(models, "tiered_enabled"));
@@ -684,6 +740,7 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     const QString newScope = "group:" + groupId->text().trimmed();
     QJsonObject group = scope.isEmpty() ? disabledKnowledgeGroup(m_knowledgeGroups.value(newScope).toObject()) : original;
     group.insert("enabled", groupEnabled->isChecked());
+    group.insert("description", description->text().trimmed());
     QJsonArray topicArray;
     for (const QString &line : topics->toPlainText().split('\n')) {
         if (!line.trimmed().isEmpty()) topicArray.append(line.trimmed());

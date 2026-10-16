@@ -8,13 +8,13 @@ QString Strings::zh(const QString &key) {
     if (key == "overview") return "概览";
     if (key == "settings") return "设置";
     if (key == "logs") return "日志";
-    if (key == "reports") return "报告";
+    if (key == "reports") return "资料中心";
     if (key == "start") return "启动";
     if (key == "stop") return "停止";
     if (key == "restart") return "重启";
     if (key == "refresh") return "刷新";
     if (key == "openLogs") return "打开日志";
-    if (key == "openReports") return "打开报告";
+    if (key == "openReports") return "打开资料中心";
     if (key == "openConfig") return "打开配置目录";
     if (key == "importHistory") return "立即读取历史";
     if (key == "service") return "服务状态";
@@ -147,7 +147,7 @@ QString Strings::zh(const QString &key) {
     if (key == "sub_chat") return "人设与聊天回复";
     if (key == "sub_settings") return "机器人运行配置";
     if (key == "sub_logs") return "bot 与 NapCat 实时日志";
-    if (key == "sub_reports") return "日报与图库浏览入口";
+    if (key == "sub_reports") return "群知识、待跟进、术语与采集资料";
     return key;
 }
 

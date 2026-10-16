@@ -461,6 +461,8 @@ def cmd_view(args: argparse.Namespace) -> int:
             return 0
         from .maintenance import sync_image_files
         counts = sync_image_files(REPO_ROOT)
+        from .knowledge import write_view as write_knowledge_view
+        write_knowledge_view(config.data_dir, config)
         categories = []
         for name, count in sorted(counts.items()):
             if name.startswith(('image_', 'missing_', 'candidates_', 'obfuscation_', 'empty_', 'resource_', 'archive_')):

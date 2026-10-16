@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
+#include <QTabWidget>
 #include <QScopeGuard>
 #include "ui/pages/CollectionPage.h"
 #include "core/AvatarCache.h"
@@ -46,7 +47,36 @@ private slots:
     void providerOptionsAndReviewProviderRoundTrip();
     void knowledgeOptInsRoundTrip();
     void lifecycleRoundTrip();
+    void dialogTabsAndDescriptionRoundTrip();
 };
+
+static QJsonObject savePatch(CollectionPage &page);
+static QJsonObject groupsOf(const QJsonObject &patch);
+static void selectGroup(CollectionPage &page, const QString &scope);
+
+void TestKnowledgeGroups::dialogTabsAndDescriptionRoundTrip() {
+    CollectionPage page;
+    page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"groups", QJsonObject{{
+        "group:123", QJsonObject{{"description", "原说明"}}
+    }}}}}});
+    selectGroup(page, "group:123");
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>("knowledgeDialog");
+        QVERIFY(dialog);
+        auto *tabs = dialog->findChild<QTabWidget *>("knowledgeDialogTabs");
+        QVERIFY(tabs);
+        QCOMPARE(tabs->count(), 3);
+        QCOMPARE(tabs->tabText(0), QStringLiteral("基础设置"));
+        auto *description = dialog->findChild<QLineEdit *>("knowledgeDescription");
+        QVERIFY(description);
+        QCOMPARE(description->text(), QStringLiteral("原说明"));
+        description->setText("新说明");
+        dialog->findChild<QDialogButtonBox *>("knowledgeDialogButtons")->button(QDialogButtonBox::Ok)->click();
+    });
+    page.findChild<QPushButton *>("knowledgeEdit")->click();
+    QCOMPARE(groupsOf(savePatch(page)).value("group:123").toObject().value("description").toString(),
+             QStringLiteral("新说明"));
+}
 
 static QJsonObject savePatch(CollectionPage &page) {
     QSignalSpy spy(&page, &CollectionPage::saveRequested);

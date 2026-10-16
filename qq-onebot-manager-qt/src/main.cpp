@@ -268,8 +268,36 @@ int main(int argc, char *argv[]) {
 
     auto *reports = qobject_cast<ReportsPage *>(window.pageWidget("reports"));
     auto *reportControl = new ServiceControl(&window);
-    QObject::connect(reports, &ReportsPage::openRequested, [](const QString &rel) {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/" + rel));
+    QObject::connect(reports, &ReportsPage::openRequested, reports, [reports](const QString &rel) {
+        const QUrl target = Paths::reportUrl(rel);
+        const QString fileName = QFileInfo(target.toLocalFile()).fileName();
+        const bool knowledgePage = QStringList{"knowledge.html", "glossary.html", "knowledge-summary.html", "knowledge-files.html"}.contains(fileName);
+        if (knowledgePage && !QFileInfo::exists(target.toLocalFile())) {
+            if (reports->property("preparingReport").toBool()) return;
+            reports->setProperty("preparingReport", true);
+            reports->setViewStatus(QStringLiteral("正在准备资料页…"));
+            auto *prepare = new ServiceControl(reports);
+            QObject::connect(prepare, &ServiceControl::finished, reports, [reports, prepare, target, fileName](bool ok, const QString &out) {
+                reports->setProperty("preparingReport", false);
+                QUrl ready = target;
+                const QString generated = QJsonDocument::fromJson(out.toUtf8()).object().value("path").toString();
+                if (ok && !generated.isEmpty()) {
+                    ready = QUrl::fromLocalFile(QFileInfo(generated).dir().filePath(fileName));
+                    ready.setFragment(target.fragment());
+                }
+                if (ok && QFileInfo::exists(ready.toLocalFile())) {
+                    reports->setViewStatus(QStringLiteral("资料页已准备好"));
+                    QDesktopServices::openUrl(ready);
+                } else {
+                    reports->setViewStatus(QStringLiteral("资料页准备失败"));
+                    QMessageBox::warning(reports, QStringLiteral("暂时无法打开资料"), QStringLiteral("请更新报告后重试。此操作只读取已有资料，不会调用 AI。"));
+                }
+                prepare->deleteLater();
+            });
+            prepare->run({"-m", "qq_onebot_whitelist.knowledge", "view"});
+            return;
+        }
+        QDesktopServices::openUrl(target);
     });
     QObject::connect(reports, &ReportsPage::previewRequested, reportControl, [reportControl] {
         reportControl->run({"-m", "qq_onebot_whitelist.control", "report-preview"});

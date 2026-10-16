@@ -17,7 +17,7 @@ PAGES = (
     ("knowledge.html", "知识", "knowledge.html"),
     ("glossary.html", "术语", "glossary.html"),
     ("knowledge-summary.html", "总结", "knowledge-summary.html"),
-    ("knowledge-files.html", "文件", "knowledge-files.html"),
+    ("knowledge-files.html", "保留文件", "knowledge-files.html"),
 )
 
 
@@ -40,21 +40,46 @@ def _nav(current: str) -> str:
     for filename, label, href in PAGES:
         active = filename == current
         links.append(f'<a href="{href}"' + (' aria-current="page"' if active else '') + f'>{label}</a>')
-    return '<nav aria-label="报告分类">' + " · ".join(links) + '</nav>'
+    return '<nav class="report-nav" aria-label="报告分类">' + ''.join(links) + '</nav>'
+
+
+def _excerpt(value, limit=240):
+    text = redact_secrets(str(value or '').strip())
+    return '<p class="card-excerpt">' + _safe(text[:limit] + ('…' if len(text) > limit else '')) + '</p>' if text else ''
 
 
 def _frame(filename: str, title: str, cards: list[str], groups: set[str], filters: str) -> str:
-    opts = ''.join(f'<option value="{_safe(group)}">{_safe(group)}</option>' for group in sorted(groups))
+    from .knowledge_presentation import STYLE, SCRIPT
+    opts = ''.join(f'<option value="{_safe(group)}">{_safe(group.removeprefix("group:"))}</option>' for group in sorted(groups))
     count = len(cards)
-    content = ''.join(cards) if cards else '<p class="empty">暂无内容。</p>'
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
-<style>
-body{{font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif;background:#f4f6f8;color:#202633;max-width:980px;margin:28px auto;padding:0 18px}}nav{{padding:12px 16px;background:#e8edf4;border-radius:10px}}nav a{{color:#174e87;text-decoration:none;padding:4px 8px}}nav a[aria-current]{{font-weight:700;color:#172b46;text-decoration:underline}}.filters{{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0}}input,select{{font:inherit;padding:8px 10px;border:1px solid #aab4c2;border-radius:7px;background:white}}article{{background:white;padding:18px 20px;margin:14px 0;border-radius:10px;box-shadow:0 1px 4px #172b4612}}article h2{{font-size:1.2rem;margin:.1rem 0 .4rem}}p.meta{{color:#586174;font-size:.92rem}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}}details{{margin-top:10px}}.empty{{padding:24px;background:white;border-radius:10px}}footer{{color:#657184;font-size:.9rem;margin:28px 0}}
-</style></head><body><header><h1>{title}</h1><p>共 {count} 项。来源编号为本地消息数据库编号。</p>{_nav(filename)}</header>
-<div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}<label>搜索 <input id="search" type="search" placeholder="搜索本页内容" aria-label="搜索本页内容"></label></div>
-<p>当前显示 <span id="shown-count">{count}</span> 项</p><main>{content}</main><p id="filter-empty" hidden>没有符合筛选条件的内容。</p><footer>内容来自本地群消息记录与分析结果；引用编号仅在本机数据库中有效。</footer>
-<script>const group=document.getElementById('group'),search=document.getElementById('search');function filterRows(){{const g=group.value,q=search.value.toLocaleLowerCase(),v=document.getElementById('value')?.value||'',s=document.getElementById('term-status')?.value||'',c=document.getElementById('category')?.value||'',k=document.getElementById('term-kind')?.value||'',lane=document.getElementById('lane')?.value||'',topic=document.getElementById('topic')?.value||'';let count=0;document.querySelectorAll('article').forEach(card=>{{const category=card.dataset.category||'knowledge',topics=(card.dataset.topics||'').split(','),base=!(g&&card.dataset.group!==g)&&!(v&&card.dataset.value!==v)&&!(c==='durable'&&category==='transient')&&!(c&&c!=='durable'&&category!==c)&&!(lane&&card.dataset.lane!==lane)&&!(topic&&!topics.includes(topic)),variants=card.querySelectorAll?.('[data-term-variant]')||[];if(variants.length){{let any=false;const shared=(card.dataset.termShared||'').toLocaleLowerCase();variants.forEach(item=>{{const matchesSearch=!q||shared.includes(q)||(item.textContent||'').toLocaleLowerCase().includes(q);item.hidden=!(base&&matchesSearch&&(!s||(item.dataset.status===s||item.dataset.origin===s))&&(!k||item.dataset.inference===k));if(!item.hidden)any=true;}});card.hidden=!any;}}else{{card.hidden=!(base&&card.textContent.toLocaleLowerCase().includes(q)&&(!s||(card.dataset.status===s||card.dataset.origin===s))&&(!k||card.dataset.inference===k));}}if(!card.hidden)count++;}});document.getElementById('filter-empty').hidden=count>0;const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;}}group.addEventListener('change',filterRows);search.addEventListener('input',filterRows);document.getElementById('value')?.addEventListener('change',filterRows);document.getElementById('term-status')?.addEventListener('change',filterRows);document.getElementById('category')?.addEventListener('change',filterRows);document.getElementById('term-kind')?.addEventListener('change',filterRows);document.getElementById('lane')?.addEventListener('change',filterRows);document.getElementById('topic')?.addEventListener('change',filterRows);filterRows();</script>
-</body></html>'''
+    descriptions = {
+        'knowledge.html': '先找可参考的知识，未解决的问题可在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
+        'glossary.html': '遇到不熟悉的行业说法，先查释义，再展开原消息核对。同词的不同解释分别保留。',
+        'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
+        'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
+    }
+    empty = ('<div class="empty"><strong>暂无内容。</strong><p>先在管理器的“采集 → 群知识”选择群，开启需要的整理功能。</p>'
+             '<p>已有结果时，可在资料中心更新报告后查看。</p></div>')
+    content = ''.join(cards) if cards else empty
+    queues = ''
+    if filename == 'knowledge.html':
+        lane_counts = {lane: sum(f'data-lane="{lane}"' in card for card in cards) for lane in ('knowledge', 'followup', 'archive')}
+        queues = '<div class="queues" role="group" aria-label="资料处理队列">' + ''.join(
+            f'<button type="button" data-lane-target="{lane}" aria-pressed="{str(lane == "knowledge").lower()}">{label}<span class="queue-count">{lane_counts.get(lane,count)}</span></button>'
+            for lane,label in [('knowledge','知识'),('followup','待跟进'),('archive','已归档'),('','全部')]) + '</div>'
+        filters = filters.replace('<label>处理队列', '<label class="screen-reader">处理队列')
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · 群资料库</title>
+<style>{STYLE}</style></head><body><a class="skip-link" href="#results">跳到资料列表</a>
+<header id="report-top" class="site-header"><div class="header-inner"><a class="brand" href="knowledge.html">群资料库<small>从群聊中整理，回到原文中核对</small></a>{_nav(filename)}</div></header>
+<div class="shell"><div class="page-heading"><h1>{title}</h1><p class="page-intro">{descriptions[filename]}</p><span class="page-total">本页共 {count} 项</span>{queues}</div>
+<section class="toolbar" aria-label="查找资料"><div class="search-row"><label class="search-label"><span>搜索</span><input id="search" type="search" placeholder="输入关键词查找本页资料" aria-label="搜索本页内容" autocomplete="off"></label><button type="button" id="clear-filters" class="clear-button">清除筛选</button></div>
+<div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div></section>
+<div class="result-line"><span>找到 <strong id="shown-count">{count}</strong> 项</span><span>展开详情可查看原消息与整理依据</span></div>
+<main id="results">{content}</main><div id="filter-empty" class="empty" hidden><strong>没有符合条件的资料</strong><p>试试更短的关键词，或清除筛选条件。</p></div>
+<div class="pager"><button type="button" id="previous-page">上一页</button><span id="page-info" aria-live="polite"></span><button type="button" id="next-page">下一页</button></div>
+<footer><a class="back-top" href="#report-top">回到顶部 ↑</a>本地整理报告 · 群友说法与已验证反馈会分别标注；来源编号用于回查原消息。</footer></div>
+<script>{SCRIPT}</script></body></html>'''
+
 
 
 def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets: list[dict],
@@ -99,8 +124,10 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
             f'<h2>{_safe(item.get("title"))}</h2><p class="meta">主题：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
             f'{_safe(item.get("topic"))} · {_safe(item.get("kind"))} · '
             f'{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state} · {msgrefs}</p>'
-            f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details({**item, "lifecycle": lifecycle})}{evidence(item.get("scope"), ids)}'
-            f'{_feedback_controls(item)}</article>')
+            + _excerpt(item.get('body', item.get('summary')))
+            + '<details><summary>查看完整内容与依据</summary>'
+            + f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details({**item, "lifecycle": lifecycle})}{evidence(item.get("scope"), ids)}'
+            + f'{_feedback_controls(item)}</details></article>')
     by_key = {item.get('key'): item for item in items}
     for thread in threads:
         groups.add(thread['scope'])
@@ -139,18 +166,20 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                             + _feedback_controls(by_key.get(event['item_key'], {})) + '</section>')
         knowledge_cards.append(f'<article data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
             f'<h2>{_safe(thread["title"])}</h2><p class="meta">主题：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state_label} · {_status(thread["status"], category)} · 话题记录 {len(events)} 次</p>'
+            + _excerpt(thread.get('known') or (events[-1].get('summary') if events else ''))
+            + '<details><summary>查看整理内容与缺少信息</summary>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
                         'resource': thread.get('resource'), 'quality': latest.get('quality'),
-                        'quality_reason': latest.get('quality_reason'), 'lifecycle': lifecycle})
+                        'quality_reason': latest.get('quality_reason'), 'lifecycle': lifecycle}) + '</details>'
             + '<details><summary>查看讨论进展与证据</summary>' + ''.join(timeline) + '</details></article>')
     knowledge_filters = '<label>处理队列 <select id="lane"><option value="knowledge">知识</option><option value="followup">待跟进</option><option value="archive">归档</option><option value="">全部</option></select></label>'
     knowledge_filters += '<label>主题 <select id="topic"><option value="">全部主题</option>' + ''.join(
         f'<option value="{_safe(key)}">{_safe(label)}</option>' for key, label in TOPICS.items()) + '</select></label>'
-    knowledge_filters += '<label>资料类型 <select id="category"><option value="">全部类型</option>' + ''.join(
+    knowledge_filters += '<details class="more-filters"><summary>更多筛选</summary><div><label>资料类型 <select id="category"><option value="">全部类型</option>' + ''.join(
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
     knowledge_filters += '<label>价值 <select id="value"><option value="">全部知识</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select></label>'
+    knowledge_filters += '</div></details>'
     knowledge_html = _frame("knowledge.html", "群知识", knowledge_cards, groups, knowledge_filters)
-    knowledge_html = knowledge_html.replace('<h1>群知识</h1>', '<h1>群知识</h1><p>文字讨论可独立收录，不要求图片或附件。术语解释可从术语页独立查看。</p>')
     from .knowledge_feedback import feedback_script, feedback_token
     knowledge_html = knowledge_html.replace("</body>", feedback_script(feedback_token(data_dir)) + "</body>")
 
@@ -183,7 +212,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                         '<li>#' + _safe(item.get('message_id')) + '：' + _safe(item.get('quote')) + '</li>'
                         for item in quotes if isinstance(item, dict) and item.get('quote')) + '</ul>'
             variant_cards.append(f'<section data-term-variant="1" data-status="{_safe(status)}" data-origin="{_safe(origin)}" data-inference="{_safe(term.get("inference_kind") or "unconfirmed")}">'
-                                  f'<h3>{_safe(explanation)}</h3><p class="meta">{label} · {reftext}</p>{annotation}{evidence(term_scope, ids)}</section>')
+                                  f'<h3>{_safe(explanation)}</h3><p class="meta">{label} · {reftext}</p><details><summary>查看释义依据与原文</summary>{annotation}{evidence(term_scope, ids)}</details></section>')
         spellings = '、'.join(_safe(value) for value in group["spellings"])
         term_cards.append(f'<article data-group="{_safe(term_scope)}" data-term-shared="{_safe(term_scope + " " + " ".join(group["spellings"]))}"><h2>{_safe(group["term"])}</h2>'
                           f'<p class="meta">{_safe(term_scope)} · \u8bcd\u5f62 {spelling_count} \u79cd · \u91ca\u4e49 {len(variant_cards)} \u79cd · {spellings}</p>'
