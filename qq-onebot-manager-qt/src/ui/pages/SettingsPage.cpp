@@ -208,7 +208,7 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
 
         // 以下功能开关已拆分到“采集”一级页面
         if (key == "features.image_processing" || key == "features.link_analysis"
-            || key == "features.link_metadata") {
+            || key == "features.link_metadata" || key == "knowledge.enabled") {
             continue;
         }
         // 群采集/群搬运/聊天已有独立一级页面，设置页不再重复展示

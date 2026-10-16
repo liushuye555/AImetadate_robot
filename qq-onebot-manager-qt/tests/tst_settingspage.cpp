@@ -26,6 +26,8 @@ private slots:
     void providerWithoutKeyLocationCannotBeSaved();
     void providerEditPreservesSettingsAndExistingKeyReference();
     void numericFieldsValidateOpenBoundsAndDecimals();
+    void settingsCannotOverwriteCollectionKnowledgeSwitch_data();
+    void settingsCannotOverwriteCollectionKnowledgeSwitch();
 };
 
 static QByteArray sampleSchema() {
@@ -174,6 +176,44 @@ void TestSettingsPage::numericFieldsValidateOpenBoundsAndDecimals() {
     QVERIFY(save->isEnabled());
     save->click();
     QCOMPARE(saved.count(), 1);
+}
+
+void TestSettingsPage::settingsCannotOverwriteCollectionKnowledgeSwitch_data() {
+    QTest::addColumn<bool>("cachedEnabled");
+    QTest::newRow("collection-has-enabled") << false;
+    QTest::newRow("collection-has-disabled") << true;
+}
+
+void TestSettingsPage::settingsCannotOverwriteCollectionKnowledgeSwitch() {
+    QFETCH(bool, cachedEnabled);
+    // A settings save can already be queued when the collection save finishes,
+    // before the asynchronous schema refresh reaches this page.
+    const QJsonArray schema{
+        QJsonObject{{"key", "knowledge.enabled"}, {"kind", "bool"},
+            {"default", cachedEnabled}, {"section", "knowledge"}},
+        QJsonObject{{"key", "knowledge.defaults.interval_minutes"}, {"kind", "number"},
+            {"default", 15}, {"min", 1}, {"max", 1440}, {"section", "knowledge"}},
+        QJsonObject{{"key", "onebot.ws_url"}, {"kind", "text"},
+            {"default", "ws://before"}, {"section", "runtime"}}
+    };
+    SettingsPage page;
+    page.setSchema(schema.toVariantList());
+    bool edited = false;
+    for (auto *field : page.findChildren<QLineEdit *>()) {
+        if (field->text() == "ws://before") {
+            field->setText("ws://after");
+            edited = true;
+        }
+    }
+    QVERIFY(edited);
+    QSignalSpy saved(&page, &SettingsPage::saveRequested);
+    page.findChild<QPushButton *>("primary")->click();
+    QCOMPARE(saved.count(), 1);
+    const auto patch = saved.takeFirst().at(0).toJsonObject();
+    QCOMPARE(patch.value("onebot.ws_url").toString(), QStringLiteral("ws://after"));
+    QVERIFY(patch.contains("knowledge.defaults.interval_minutes"));
+    QVERIFY2(!patch.contains("knowledge.enabled"),
+             "Saving settings must not write the separately owned collection knowledge switch");
 }
 QTEST_MAIN(TestSettingsPage)
 #include "tst_settingspage.moc"
