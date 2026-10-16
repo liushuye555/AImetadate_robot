@@ -5,33 +5,61 @@ WINDOWS_DIR = Path(__file__).parents[1] / "scripts" / "windows"
 
 
 def read_script(name: str) -> str:
-    return (WINDOWS_DIR / name).read_text(encoding="ascii")
+    return (WINDOWS_DIR / name).read_text(encoding="utf-8-sig")
 
 
 def test_active_start_scripts_do_not_call_dot_env():
     for path in WINDOWS_DIR.glob("start-*"):
-        assert "call .env" not in path.read_text(encoding="ascii").lower(), path.name
+        assert "call .env" not in path.read_text(encoding="utf-8-sig").lower(), path.name
 
 
-def test_hidden_scripts_default_to_local_napcat_with_optional_overrides():
-    for name in (
-        "start-qq-onebot-whitelist-hidden.ps1",
-        "stop-qq-onebot-whitelist-hidden.ps1",
-    ):
-        script = read_script(name)
-        assert "Join-Path $BotDir 'runtime\\NapCat.Shell.Windows.Node'" in script
-        assert "$env:NAPCAT_DIR" in script
-        assert "launcher.config.ps1" in script
-        assert "$DefaultNapcatDir" in script
-        assert "if (-not (Test-Path $NapcatDir))" in script
+def test_start_entry_points_delegate_to_python_control():
+    hidden = read_script("start-qq-onebot-whitelist-hidden.ps1")
+    assert "$Python -m qq_onebot_whitelist.control start" in hidden
+    assert ".venv\\Scripts\\python.exe" in hidden
+    assert "qq_onebot_whitelist.onebot" not in hidden
+    assert "napcat.bat" not in hidden.lower()
+    assert "Start-Process" not in hidden
+    assert "Timer" not in hidden
+
+    batch = read_script("start-qq-onebot-whitelist.bat")
+    assert "start-qq-onebot-whitelist-hidden.ps1" in batch
+    assert "qq_onebot_whitelist.onebot" not in batch
+    assert "napcat.bat" not in batch.lower()
 
 
-def test_tray_has_schedule_settings_and_safe_exit_order():
+def test_stop_entry_points_delegate_to_python_control_without_killing_processes():
+    hidden = read_script("stop-qq-onebot-whitelist-hidden.ps1")
+    assert "$Python -m qq_onebot_whitelist.control stop" in hidden
+    assert ".venv\\Scripts\\python.exe" in hidden
+    for forbidden in ("taskkill", "Stop-Process", "napcat.bat", "qq_onebot_whitelist.onebot"):
+        assert forbidden.lower() not in hidden.lower()
+
+    batch = read_script("stop-qq-onebot-whitelist.bat")
+    assert "stop-qq-onebot-whitelist-hidden.ps1" in batch
+    assert "taskkill" not in batch.lower()
+
+
+def test_manager_launcher_uses_qt_only_and_has_no_fallback():
+    script = read_script("start-qq-onebot-manager.ps1")
+    assert "qq-onebot-manager-qt\\build\\qq-onebot-manager-qt.exe" in script
+    assert "Test-Path -LiteralPath $PanelExe" in script
+    assert "Start-Process -FilePath $PanelExe" in script
+    assert "Write-Error" in script and "exit 1" in script
+    assert "LegacyExe" not in script
+    assert "manager\\target" not in script
+    assert "qq-onebot-tray.ps1" not in script
+
+
+def test_legacy_tray_entry_redirects_before_watchdog_body():
     script = read_script("qq-onebot-tray.ps1")
-    assert "set-analysis-windows.ps1" in script
-    assert script.index("Stop all and exit") < script.index(
-        "Exit tray (keep services running)"
-    )
+    prefix = script.split("$ErrorActionPreference", maxsplit=1)[0]
+    assert "start-qq-onebot-manager.ps1" in prefix
+    assert "exit $LASTEXITCODE" in prefix
+    assert prefix.index("start-qq-onebot-manager.ps1") < prefix.index("exit $LASTEXITCODE")
+    assert "System.Windows.Forms" not in prefix
+    assert "Start-Services" not in prefix
+    assert "qq_onebot_whitelist.onebot" not in prefix
 
 
 def test_schedule_settings_use_settings_cli_contract():
@@ -44,31 +72,11 @@ def test_schedule_settings_use_settings_cli_contract():
     assert "'--json'" in script
 
 
-def test_stop_all_exit_waits_for_stop_script():
-    script = read_script("qq-onebot-tray.ps1")
-    handler = script[script.index("$stopExitItem.add_Click"):]
-    assert "Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1' -Wait" in handler
-
-
-def test_stop_script_returns_success_after_best_effort_cleanup():
-    script = read_script("stop-qq-onebot-whitelist-hidden.ps1")
-    assert 'Test-OwnedProcess' in script
-    assert 'if ($remaining)' in script
-    assert 'exit 1' in script
-    assert script.rstrip().endswith('exit 0')
-
-
-def test_start_script_only_reuses_owned_processes():
-    script = read_script("start-qq-onebot-whitelist-hidden.ps1")
-    assert "Test-OwnedProcessByPidFile" in script
-    assert "Test-OwnedProcessByPidFile -PidPath $botPid -Needle $BotDir" in script
-    assert '$_.CommandLine -like "*$BotDir*"' in script
-
-
-def test_tray_shortcut_uses_absolute_windows_powershell():
+def test_tray_shortcut_uses_absolute_windows_powershell_fallback():
     script = read_script("install-tray-shortcut.ps1")
     assert "System32\\WindowsPowerShell\\v1.0\\powershell.exe" in script
     assert "$Shortcut.TargetPath = $PowerShell" in script
+    assert "$Shortcut.TargetPath = $PanelExe" in script
 
 
 def test_status_probe_reports_services_and_qq_login():
@@ -83,34 +91,3 @@ def test_status_probe_reports_services_and_qq_login():
 def test_status_probe_forces_utf8_stdout_for_chinese_nicknames():
     script = read_script("get-qq-onebot-status.ps1")
     assert "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)" in script
-
-
-def test_tray_shows_status_webui_and_supervises_services():
-    script = read_script("qq-onebot-tray.ps1")
-    assert 'Open NapCat WebUI' in script
-    assert 'Restart bot and NapCat' in script
-    assert 'get-qq-onebot-status.ps1' in script
-    assert 'System.Windows.Forms.Timer' in script
-    assert '$ManualStopPath' in script
-    assert '$StartSignalPath' in script
-    assert 'Get-AutoRestartEnabled' in script
-    assert '(Get-AutoRestartEnabled) -and' in script
-    assert 'AddSeconds(30)' in script
-    assert 'NapCat:' in script
-    assert 'QQ:' in script
-    assert 'OneBot:' in script
-    assert 'Bot:' in script
-
-
-def test_second_tray_launch_signals_existing_instance():
-    script = read_script("qq-onebot-tray.ps1")
-    mutex_exit = script.index('if (-not $createdNew)')
-    assert '$StartSignalPath' in script[:mutex_exit]
-    assert 'Set-Content' in script[mutex_exit:mutex_exit + 300]
-
-
-def test_manual_stop_cancels_pending_launcher():
-    script = read_script("qq-onebot-tray.ps1")
-    assert 'function Stop-PendingLauncher' in script
-    stop_handler = script[script.index('$stopItem.add_Click'):]
-    assert 'Stop-PendingLauncher' in stop_handler[:500]

@@ -147,7 +147,6 @@ def config_schema(data: dict[str, Any], *, env_path: Path | None = None) -> list
         field('features.ai_context', 'bool', features.get('ai_context', ai.get('enabled', True)), 'Run AI context analysis', '运行 AI 上下文分析', section='features'),
         field('features.daily_report', 'bool', features.get('daily_report', daily.get('enabled', True)), 'Send daily reports', '发送日报', section='features'),
         field('features.startup_history', 'bool', features.get('startup_history', startup.get('enabled', True)), 'Load startup history', '启动时读取历史消息', section='features'),
-        field('features.auto_restart', 'bool', features.get('auto_restart', True), 'Auto-restart failed services', '自动重启异常服务', section='features'),
         field('keepalive.enabled', 'bool', keepalive.get('enabled', False), 'Enable scheduled group keepalive', '启用定时群保活', section='keepalive'),
         field('keepalive.interval_minutes', 'number', keepalive.get('interval_minutes', 0), 'Keepalive interval (minutes)', '群保活间隔（分钟）', section='keepalive', min=0, max=10080),
         field('keepalive.groups', 'list', keepalive.get('groups', []), 'Keepalive groups', '保活群列表', section='keepalive'),

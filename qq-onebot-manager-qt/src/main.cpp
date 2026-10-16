@@ -10,7 +10,8 @@
 #include <QTimer>
 #include <QUrl>
 #include "app/SingleInstance.h"
-#include "core/AutoRestart.h"
+#include "core/ManagedRuntime.h"
+#include <functional>
 #include "core/ConfigBridge.h"
 #include "core/Notifier.h"
 #include "core/Paths.h"
@@ -47,10 +48,26 @@ int main(int argc, char *argv[]) {
     app.setWindowIcon(QIcon(":/icons/app.png"));
 
     SingleInstance single("qq-onebot-manager-qt");
-    if (!single.tryLock()) {
-        QMessageBox::information(nullptr, "QQ OneBot 管理器", "管理器已在运行。");
-        return 0;
+    const QString action = app.arguments().contains("--stop-services") ? "stop-services"
+        : app.arguments().contains("--restart-services") ? "restart-services" : "show";
+    if (!single.tryLock(action)) return 0;
+    if (action == "stop-services") return 0;
+
+    ManagedRuntime runtime(Paths::repoRoot());
+    QString runtimeError;
+    if (!runtime.initialize(&runtimeError)) {
+        QMessageBox::critical(nullptr, QStringLiteral("无法启动托管服务"), runtimeError);
+        return 1;
     }
+    bool shuttingDown = false;
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &runtime, [&] {
+        shuttingDown = true;
+        runtime.shutdown();
+    });
+    QObject::connect(&runtime, &ManagedRuntime::fatal, &app, [&](const QString &) {
+        shuttingDown = true;
+        app.exit(1);
+    });
 
     ThemeManager::apply(&app, ThemeManager::loadStored());
 
@@ -64,6 +81,12 @@ int main(int argc, char *argv[]) {
         {"reports", "reports", makeReports},
     };
     MainWindow window(pages);
+    QObject::connect(&single, &SingleInstance::anotherInstanceRequested, &window, [&window] {
+        if (window.isMinimized()) window.showNormal();
+        else window.show();
+        window.raise();
+        window.activateWindow();
+    });
 
     auto *overview = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
     // 采集按钮初始状态来自暂停标记文件（不依赖滞后的状态刷新）
@@ -77,19 +100,39 @@ int main(int argc, char *argv[]) {
     auto *serviceControl = new ServiceControl(&window);
     auto *collectionControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
-    auto *autoRestart = new AutoRestart(serviceControl, &window);
-    autoRestart->setManualStop(QFileInfo::exists(Paths::manualStopFile()));
+    overview->setAutoRestartText(QStringLiteral("后台随管理器启停"));
+    bool pendingRestart = false;
+    std::function<void(bool)> runBackend;
+    runBackend = [&](bool restart) {
+        if (shuttingDown) return;
+        if (serviceControl->isRunning()) {
+            pendingRestart = pendingRestart || restart;
+            return;
+        }
+        runtime.beginTransition();
+        serviceControl->run({"-m", "qq_onebot_whitelist.control", restart ? "bot-restart" : "start"});
+    };
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
-    QObject::connect(serviceControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
-        if (!ok) overview->setHint("操作失败：" + out.trimmed());
+    QObject::connect(serviceControl, &ServiceControl::finished, overview, [&](bool ok, const QString &out) {
+        if (shuttingDown) return;
+        if (!ok) {
+            overview->setHint("托管启动失败：" + out.trimmed());
+            runtime.shutdown();
+            app.exit(1);
+            return;
+        }
+        if (pendingRestart) {
+            pendingRestart = false;
+            runBackend(true);
+            return;
+        }
+        const qint64 pid = QJsonDocument::fromJson(out.toUtf8()).object().value("pid").toInteger();
+        runtime.expectBot(pid);
     });
     QObject::connect(collectionControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
         if (!ok) overview->setHint("切换采集失败：" + out.trimmed());
     });
 
-    const auto runControl = [serviceControl](const QStringList &args) {
-        serviceControl->run(args);
-    };
     const auto fetchStats = [overview, statsControl]() {
         statsControl->run({"-m", "qq_onebot_whitelist.control", "stats"});
     };
@@ -103,7 +146,7 @@ int main(int argc, char *argv[]) {
                                  obj.value("links").toInt(),
                                  lastReport.isEmpty() ? QStringLiteral("无") : lastReport);
     });
-    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, runControl, fetchStats, autoRestart, overview, collectionControl](const QString &action) {
+    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, &runBackend, fetchStats, overview, collectionControl](const QString &action) {
         if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -116,15 +159,12 @@ int main(int argc, char *argv[]) {
             statusMonitor->refresh();
             fetchStats();
         } else if (action == "start" || action == "restart") {
-            autoRestart->setManualStop(false);
             overview->setHint(QString());
-            runControl({"-m", "qq_onebot_whitelist.control", "start"});
+            runBackend(action == "restart");
         } else if (action == "stop") {
-            autoRestart->setManualStop(true);
-            overview->setHint(Strings::zh("manualStop"));
-            runControl({"-m", "qq_onebot_whitelist.control", "stop"});
+            QApplication::quit();
         } else if (action == "history") {
-            runControl({"-m", "qq_onebot_whitelist.control", "start"});
+            runBackend(false);
         } else if (action == "collection-toggle") {
             // 用独立控制通道，避免被“启动”等长任务占用而丢弃命令
             collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",
@@ -154,18 +194,6 @@ int main(int argc, char *argv[]) {
     });
     QObject::connect(configBridge, &ConfigBridge::saved, settings, [settings](bool ok, const QString &msg) {
         settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
-    });
-    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, [autoRestart, overview](bool ok, const QVariant &schema) {
-        if (!ok) return;
-        const QJsonArray items = QJsonDocument::fromVariant(schema).array();
-        for (const QJsonValue &value : items) {
-            if (value.toObject().value("key").toString() == "features.auto_restart") {
-                const bool enabled = value.toObject().value("default").toBool(true);
-                autoRestart->setEnabled(enabled);
-                overview->setAutoRestartText(enabled ? Strings::zh("autoRestartOn") : Strings::zh("autoRestartOff"));
-                break;
-            }
-        }
     });
     QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
         ThemeManager::apply(qApp, ThemeManager::fromName(theme));
@@ -218,13 +246,11 @@ int main(int argc, char *argv[]) {
         if (doc.isArray())
             chatPage->setGroups(doc.array().toVariantList());
     });
-    // 配置保存后只重启 bot（不动 NapCat，避免重新扫码），让新配置立即生效；
-    // 使用独立控制通道，避免被其他按钮任务占用而静默丢弃
-    auto *restartControl = new ServiceControl(&window);
-    QObject::connect(configBridge, &ConfigBridge::saved, [configBridge, restartControl](bool ok, const QString &) {
+    // 所有重启共用控制通道，连续保存只排队一次，避免新旧后台互相终止。
+    QObject::connect(configBridge, &ConfigBridge::saved, [configBridge, &runBackend](bool ok, const QString &) {
         if (!ok) return;
-        configBridge->fetch();  // 保存后刷新所有页面，立即反映新配置
-        restartControl->run({"-m", "qq_onebot_whitelist.control", "bot-restart"});
+        configBridge->fetch();
+        runBackend(true);
     });
     QObject::connect(collectionPage, &CollectionPage::collectionToggle, collectionPage, [collectionControl, collectionPage] {
         collectionControl->run({"-m", "qq_onebot_whitelist.control", "collection",
@@ -240,21 +266,14 @@ int main(int argc, char *argv[]) {
     auto *notifier = new Notifier(window.trayIcon(), &window);
     QObject::connect(settings, &SettingsPage::notificationsToggled, notifier, &Notifier::setEnabled);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, notifier, &Notifier::onStatusChanged);
-    QObject::connect(statusMonitor, &StatusMonitor::statusChanged, autoRestart, &AutoRestart::onStatusChanged);
-    QObject::connect(autoRestart, &AutoRestart::autoRestarted, [statusMonitor] {
-        statusMonitor->refresh();
-    });
-    QObject::connect(&window, &MainWindow::trayAction, [&window, statusMonitor, runControl, autoRestart, overview](const QString &action) {
+    QObject::connect(&window, &MainWindow::trayAction, [&window, &runBackend, overview](const QString &action) {
         if (action == "quit") {
             QApplication::quit();
         } else if (action == "start" || action == "restart") {
-            autoRestart->setManualStop(false);
             overview->setHint(QString());
-            runControl({"-m", "qq_onebot_whitelist.control", "start"});
+            runBackend(action == "restart");
         } else if (action == "stop") {
-            autoRestart->setManualStop(true);
-            overview->setHint(Strings::zh("manualStop"));
-            runControl({"-m", "qq_onebot_whitelist.control", "stop"});
+            QApplication::quit();
         } else if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -264,6 +283,10 @@ int main(int argc, char *argv[]) {
         }
     });
 
+    QObject::connect(&single, &SingleInstance::commandRequested, &window, [&](const QString &command) {
+        if (command == "stop-services") app.quit();
+        else if (command == "restart-services") runBackend(true);
+    });
     configBridge->fetch();
 
     auto *reports = qobject_cast<ReportsPage *>(window.pageWidget("reports"));
@@ -358,5 +381,6 @@ int main(int argc, char *argv[]) {
     statsTimer->start();
 
     window.show();
+    QTimer::singleShot(0, &window, [&] { runBackend(false); });
     return app.exec();
 }

@@ -1,8 +1,10 @@
 #include "ServiceControl.h"
 #include "Paths.h"
+#include "ManagedRuntime.h"
 #include <QProcessEnvironment>
 
 ServiceControl::ServiceControl(QObject *parent) : QObject(parent) {
+    ManagedRuntime::bind(&m_proc);
     connect(&m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
         emit finished(code == 0, QString::fromUtf8(m_proc.readAllStandardOutput()));
     });

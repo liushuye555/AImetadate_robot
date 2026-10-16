@@ -984,6 +984,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='OneBot whitelist @ bot')
     parser.add_argument('--config', default='config.yaml')
     args = parser.parse_args()
+    from .manager_owner import require_manager
+    try:
+        require_manager(_REPO_ROOT)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
     if not _acquire_single_instance_lock():
         print('bot 已在运行（单实例锁 data/bot.lock），本实例退出')
         time.sleep(3)  # 拖慢面板自动重启的循环

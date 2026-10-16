@@ -4,7 +4,7 @@ add_executable(tst_statusmonitor
     ../src/core/StatusMonitor.cpp
 )
 target_include_directories(tst_statusmonitor PRIVATE ../src)
-target_link_libraries(tst_statusmonitor PRIVATE Qt6::Test Qt6::Core)
+target_link_libraries(tst_statusmonitor PRIVATE manager_runtime Qt6::Test Qt6::Core)
 add_test(NAME tst_statusmonitor COMMAND tst_statusmonitor)
 
 add_executable(tst_configbridge
@@ -12,7 +12,7 @@ add_executable(tst_configbridge
     ../src/core/ConfigBridge.cpp
 )
 target_include_directories(tst_configbridge PRIVATE ../src)
-target_link_libraries(tst_configbridge PRIVATE Qt6::Test Qt6::Core)
+target_link_libraries(tst_configbridge PRIVATE manager_runtime Qt6::Test Qt6::Core)
 add_test(NAME tst_configbridge COMMAND tst_configbridge)
 
 add_executable(tst_settingspage
@@ -30,7 +30,7 @@ add_executable(tst_configfetch
     ../src/core/ConfigBridge.cpp
 )
 target_include_directories(tst_configfetch PRIVATE ../src)
-target_link_libraries(tst_configfetch PRIVATE Qt6::Test Qt6::Core)
+target_link_libraries(tst_configfetch PRIVATE manager_runtime Qt6::Test Qt6::Core)
 add_test(NAME tst_configfetch COMMAND tst_configfetch)
 
 add_executable(tst_pages
@@ -43,7 +43,7 @@ add_executable(tst_pages
     ../src/ui/Strings.cpp
 )
 target_include_directories(tst_pages PRIVATE ../src)
-target_link_libraries(tst_pages PRIVATE Qt6::Test Qt6::Widgets Qt6::Network ole32 shell32)
+target_link_libraries(tst_pages PRIVATE manager_runtime Qt6::Test Qt6::Widgets Qt6::Network ole32 shell32)
 add_test(NAME tst_pages COMMAND tst_pages)
 
 # Keep standalone test executables runnable from Qt Creator/File Explorer.
@@ -122,4 +122,21 @@ if (WIN32)
                 VERBATIM)
         endif()
     endforeach()
+endif()
+
+add_executable(tst_managedruntime tst_managedruntime.cpp)
+target_link_libraries(tst_managedruntime PRIVATE manager_runtime Qt6::Test)
+add_test(NAME tst_managedruntime COMMAND tst_managedruntime)
+set_tests_properties(tst_managedruntime PROPERTIES TIMEOUT 90)
+if(WIN32)
+    copy_qt_runtime(tst_managedruntime)
+endif()
+
+add_executable(tst_singleinstance tst_singleinstance.cpp ../src/app/SingleInstance.cpp)
+target_include_directories(tst_singleinstance PRIVATE ../src)
+target_link_libraries(tst_singleinstance PRIVATE Qt6::Test Qt6::Network)
+add_test(NAME tst_singleinstance COMMAND tst_singleinstance)
+set_tests_properties(tst_singleinstance PROPERTIES TIMEOUT 30)
+if(WIN32)
+    copy_qt_runtime(tst_singleinstance)
 endif()

@@ -1,7 +1,7 @@
-import itertools
 import json
 
 from qq_onebot_whitelist import control
+from qq_onebot_whitelist.manager_owner import ManagerRequiredError
 
 
 def test_write_status_is_atomic_and_contains_timestamp(tmp_path, monkeypatch):
@@ -19,6 +19,17 @@ def test_load_status_returns_empty_for_missing_file(tmp_path, monkeypatch):
     assert control.load_status() == {}
 
 
+def test_owned_status_rejects_stale_manager_even_with_live_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, 'RUN_DIR', tmp_path)
+    (tmp_path / 'bot-owner.json').write_text('{}', encoding='utf-8')
+    (tmp_path / 'manager-session.json').write_text(
+        '{"pid":42,"created":"123","session":"old"}', encoding='utf-8')
+    monkeypatch.setattr(control, 'is_process_alive', lambda *_: False)
+    monkeypatch.setattr(control, 'pid_running', lambda *_: True)
+    monkeypatch.setattr(control, 'read_owned_bot', lambda *_: 99)
+    assert control.owned_bot_running() is False
+
+
 def test_port_open_false_when_closed(monkeypatch):
     def fake(port, timeout):
         raise OSError("closed")
@@ -26,92 +37,94 @@ def test_port_open_false_when_closed(monkeypatch):
     assert control.port_open(6099) is False
 
 
-def test_start_uses_expected_commands(tmp_path, monkeypatch):
-    started = []
+def test_start_services_refuses_external_process(monkeypatch):
+    monkeypatch.setattr(
+        control, "require_manager",
+        lambda _root: (_ for _ in ()).throw(ManagerRequiredError("manager required")),
+    )
+    monkeypatch.setattr(
+        control.subprocess, "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
 
-    def fake_popen(cmd, **kwargs):
-        started.append(cmd)
+    try:
+        control.start_services()
+    except ManagerRequiredError:
+        pass
+    else:
+        raise AssertionError("external direct start must be refused")
 
-        class P:
-            pid = 42
-        return P()
+
+def test_external_commands_forward_to_manager(monkeypatch):
+    forwarded = []
+    monkeypatch.setattr(control, "managed_context", lambda _root: False)
+    monkeypatch.setattr(control, "request_manager", lambda action="show": forwarded.append(action) or 0)
+    monkeypatch.setattr(
+        control, "start_services",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("external command must not start services")),
+    )
+
+    assert control.cmd_start(None) == 0
+    assert control.cmd_restart(None) == 0
+    assert control.cmd_stop(None) == 0
+    assert forwarded == ["show", "restart-services", "stop-services"]
+
+
+def test_start_services_is_idempotent_for_current_manager_session(tmp_path, monkeypatch):
+    session = {"session": "test-session"}
+    read_calls = []
+    monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path / "run")
+    monkeypatch.setattr(control, "require_manager", lambda _root: session)
+    monkeypatch.setattr(
+        control, "read_owned_bot",
+        lambda _root, current: read_calls.append(current) or 2468,
+    )
+    monkeypatch.setattr(
+        control.subprocess, "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("owned bot already exists")),
+    )
+
+    assert control.start_services() == 2468
+    assert control.start_services() == 2468
+    assert read_calls == ["test-session", "test-session"]
+
+
+def test_start_services_breaks_napcat_out_of_job_and_keeps_bot_in_job(tmp_path, monkeypatch):
+    spawned = []
+
+    def fake_popen(command, **kwargs):
+        spawned.append((command, kwargs))
+        return type("Process", (), {"pid": 100 + len(spawned)})()
 
     napcat_bat = tmp_path / "runtime" / "NapCat.Shell.Windows.Node" / "napcat.bat"
     napcat_bat.parent.mkdir(parents=True)
     napcat_bat.write_text("@echo off", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("bot:\n", encoding="utf-8")
-    (tmp_path / "logs").mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text("bot:\n", encoding="utf-8")
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"fake executable")
 
     monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
-    monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: False)
+    monkeypatch.setattr(control, "RUN_DIR", tmp_path / "run")
+    monkeypatch.setattr(control, "require_manager", lambda _root: {"session": "active-session"})
+    monkeypatch.setattr(control, "read_owned_bot", lambda *_args: None)
+    monkeypatch.setattr(control, "_retire_legacy_bots", lambda: None)
+    monkeypatch.setattr(control, "port_open", lambda _port: False)
+    monkeypatch.setattr(control, "save_bot_owner", lambda *_args: None)
     monkeypatch.setattr(control.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(control.time, "sleep", lambda _s: None)
-    clock = iter(itertools.count(0, 3))
-    monkeypatch.setattr(control.time, "time", lambda: next(clock))
-    monkeypatch.setattr(control, "ONEBOT_PORT", 3001)
-    monkeypatch.setattr(control, "NAPCAT_PORT", 6099)
 
-    control.start_services()
-    joined = " ".join(" ".join(part) if isinstance(part, (list, tuple)) else str(part) for part in started)
-    assert "napcat.bat" in joined
-    assert "qq_onebot_whitelist.onebot" in joined
-    # Windows 引号转义回归：napcat 启动参数不能含被转义的引号（\"），否则 cmd 无法执行
-    assert not any("\\\"" in str(part) for cmd in started for part in cmd)
+    assert control.start_services() == 102
 
-
-def test_stop_kills_pid_files(tmp_path, monkeypatch):
-    killed = []
-
-    def fake_run(cmd, **kwargs):
-        killed.append(cmd)
-        return None
-
-    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
-    (tmp_path / "napcat.pid").write_text("111\n", encoding="ascii")
-    (tmp_path / "bot.pid").write_text("222\n", encoding="ascii")
-    monkeypatch.setattr(control.subprocess, "run", fake_run)
-
-    control.stop_services()
-    assert any("111" in " ".join(c) for c in killed)
-    assert any("222" in " ".join(c) for c in killed)
-    assert (tmp_path / "manual-stop").exists()
-    assert control.load_status()["manualStop"] is True
-    assert control.load_status()["bot"] is False
-
-
-
-def test_stop_publishes_manual_stop_before_killing(tmp_path, monkeypatch):
-    observed = []
-
-    def fake_run(cmd, **kwargs):
-        status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
-        observed.append(((tmp_path / "manual-stop").exists(), status["manualStop"]))
-        return None
-
-    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
-    (tmp_path / "bot.pid").write_text("222\n", encoding="ascii")
-    monkeypatch.setattr(control.subprocess, "run", fake_run)
-
-    control.stop_services()
-
-    assert observed == [(True, True)]
-
-def test_start_clears_manual_stop_marker(tmp_path, monkeypatch):
-    napcat_bat = tmp_path / "runtime" / "NapCat.Shell.Windows.Node" / "napcat.bat"
-    napcat_bat.parent.mkdir(parents=True)
-    napcat_bat.write_text("@echo off", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("bot:\n", encoding="utf-8")
-    (tmp_path / "logs").mkdir()
-    (tmp_path / "manual-stop").write_text("stop", encoding="ascii")
-
-    monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(control, "RUN_DIR", tmp_path)
-    monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: True)
-    monkeypatch.setattr(control.subprocess, "Popen", lambda *args, **kwargs: type("P", (), {"pid": 42})())
-
-    control.start_services(clear_manual_stop=True)
-    assert not (tmp_path / "manual-stop").exists()
+    napcat_command, napcat_options = spawned[0]
+    bot_command, bot_options = spawned[1]
+    assert "napcat.bat" in napcat_command[-1]
+    assert napcat_options["creationflags"] & getattr(control.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    assert bot_command == [str(python), "-u", "-m", "qq_onebot_whitelist.onebot", "--config", str(config)]
+    assert not bot_options["creationflags"] & getattr(control.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    assert (tmp_path / "run" / "napcat.pid").read_text(encoding="ascii") == "101"
+    assert (tmp_path / "run" / "bot.pid").read_text(encoding="ascii") == "102"
 
 
 def test_bot_restart_respects_manual_stop(tmp_path, monkeypatch):

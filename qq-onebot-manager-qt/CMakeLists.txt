@@ -8,6 +8,10 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Svg Test)
 
+add_library(manager_runtime STATIC src/core/ManagedRuntime.cpp)
+target_include_directories(manager_runtime PUBLIC src)
+target_link_libraries(manager_runtime PUBLIC Qt6::Core)
+
 add_executable(qq-onebot-manager-qt WIN32
     src/main.cpp
     src/app/SingleInstance.cpp
@@ -34,7 +38,7 @@ add_executable(qq-onebot-manager-qt WIN32
     resources/resources.qrc
 )
 target_include_directories(qq-onebot-manager-qt PRIVATE src)
-target_link_libraries(qq-onebot-manager-qt PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg ole32 shell32)
+target_link_libraries(qq-onebot-manager-qt PRIVATE manager_runtime Qt6::Widgets Qt6::Network Qt6::Svg ole32 shell32)
 
 enable_testing()
 add_subdirectory(tests)

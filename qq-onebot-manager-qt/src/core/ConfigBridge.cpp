@@ -1,9 +1,11 @@
 #include "ConfigBridge.h"
 #include "Paths.h"
+#include "ManagedRuntime.h"
 #include <QJsonDocument>
 #include <QProcessEnvironment>
 
 ConfigBridge::ConfigBridge(QObject *parent) : QObject(parent) {
+    ManagedRuntime::bind(&m_proc);
     connect(&m_proc, &QProcess::started, this, [this] {
         if (m_mode == Mode::EnvSave) {
             m_proc.write(m_input);

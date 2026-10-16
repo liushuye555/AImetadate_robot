@@ -10,6 +10,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .manager_owner import (require_manager, managed_context, process_identity,
+                            read_owned_bot, save_bot_owner, is_process_alive,
+                            terminate_process_tree, terminate_owned_tree)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = REPO_ROOT / "run"
 STATUS_PATH = RUN_DIR / "status.json"
@@ -124,7 +128,7 @@ def live_status() -> dict:
     return {
         "napcat": port_open(NAPCAT_PORT),
         "onebot": onebot,
-        "bot": pid_running(RUN_DIR / "bot.pid"),
+        "bot": owned_bot_running(),
         # NapCat exposes OneBot only after QQ login; this is the same liveness
         # contract used by status_writer_loop.
         "qqLoggedIn": onebot,
@@ -136,112 +140,150 @@ def live_status() -> dict:
     }
 
 
-def start_services(*, clear_manual_stop: bool = False) -> None:
-    """启动 NapCat 与机器人（迁移自 start-qq-onebot-whitelist-hidden.ps1 的核心逻辑）。"""
-    napcat_dir = REPO_ROOT / "runtime" / "NapCat.Shell.Windows.Node"
-    napcat_bat = napcat_dir / "napcat.bat"
-    if not napcat_bat.exists():
-        raise RuntimeError(f"NapCat launcher not found: {napcat_bat}")
-    config = REPO_ROOT / "config.yaml"
-    if not config.exists():
-        raise RuntimeError(f"Bot config not found: {config}")
+def owned_bot_running() -> bool:
+    """Prefer exact managed identities, including when probing outside the Job."""
+    if not (RUN_DIR / 'bot-owner.json').exists():
+        return pid_running(RUN_DIR / 'bot.pid')  # Legacy migration only.
+    try:
+        owner = json.loads((RUN_DIR / 'manager-session.json').read_text(encoding='utf-8'))
+        return (isinstance(owner, dict)
+                and is_process_alive(owner.get('pid'), owner.get('created'))
+                and read_owned_bot(REPO_ROOT, owner.get('session')) is not None)
+    except (OSError, ValueError, TypeError):
+        return False
 
+
+def request_manager(action: str = 'show') -> int:
+    """External commands go through the single Qt owner; never launch a bare bot."""
+    executable = REPO_ROOT / 'qq-onebot-manager-qt' / 'build' / 'qq-onebot-manager-qt.exe'
+    if not executable.is_file():
+        raise RuntimeError('管理器尚未构建，请先构建并启动 Qt 管理器。')
+    arguments = [str(executable)]
+    if action != 'show':
+        arguments.append('--' + action)
+    subprocess.Popen(arguments, cwd=str(REPO_ROOT), close_fds=True,
+                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    return 0
+
+
+def _retire_legacy_bots() -> None:
+    """One-time migration: terminate only verified project bot command lines."""
+    import re
+    candidates = set()
+    for path in (RUN_DIR / 'bot.pid', REPO_ROOT / 'data' / 'bot.lock'):
+        try:
+            value = int(path.read_text(encoding='ascii').strip())
+            if value > 0:
+                candidates.add(value)
+        except (OSError, ValueError):
+            pass
+    for pid in candidates:
+        created = process_identity(pid)
+        if created is None:
+            continue
+        probe = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=10)
+        try:
+            command = json.loads(probe.stdout)
+        except (ValueError, TypeError):
+            command = ''
+        if not isinstance(command, str) or not re.search(r'(?<![\w.])qq_onebot_whitelist[.]onebot(?![\w.])', command):
+            raise RuntimeError('旧进程记录不属于本项目机器人，已拒绝终止；请检查 run/bot.pid。')
+        config_arg = re.search(r'--config(?:=|\s+)(?:"([^"]+)"|(\S+))', command)
+        if config_arg is None:
+            raise RuntimeError('旧机器人缺少可核对的配置路径，已拒绝接管。')
+        try:
+            same_project = os.path.samefile(config_arg.group(1) or config_arg.group(2), REPO_ROOT / 'config.yaml')
+        except OSError:
+            same_project = False
+        if not same_project or process_identity(pid) != created:
+            raise RuntimeError('旧机器人进程身份不匹配，已拒绝终止。')
+        if not terminate_process_tree(pid, created):
+            raise RuntimeError('旧机器人未能停止，未启动第二个实例。')
+
+
+def start_services(*, clear_manual_stop: bool = False) -> int:
+    """Start the bot only inside the manager's Job; NapCat explicitly stays outside."""
+    session = require_manager(REPO_ROOT)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (REPO_ROOT / 'logs').mkdir(parents=True, exist_ok=True)
+    existing = read_owned_bot(REPO_ROOT, session['session'])
+    if existing is not None:
+        if clear_manual_stop:
+            manual_stop_path().unlink(missing_ok=True)
+        return existing
+    _retire_legacy_bots()
+    napcat_dir = REPO_ROOT / 'runtime' / 'NapCat.Shell.Windows.Node'
+    napcat_bat = napcat_dir / 'napcat.bat'
+    config = REPO_ROOT / 'config.yaml'
+    python = REPO_ROOT / '.venv' / 'Scripts' / 'python.exe'
+    if not config.is_file() or not python.is_file():
+        raise RuntimeError('缺少项目配置或 Python 运行环境，无法启动托管后台。')
     if not port_open(NAPCAT_PORT):
-        pid = subprocess.Popen(
-            # 注意：不要给 napcat.bat 加引号。subprocess 在 Windows 会把列表参数里的
-            # 引号转义成 \"，cmd.exe 会将其解析为带引号的路径导致 "不是内部或外部命令"。
-            # 仓库路径不含空格，直接 call 即可。
-            ["cmd.exe", "/d", "/s", "/c", f"call {napcat_bat}"],
-            cwd=str(napcat_dir),
-            stdout=open(REPO_ROOT / "logs" / "napcat.log", "a", encoding="utf-8", errors="replace"),
-            stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).pid
-        (RUN_DIR / "napcat.pid").write_text(str(pid), encoding="ascii")
-
-    deadline = time.time() + 300
-    while time.time() < deadline:
-        if port_open(ONEBOT_PORT):
-            break
-        time.sleep(3)
-
-    if not port_open(ONEBOT_PORT):
-        print("OneBot WS port not ready; bot will retry connecting. NapCat WebUI: http://127.0.0.1:6099")
-
-    # bot 自身不监听端口，直接尝试启动（计划中已注明简化：幂等检查暂省略）
-    bot_pid = subprocess.Popen(
-        ["uv", "run", "python", "-u", "-m", "qq_onebot_whitelist.onebot", "--config", str(config)],
-        cwd=str(REPO_ROOT),
-        stdout=open(REPO_ROOT / "logs" / "bot.log", "a", encoding="utf-8", errors="replace"),
-        stderr=subprocess.STDOUT,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).pid
-    (RUN_DIR / "bot.pid").write_text(str(bot_pid), encoding="ascii")
+        if not napcat_bat.is_file():
+            raise RuntimeError('NapCat 启动文件不存在。')
+        with (REPO_ROOT / 'logs' / 'napcat.log').open('a', encoding='utf-8', errors='replace') as output:
+            process = subprocess.Popen(['cmd.exe', '/d', '/s', '/c', f'call {napcat_bat}'],
+                cwd=str(napcat_dir), stdout=output, stderr=subprocess.STDOUT, close_fds=True,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0x01000000))
+        (RUN_DIR / 'napcat.pid').write_text(str(process.pid), encoding='ascii')
+    # The bot already retries OneBot connection; do not block manager startup on QQ login.
+    require_manager(REPO_ROOT)
+    with (REPO_ROOT / 'logs' / 'bot.log').open('a', encoding='utf-8', errors='replace') as output:
+        process = subprocess.Popen([str(python), '-u', '-m', 'qq_onebot_whitelist.onebot', '--config', str(config)],
+            cwd=str(REPO_ROOT), stdout=output, stderr=subprocess.STDOUT, close_fds=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    save_bot_owner(REPO_ROOT, process.pid, session['session'])
+    (RUN_DIR / 'bot.pid').write_text(str(process.pid), encoding='ascii')
     if clear_manual_stop:
         manual_stop_path().unlink(missing_ok=True)
-
-
-def stop_services() -> None:
-    RUN_DIR.mkdir(parents=True, exist_ok=True)
-    # Publish the intentional-stop marker and heartbeat before terminating any
-    # child process. Otherwise the Qt auto-restart monitor can observe the
-    # brief "services down" window and launch a second instance.
-    manual_stop_path().write_text("stop", encoding="ascii")
-    write_status({
-        "napcat": False,
-        "onebot": False,
-        "bot": False,
-        "qqLoggedIn": False,
-        "qqNumber": "",
-        "qqNickname": "",
-        "collectionPaused": collection_paused(),
-        "manualStop": True,
-    })
-    for name in ("napcat.pid", "bot.pid"):
-        pid_path = RUN_DIR / name
-        if not pid_path.exists():
-            continue
-        pid = pid_path.read_text(encoding="ascii").strip()
-        if pid.isdigit():
-            subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True)
-        pid_path.unlink(missing_ok=True)
+    return process.pid
 
 
 def cmd_start(args: argparse.Namespace) -> int:
     try:
-        start_services(clear_manual_stop=True)
+        if not managed_context(REPO_ROOT):
+            return request_manager()
+        pid = start_services(clear_manual_stop=True)
+        print(json.dumps({'status': 'running', 'pid': pid}))
         return 0
     except Exception as exc:
-        print(f"start failed: {type(exc).__name__}: {exc}")
+        print(json.dumps({'status': 'failed', 'error': str(exc)}, ensure_ascii=False))
         return 1
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
     try:
-        stop_services()
-        return 0
+        return request_manager('stop-services')
     except Exception as exc:
-        print(f"stop failed: {type(exc).__name__}: {exc}")
+        print(json.dumps({'status': 'failed', 'error': str(exc)}, ensure_ascii=False))
         return 1
 
 
 def cmd_restart(args: argparse.Namespace) -> int:
-    cmd_stop(args)
-    return cmd_start(args)
+    return cmd_bot_restart(args)
 
 
 def cmd_bot_restart(args: argparse.Namespace) -> int:
-    """只重启 bot（不动 NapCat，避免重新扫码）；面板保存配置后调用。"""
-    pid_path = RUN_DIR / 'bot.pid'
     if manual_stop_requested():
         return 0
-    if pid_path.exists():
-        pid = pid_path.read_text(encoding='ascii').strip()
-        if pid.isdigit():
-            subprocess.run(['taskkill', '/PID', pid, '/T', '/F'], capture_output=True)
-        pid_path.unlink(missing_ok=True)
-    start_services()
-    return 0
+    try:
+        if not managed_context(REPO_ROOT):
+            return request_manager('restart-services')
+        session = require_manager(REPO_ROOT)
+        pid = read_owned_bot(REPO_ROOT, session['session'])
+        if pid is not None:
+            if not terminate_owned_tree(REPO_ROOT, session['session']):
+                raise RuntimeError('旧后台未能停止，未重复启动。')
+        (RUN_DIR / 'bot.pid').unlink(missing_ok=True)
+        result = start_services()
+        print(json.dumps({'status': 'running', 'pid': result}))
+        return 0
+    except Exception as exc:
+        print(json.dumps({'status': 'failed', 'error': str(exc)}, ensure_ascii=False))
+        return 1
 
 
 def build_stats(store) -> dict:

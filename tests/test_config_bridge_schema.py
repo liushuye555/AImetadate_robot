@@ -52,7 +52,8 @@ def test_schema_covers_remaining_runtime_configuration():
         'features.link_analysis', 'features.link_metadata',
         'features.image_processing', 'features.ai_context',
         'features.daily_report', 'features.startup_history',
-        'features.auto_restart',
         'keepalive.enabled', 'keepalive.interval_minutes', 'keepalive.groups', 'keepalive.message',
     }
     assert expected <= fields
+    # Strict manager ownership replaces independent backend resurrection.
+    assert 'features.auto_restart' not in fields

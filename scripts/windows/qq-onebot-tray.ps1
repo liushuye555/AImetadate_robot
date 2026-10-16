@@ -1,3 +1,7 @@
+# Compatibility entry: the Qt manager is the only backend owner.
+& (Join-Path $PSScriptRoot 'start-qq-onebot-manager.ps1')
+exit $LASTEXITCODE
+
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Windows.Forms

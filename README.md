@@ -33,7 +33,7 @@
 Start-Process ".\data\view\index.html"
 ```
 
-## 快速启动（Windows 托盘）
+## 快速启动（Windows 管理器）
 
 首次安装桌面和开始菜单快捷方式：
 
@@ -41,37 +41,33 @@ Start-Process ".\data\view\index.html"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\install-tray-shortcut.ps1"
 ```
 
-之后打开“QQ OneBot Bot”快捷方式。机器人会在后台启动，并在系统托盘提供：打开本地页面、查看日志、停止服务和退出托盘。
+之后打开“QQ OneBot Bot”快捷方式启动 Qt 管理器。关闭窗口右上角的 X 会把管理器收进系统托盘并继续托管机器人。选择“停止”或“退出”会关闭管理器并结束它托管的机器人后台；NapCat 独立运行，会继续保持登录状态。
 
 NapCat 默认位于项目内 `runtime/NapCat.Shell.Windows.Node`，该运行目录不进入 Git。`scripts/windows/launcher.config.ps1` 只用于可选路径覆盖。
 
-命令行后台启动：
+命令行启动同样转交给 Qt 管理器：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\start-qq-onebot-whitelist-hidden.ps1"
 ```
 
-命令行停止 bot 和 NapCat：
+请求 Qt 管理器停止并退出：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-qq-onebot-whitelist-hidden.ps1"
 ```
 
-前台运行 bot：
-
-```powershell
-uv run python -m qq_onebot_whitelist.onebot --config config.yaml
-```
+机器人后台由 Qt 管理器的 Windows Job 托管。管理器崩溃或被强制结束时，Windows 会一并结束机器人后台；NapCat 被独立启动，不随管理器退出。重新启动机器人时，请重新打开 Qt 管理器。
 
 ## 控制面板（Qt 原生）
 
 `qq-onebot-manager-qt/` 是 Qt 6 Widgets 原生控制面板（C++），替代旧的 Rust 管理器，提供：
 
 - **概览**：NapCat / OneBot / 机器人 / QQ 登录状态卡片，启动/停止/重启，日志、报告、配置目录快捷入口，图片/链接数据概况。
-- **设置**：分区配置表单（数据来自 `config_bridge.py` schema）、语言、主题（浅色/深色）、开机自启、登录通知开关、自动重启开关。
+- **设置**：分区配置表单（数据来自 `config_bridge.py` schema）、语言、主题（浅色/深色）、开机自启和登录通知开关。
 - **日志**：bot.log / napcat.log 实时增量查看，搜索、只看错误、暂停。
 - **报告**：报告页入口、日报预览、手动发送测试日报。
-- 托盘常驻、关闭进托盘、QQ 登录/掉线与服务异常的原生系统通知、面板侧自动重启。
+- 托盘常驻、关闭进托盘、QQ 登录/掉线与服务异常的原生系统通知。
 
 构建（命令行；也可直接用 Qt Creator 打开 `qq-onebot-manager-qt/CMakeLists.txt`）：
 

@@ -1,4 +1,5 @@
 #include "StatusMonitor.h"
+#include "ManagedRuntime.h"
 #include <QFile>
 
 StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int staleSeconds) {
@@ -29,6 +30,7 @@ StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int
 
 StatusMonitor::StatusMonitor(const QString &statusPath, int pollMs, QObject *parent)
     : QObject(parent), m_statusPath(statusPath) {
+    ManagedRuntime::bind(&m_liveProbe);
     m_timer.setInterval(pollMs);
     connect(&m_timer, &QTimer::timeout, this, &StatusMonitor::refresh);
     connect(&m_liveProbe, &QProcess::finished, this, &StatusMonitor::liveProbeFinished);

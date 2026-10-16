@@ -32,7 +32,7 @@ QString Strings::zh(const QString &key) {
     if (key == "theme") return "主题";
     if (key == "autoStart") return "开机自启";
     if (key == "notifications") return "登录提醒";
-    if (key == "quit") return "退出管理器";
+    if (key == "quit") return "退出并停止后台";
     if (key == "panelName") return "管理器";
     if (key == "toggleTheme") return "切换主题";
     if (key == "quitApp") return "退出程序";
