@@ -45,6 +45,7 @@ private slots:
     void primaryProviderRoundTrip();
     void providerOptionsAndReviewProviderRoundTrip();
     void knowledgeOptInsRoundTrip();
+    void lifecycleRoundTrip();
 };
 
 static QJsonObject savePatch(CollectionPage &page) {
@@ -144,6 +145,46 @@ void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {
     QCOMPARE(saved.value("glossary").toObject().value("unknown").toString(), QStringLiteral("keep"));
 }
 
+void TestKnowledgeGroups::lifecycleRoundTrip() {
+    CollectionPage page;
+    const QJsonObject defaults{{"enabled", true}, {"brief_days", 8}, {"detailed_days", 21},
+                               {"transient_days", 5}, {"resource_days", 60}};
+    const QJsonObject originalLifecycle{{"enabled", true}, {"brief_days", 4}, {"resource_days", 45},
+                                        {"future", QJsonObject{{"keep", true}}}};
+    page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"defaults", QJsonObject{{"lifecycle", defaults}}},
+        {"groups", QJsonObject{{"group:123", QJsonObject{{"lifecycle", originalLifecycle}}}}}}}});
+    selectGroup(page, "group:123");
+    QTimer::singleShot(0, &page, [&page] {
+        auto *dialog = page.findChild<QDialog *>("knowledgeDialog");
+        QVERIFY(dialog);
+        const auto closeDialog = qScopeGuard([dialog] {
+            if (dialog->result() != QDialog::Accepted) dialog->reject();
+        });
+        auto *enabled = dialog->findChild<QCheckBox *>("knowledgeLifecycleEnabled");
+        auto *brief = dialog->findChild<QSpinBox *>("knowledgeLifecycleBriefDays");
+        auto *detailed = dialog->findChild<QSpinBox *>("knowledgeLifecycleDetailedDays");
+        auto *transient = dialog->findChild<QSpinBox *>("knowledgeLifecycleTransientDays");
+        auto *resource = dialog->findChild<QSpinBox *>("knowledgeLifecycleResourceDays");
+        QVERIFY(enabled && brief && detailed && transient && resource);
+        QVERIFY(enabled->isChecked());
+        QCOMPARE(brief->value(), 4);
+        QCOMPARE(detailed->value(), 21);
+        QCOMPARE(transient->value(), 5);
+        QCOMPARE(resource->value(), 45);
+        enabled->setChecked(false);
+        brief->setValue(6);
+        dialog->findChild<QDialogButtonBox *>("knowledgeDialogButtons")->button(QDialogButtonBox::Ok)->click();
+    });
+    page.findChild<QPushButton *>("knowledgeEdit")->click();
+    const QJsonObject saved = groupsOf(savePatch(page)).value("group:123").toObject().value("lifecycle").toObject();
+    QCOMPARE(saved.value("enabled"), QJsonValue(false));
+    QCOMPARE(saved.value("brief_days").toInt(), 6);
+    QCOMPARE(saved.value("detailed_days").toInt(), 21);
+    QCOMPARE(saved.value("transient_days").toInt(), 5);
+    QCOMPARE(saved.value("resource_days").toInt(), 45);
+    QCOMPARE(saved.value("future"), originalLifecycle.value("future"));
+}
+
 void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
     CollectionPage page;
     QJsonObject defaults{{"enabled", true}, {"match_mode", "specialist"},
@@ -154,6 +195,8 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
                          {"feedback", QJsonObject{{"enabled", true}, {"optimization_enabled", true}}}};
     defaults.insert("extraction", QJsonObject{{"enabled", true}, {"track_topics", true}});
     defaults.insert("glossary", QJsonObject{{"enabled", true}, {"infer_context", true}});
+    defaults.insert("lifecycle", QJsonObject{{"enabled", true}, {"brief_days", 8}, {"detailed_days", 21},
+                                              {"transient_days", 5}, {"resource_days", 60}});
     for (const QString &feature : {QStringLiteral("history"), QStringLiteral("notifications")})
         defaults.insert(feature, QJsonObject{{"enabled", true}});
     page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"defaults", defaults},
@@ -170,6 +213,11 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
         for (auto *box : dialog->findChildren<QCheckBox *>()) QVERIFY(!box->isChecked());
         QVERIFY(dialog->findChild<QCheckBox *>("knowledgeTrackTopics"));
         QVERIFY(dialog->findChild<QCheckBox *>("knowledgeInferContext"));
+        QVERIFY(!dialog->findChild<QCheckBox *>("knowledgeLifecycleEnabled")->isChecked());
+        QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeLifecycleBriefDays")->value(), 8);
+        QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeLifecycleDetailedDays")->value(), 21);
+        QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeLifecycleTransientDays")->value(), 5);
+        QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeLifecycleResourceDays")->value(), 60);
         QCOMPARE(dialog->findChild<QComboBox *>("knowledgeMatchMode")->currentText(), QStringLiteral("specialist"));
         QCOMPARE(dialog->findChild<QPlainTextEdit *>("knowledgeTopics")->toPlainText(), QStringLiteral("研究"));
         QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeMaxFileMb")->value(), 99);

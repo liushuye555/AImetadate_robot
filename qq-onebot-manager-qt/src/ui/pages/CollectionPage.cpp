@@ -525,6 +525,32 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     const QString match = original.value("match_mode").toString(m_knowledgeDefaults.value("match_mode").toString("hybrid"));
     matchMode->setCurrentText(match);
     form->addRow(QStringLiteral("匹配模式"), matchMode);
+    const QJsonObject lifecycle = original.value("lifecycle").toObject();
+    const QJsonObject defaultLifecycle = m_knowledgeDefaults.value("lifecycle").toObject();
+    auto *lifecycleEnabled = new QCheckBox(QStringLiteral("自动归档过期讨论"), content);
+    lifecycleEnabled->setObjectName("knowledgeLifecycleEnabled");
+    lifecycleEnabled->setChecked(explicitEnabled(lifecycle));
+    form->addRow(lifecycleEnabled);
+    auto makeLifecycleDays = [&](const QString &key, const QString &objectName, int fallback) {
+        auto *spin = new QSpinBox(content);
+        spin->setObjectName(objectName);
+        spin->setRange(1, 3650);
+        spin->setValue(lifecycle.value(key).toInt(defaultLifecycle.value(key).toInt(fallback)));
+        spin->setSuffix(QStringLiteral(" 天"));
+        return spin;
+    };
+    auto *briefDays = makeLifecycleDays("brief_days", "knowledgeLifecycleBriefDays", 3);
+    auto *detailedDays = makeLifecycleDays("detailed_days", "knowledgeLifecycleDetailedDays", 14);
+    auto *transientDays = makeLifecycleDays("transient_days", "knowledgeLifecycleTransientDays", 3);
+    auto *resourceDays = makeLifecycleDays("resource_days", "knowledgeLifecycleResourceDays", 30);
+    form->addRow(QStringLiteral("简短求助保留天数"), briefDays);
+    form->addRow(QStringLiteral("详细问题保留天数"), detailedDays);
+    form->addRow(QStringLiteral("时效信息保留天数"), transientDays);
+    form->addRow(QStringLiteral("资源线索保留天数"), resourceDays);
+    auto *lifecycleHint = new QLabel(QStringLiteral("仅本群明确开启后生效。按原消息最后有效进展计时，重复提问不续期；原文保留，知识条目长期保留。"), content);
+    lifecycleHint->setObjectName("knowledgeLifecycleHint");
+    lifecycleHint->setWordWrap(true);
+    form->addRow(lifecycleHint);
     QMap<QString, QCheckBox *> featureBoxes;
     const QPair<QString, QString> features[] = {
         {"summary", QStringLiteral("总结")}, {"extraction", QStringLiteral("知识提取")},
@@ -664,6 +690,13 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     }
     group.insert("topics", topicArray);
     group.insert("match_mode", matchMode->currentText());
+    QJsonObject newLifecycle = group.value("lifecycle").toObject();
+    newLifecycle.insert("enabled", lifecycleEnabled->isChecked());
+    newLifecycle.insert("brief_days", briefDays->value());
+    newLifecycle.insert("detailed_days", detailedDays->value());
+    newLifecycle.insert("transient_days", transientDays->value());
+    newLifecycle.insert("resource_days", resourceDays->value());
+    group.insert("lifecycle", newLifecycle);
     for (auto it = featureBoxes.constBegin(); it != featureBoxes.constEnd(); ++it) {
         QJsonObject child = group.value(it.key()).toObject();
         child.insert("enabled", it.value()->isChecked());

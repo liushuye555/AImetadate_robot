@@ -6,6 +6,7 @@ import json
 
 from .content_utils import redact_secrets
 from . import knowledge_quality
+from . import knowledge_organization
 
 
 CATEGORIES = {'knowledge': '可复用知识', 'question': '待解决问题',
@@ -14,6 +15,7 @@ CATEGORIES = {'knowledge': '可复用知识', 'question': '待解决问题',
 
 def ensure_schema(conn):
     knowledge_quality.ensure_schema(conn)
+    knowledge_organization.ensure_schema(conn)
     conn.execute('''CREATE TABLE IF NOT EXISTS item_details (
         item_key TEXT PRIMARY KEY, category TEXT NOT NULL, known_text TEXT NOT NULL,
         missing_text TEXT NOT NULL, source_time TEXT, resource_json TEXT NOT NULL)''')
@@ -63,6 +65,7 @@ def prepare_details(row, records):
 
 def save_details(conn, key, item):
     knowledge_quality.save_quality(conn, key, item)
+    knowledge_organization.save_organization(conn, key, item)
     conn.execute('INSERT OR REPLACE INTO item_details VALUES (?,?,?,?,?,?)',
                  (key, category_for(item), item.get('known') or '', item.get('missing') or '',
                   item.get('source_time'), json.dumps(item.get('resource') or {}, ensure_ascii=False)))
@@ -76,4 +79,4 @@ def decorate_item(conn, item):
                       source_time=details['source_time'], resource=json.loads(details['resource_json']))
     else:
         result.update(category=category_for(result), known='', missing='', source_time=None, resource={})
-    return knowledge_quality.decorate_quality(conn, result)
+    return knowledge_organization.decorate_organization(conn, knowledge_quality.decorate_quality(conn, result))

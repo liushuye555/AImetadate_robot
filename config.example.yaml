@@ -141,6 +141,13 @@ knowledge:
       weekly: false
     extraction:
       enabled: false
+    # 自动过期必须在具体群组 lifecycle.enabled 中主动开启；默认值不启用功能。
+    lifecycle:
+      enabled: false
+      brief_days: 3
+      detailed_days: 14
+      transient_days: 3
+      resource_days: 30
     glossary:
       enabled: false
     files:

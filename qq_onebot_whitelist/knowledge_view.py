@@ -9,6 +9,8 @@ from pathlib import Path
 from .content_utils import redact_secrets
 from .knowledge_evidence import render_evidence
 from .knowledge_layers import CATEGORIES, category_for
+from .knowledge_lifecycle import lifecycle_for
+from .knowledge_organization import TOPICS
 
 
 PAGES = (
@@ -51,12 +53,14 @@ body{{font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif;background:#f4f6f8;c
 </style></head><body><header><h1>{title}</h1><p>共 {count} 项。来源编号为本地消息数据库编号。</p>{_nav(filename)}</header>
 <div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}<label>搜索 <input id="search" type="search" placeholder="搜索本页内容" aria-label="搜索本页内容"></label></div>
 <p>当前显示 <span id="shown-count">{count}</span> 项</p><main>{content}</main><p id="filter-empty" hidden>没有符合筛选条件的内容。</p><footer>内容来自本地群消息记录与分析结果；引用编号仅在本机数据库中有效。</footer>
-<script>const group=document.getElementById('group'),search=document.getElementById('search');function filterRows(){{const g=group.value,q=search.value.toLocaleLowerCase(),v=document.getElementById('value')?.value||'',s=document.getElementById('term-status')?.value||'',c=document.getElementById('category')?.value||'',k=document.getElementById('term-kind')?.value||'';let count=0;document.querySelectorAll('article').forEach(card=>{{const category=card.dataset.category||'knowledge',base=!(g&&card.dataset.group!==g)&&!(v&&card.dataset.value!==v)&&!(c==='durable'&&category==='transient')&&!(c&&c!=='durable'&&category!==c),variants=card.querySelectorAll?.('[data-term-variant]')||[];if(variants.length){{let any=false;const shared=(card.dataset.termShared||'').toLocaleLowerCase();variants.forEach(item=>{{const matchesSearch=!q||shared.includes(q)||(item.textContent||'').toLocaleLowerCase().includes(q);item.hidden=!(base&&matchesSearch&&(!s||(item.dataset.status===s||item.dataset.origin===s))&&(!k||item.dataset.inference===k));if(!item.hidden)any=true;}});card.hidden=!any;}}else{{card.hidden=!(base&&card.textContent.toLocaleLowerCase().includes(q)&&(!s||(card.dataset.status===s||card.dataset.origin===s))&&(!k||card.dataset.inference===k));}}if(!card.hidden)count++;}});document.getElementById('filter-empty').hidden=count>0;const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;}}group.addEventListener('change',filterRows);search.addEventListener('input',filterRows);document.getElementById('value')?.addEventListener('change',filterRows);document.getElementById('term-status')?.addEventListener('change',filterRows);document.getElementById('category')?.addEventListener('change',filterRows);document.getElementById('term-kind')?.addEventListener('change',filterRows);filterRows();</script>
+<script>const group=document.getElementById('group'),search=document.getElementById('search');function filterRows(){{const g=group.value,q=search.value.toLocaleLowerCase(),v=document.getElementById('value')?.value||'',s=document.getElementById('term-status')?.value||'',c=document.getElementById('category')?.value||'',k=document.getElementById('term-kind')?.value||'',lane=document.getElementById('lane')?.value||'',topic=document.getElementById('topic')?.value||'';let count=0;document.querySelectorAll('article').forEach(card=>{{const category=card.dataset.category||'knowledge',topics=(card.dataset.topics||'').split(','),base=!(g&&card.dataset.group!==g)&&!(v&&card.dataset.value!==v)&&!(c==='durable'&&category==='transient')&&!(c&&c!=='durable'&&category!==c)&&!(lane&&card.dataset.lane!==lane)&&!(topic&&!topics.includes(topic)),variants=card.querySelectorAll?.('[data-term-variant]')||[];if(variants.length){{let any=false;const shared=(card.dataset.termShared||'').toLocaleLowerCase();variants.forEach(item=>{{const matchesSearch=!q||shared.includes(q)||(item.textContent||'').toLocaleLowerCase().includes(q);item.hidden=!(base&&matchesSearch&&(!s||(item.dataset.status===s||item.dataset.origin===s))&&(!k||item.dataset.inference===k));if(!item.hidden)any=true;}});card.hidden=!any;}}else{{card.hidden=!(base&&card.textContent.toLocaleLowerCase().includes(q)&&(!s||(card.dataset.status===s||card.dataset.origin===s))&&(!k||card.dataset.inference===k));}}if(!card.hidden)count++;}});document.getElementById('filter-empty').hidden=count>0;const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;}}group.addEventListener('change',filterRows);search.addEventListener('input',filterRows);document.getElementById('value')?.addEventListener('change',filterRows);document.getElementById('term-status')?.addEventListener('change',filterRows);document.getElementById('category')?.addEventListener('change',filterRows);document.getElementById('term-kind')?.addEventListener('change',filterRows);document.getElementById('lane')?.addEventListener('change',filterRows);document.getElementById('topic')?.addEventListener('change',filterRows);filterRows();</script>
 </body></html>'''
 
 
 def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets: list[dict],
-                 glossary: list[dict], threads: list[dict] | None = None) -> dict[str, str]:
+                 glossary: list[dict], threads: list[dict] | None = None,
+                 profiles: dict | None = None, manual_archives: dict | None = None,
+                 now=None) -> dict[str, str]:
     """Return four independent static pages for knowledge, terms, summaries, and files."""
     data_dir = Path(data_dir)
     groups = {str(row.get("scope") or "") for rows in (items, runs, assets, glossary)
@@ -67,48 +71,82 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
 
     threads = threads or []
     tracked_keys = {event['item_key'] for thread in threads for event in thread.get('events', [])}
+    profiles = profiles or {}
+    manual_archives = manual_archives or {}
+
+    def life(row, record_type):
+        scope = str(row.get('scope') or '')
+        record_id = row.get('id') if record_type == 'topic' else row.get('key')
+        return lifecycle_for(row, profile=profiles.get(scope),
+                             manual=manual_archives.get((scope, record_type, record_id)), now=now)
+
     knowledge_cards = []
     for item in items:
         if item.get('key') in tracked_keys:
             continue
         ids = _ids(item)
         category = category_for(item)
+        item_row = {**item, 'category': category}
+        lifecycle = life(item_row, 'item')
+        organization = item.get('organization') if isinstance(item.get('organization'), dict) else {}
+        topic_ids = [value for value in organization.get('topics', []) if isinstance(value, str)] or ['other']
         val = "high" if item.get("value") == "high" else "candidate"
         state = {"unresolved": "未解决", "reported": "群友说法", "verified": "原消息有验证反馈",
                  "disputed": "存在分歧"}.get(item.get("evidence_state"), "群友说法")
         msgrefs = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
         knowledge_cards.append(
-            f'<article data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}">'
-            f'<h2>{_safe(item.get("title"))}</h2><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
+            f'<article data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(item.get("title"))}</h2><p class="meta">主题：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
             f'{_safe(item.get("topic"))} · {_safe(item.get("kind"))} · '
             f'{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state} · {msgrefs}</p>'
-            f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details(item)}{evidence(item.get("scope"), ids)}'
+            f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details({**item, "lifecycle": lifecycle})}{evidence(item.get("scope"), ids)}'
             f'{_feedback_controls(item)}</article>')
     by_key = {item.get('key'): item for item in items}
     for thread in threads:
         groups.add(thread['scope'])
-        events = thread.get('events', [])
+        events = []
+        for original in thread.get('events', []):
+            event = dict(original)
+            linked_item = by_key.get(event.get('item_key'), {})
+            if not isinstance(event.get('organization'), dict) and isinstance(linked_item.get('organization'), dict):
+                event['organization'] = linked_item['organization']
+            events.append(event)
         latest = by_key.get(events[-1]['item_key'], {}) if events else {}
         category = category_for(thread)
+        topic_ids = sorted({topic for event in events
+                            for topic in ((event.get('organization') or {}).get('topics', [])
+                                          if isinstance(event.get('organization'), dict) else [])
+                            if isinstance(topic, str)})
+        topic_ids = topic_ids or ['other']
+        lifecycle_category = (events[-1].get('category') or None) if events else thread.get('category')
+        lifecycle = life({**thread, 'events': events, 'category': lifecycle_category}, 'topic')
+        category = lifecycle.get('category') if lifecycle.get('category') in CATEGORIES else category
         val = 'high' if thread.get('value') == 'high' else 'candidate'
         current_state = events[-1].get('evidence_state', 'reported') if events else 'reported'
         state_label = {'unresolved': '未解决', 'reported': '群友说法',
                        'verified': '原消息有验证反馈', 'disputed': '存在分歧'}.get(current_state, '群友说法')
         timeline = []
         for event in events:
+            event_org = event.get('organization') if isinstance(event.get('organization'), dict) else {}
+            subject = event_org.get('subject') if isinstance(event_org.get('subject'), dict) else {}
+            subject_note = '<p class="meta">对象指代待确认</p>' if subject.get('ambiguous') else ''
             timeline.append('<section><p>' + _time(event.get('source_time')) + ' · '
                             + _status(event['status'], event.get('category')) + '</p><pre>' + _safe(event.get('summary')) + '</pre>'
+                            + subject_note
                             + ('<p>关联依据：' + _safe(event['link_reason']) + '</p>' if event.get('link_reason') else '')
                             + ('<p>缺少本批验证反馈，解决状态未采纳。</p>' if event.get('status_reason') else '')
                             + evidence(thread['scope'], event['evidence_ids'])
                             + _feedback_controls(by_key.get(event['item_key'], {})) + '</section>')
-        knowledge_cards.append(f'<article data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}">'
-            f'<h2>{_safe(thread["title"])}</h2><p class="meta">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state_label} · {_status(thread["status"], category)} · 话题记录 {len(events)} 次</p>'
+        knowledge_cards.append(f'<article data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(thread["title"])}</h2><p class="meta">主题：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state_label} · {_status(thread["status"], category)} · 话题记录 {len(events)} 次</p>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
                         'resource': thread.get('resource'), 'quality': latest.get('quality'),
-                        'quality_reason': latest.get('quality_reason')})
+                        'quality_reason': latest.get('quality_reason'), 'lifecycle': lifecycle})
             + '<details><summary>查看讨论进展与证据</summary>' + ''.join(timeline) + '</details></article>')
-    knowledge_filters = '<label>分类 <select id="category"><option value="durable">知识、问题与资源</option><option value="">全部内容</option>' + ''.join(
+    knowledge_filters = '<label>处理队列 <select id="lane"><option value="knowledge">知识</option><option value="followup">待跟进</option><option value="archive">归档</option><option value="">全部</option></select></label>'
+    knowledge_filters += '<label>主题 <select id="topic"><option value="">全部主题</option>' + ''.join(
+        f'<option value="{_safe(key)}">{_safe(label)}</option>' for key, label in TOPICS.items()) + '</select></label>'
+    knowledge_filters += '<label>资料类型 <select id="category"><option value="">全部类型</option>' + ''.join(
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
     knowledge_filters += '<label>价值 <select id="value"><option value="">全部知识</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select></label>'
     knowledge_html = _frame("knowledge.html", "群知识", knowledge_cards, groups, knowledge_filters)
@@ -228,6 +266,21 @@ def _details(item):
         pieces.append('<p><strong>还缺什么</strong></p><pre>' + _safe(item['missing']) + '</pre>')
     if item.get('source_time'):
         pieces.append('<p class="meta">最近来源时间：' + _time(item['source_time']) + '</p>')
+    lifecycle = item.get('lifecycle')
+    if isinstance(lifecycle, dict):
+        pieces.append('<p class="meta">处理队列：' + _safe({'knowledge': '知识', 'followup': '待跟进', 'archive': '归档'}.get(lifecycle.get('lane'), '待确认')) + ' · '
+                      + _safe(lifecycle.get('reason')) + '</p>')
+        if lifecycle.get('last_progress_at'):
+            pieces.append('<p class="meta">原消息进展时间：' + _time(lifecycle['last_progress_at']) + '</p>')
+        if lifecycle.get('expires_at'):
+            pieces.append('<p class="meta">保留截止时间：' + _time(lifecycle['expires_at'])
+                          + (' · 已归档，仍未表示问题已解决' if lifecycle.get('archived') else '') + '</p>')
+        elif lifecycle.get('archived'):
+            pieces.append('<p class="meta">人工归档；归档不代表问题已解决。</p>')
+    organization = item.get('organization') if isinstance(item.get('organization'), dict) else {}
+    subject = organization.get('subject') if isinstance(organization.get('subject'), dict) else {}
+    if subject.get('ambiguous'):
+        pieces.append('<p class="meta">对象指代待确认</p>')
     resource = item.get('resource') or {}
     if resource:
         pieces.append('<p>资源：' + _safe(resource.get('name')) + ' · 未验证线索</p><pre>'

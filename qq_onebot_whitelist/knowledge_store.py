@@ -12,6 +12,8 @@ from .resources import extract_file_segments
 from .store import reply_to_message_id
 from .knowledge_grounding import effective_term, independent_definitions
 from . import knowledge_layers, knowledge_topics
+from . import knowledge_organization
+from .knowledge_lifecycle import lifecycle_for
 from .knowledge_term_inference import SCHEMA as TERM_SCHEMA, save_annotation, decorate_term
 
 
@@ -122,8 +124,10 @@ CREATE TABLE IF NOT EXISTS assets (
 
 
 class KnowledgeDB:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, lifecycle_profile=None, context_quote_ids=None):
         self.path = Path(path)
+        self.lifecycle_profile = lifecycle_profile
+        self.context_quote_ids = set(context_quote_ids or ())
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.conn() as conn:
             conn.executescript(SCHEMA)
@@ -232,13 +236,94 @@ class KnowledgeDB:
                 'SELECT * FROM terms WHERE scope=? AND (instr(lower(term),lower(?))>0 OR instr(lower(meaning),lower(?))>0) ORDER BY term LIMIT ?',
                 (scope, keyword, keyword, limit))]
 
+    def _archived_context_conn(self, conn, scope: str) -> tuple[set[str], set[str]]:
+        overrides = knowledge_organization.archive_overrides(conn)
+        scoped_overrides = {key: row for key, row in overrides.items() if key[0] == scope}
+        # In the default configuration, lifecycle remains inert; still honor
+        # explicitly archived records stored by the user.
+        if self.lifecycle_profile is None and not scoped_overrides:
+            return set(), set()
+        topic_ids: set[str] = set()
+        item_keys: set[str] = set()
+        for thread in knowledge_topics.threads(conn, scope, limit=None):
+            override = scoped_overrides.get((scope, 'topic', thread['id']))
+            manual = override.get('state') if override else None
+            for event in thread.get('events', []):
+                org = conn.execute('SELECT organization_json FROM item_organization WHERE item_key=?',
+                                   (event.get('item_key'),)).fetchone()
+                if org:
+                    event['organization'] = json.loads(org[0])
+            if thread.get('events'):
+                latest_event = thread['events'][-1]
+                # The most recent event's explicit category/evidence state is
+                # authoritative for follow-up classification; legacy thread
+                # defaults must not mask an unresolved, unclassified event.
+                thread['category'] = latest_event.get('category') or None
+            life = lifecycle_for(thread, profile=self.lifecycle_profile, manual=manual)
+            if life['archived']:
+                topic_ids.add(thread['id'])
+                item_keys.update(event.get('item_key') for event in thread.get('events', [])
+                                 if isinstance(event.get('item_key'), str))
+        rows = conn.execute('SELECT * FROM items WHERE scope=?', (scope,)).fetchall()
+        for raw in rows:
+            item = knowledge_layers.decorate_item(conn, dict(raw))
+            override = scoped_overrides.get((scope, 'item', item['key']))
+            manual = override.get('state') if override else None
+            if lifecycle_for(item, profile=self.lifecycle_profile, manual=manual)['archived']:
+                item_keys.add(item['key'])
+        return topic_ids, item_keys
+
+    def archived_context(self, scope: str) -> tuple[set[str], set[str]]:
+        """Return group-local auto/manual archived topic IDs and standalone item keys."""
+        with self.conn() as conn:
+            return self._archived_context_conn(conn, scope)
+
     def thread_candidates(self, scope: str, limit: int = 12) -> list[dict]:
         with self.conn() as conn:
-            return knowledge_topics.thread_candidates(conn, scope, limit=limit)
+            topic_ids, _ = self._archived_context_conn(conn, scope)
+            all_candidates = knowledge_topics.thread_candidates(conn, scope, limit=None)
+            current_quotes = self.context_quote_ids
+            result = []
+            for row in all_candidates:
+                is_archived = row['id'] in topic_ids
+                override = conn.execute(
+                    "SELECT state FROM knowledge_archives WHERE scope=? AND record_type='topic' AND record_id=?",
+                    (scope, row['id'])).fetchone()
+                manual_archived = bool(override and override[0] == 'archived')
+                full_evidence = conn.execute('SELECT evidence_json FROM knowledge_threads WHERE scope=? AND id=?',
+                                             (scope, row['id'])).fetchone() if current_quotes else None
+                quoted = set(json.loads(full_evidence[0])) & current_quotes if full_evidence else set()
+                if is_archived and (manual_archived or not quoted):
+                    continue
+                if is_archived:
+                    row['archived'] = True
+                else:
+                    row['archived'] = False
+                row['directly_quoted'] = bool(quoted)
+                if quoted:
+                    row['evidence_ids'] = (sorted(quoted) + [mid for mid in row['evidence_ids'] if mid not in quoted])[:30]
+                result.append(row)
+            result.sort(key=lambda row: not row['directly_quoted'])
+            return result[:limit]
 
     def threads(self, scope: str | None = None, limit: int = 200) -> list[dict]:
         with self.conn() as conn:
             return knowledge_topics.threads(conn, scope, limit=limit)
+
+    def context_items(self, scope: str, limit: int = 8) -> list[dict]:
+        """Return active group knowledge items for use as AI context."""
+        with self.conn() as conn:
+            _, archived_items = self._archived_context_conn(conn, scope)
+            rows = conn.execute('SELECT * FROM items WHERE scope=? ORDER BY created_at DESC', (scope,)).fetchall()
+            result = []
+            for raw in rows:
+                item = knowledge_layers.decorate_item(conn, dict(raw))
+                if item['key'] in archived_items:
+                    continue
+                result.append(item)
+                if len(result) >= limit:
+                    break
+            return result
 
     def set_term(self, scope: str, term: str, meaning: str):
         key = sha256(json.dumps([scope,term,meaning],ensure_ascii=False).encode()).hexdigest()

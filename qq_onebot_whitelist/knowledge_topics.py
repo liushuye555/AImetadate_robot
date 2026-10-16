@@ -298,12 +298,15 @@ def record_updates(conn: sqlite3.Connection, scope: str, items: list[dict], reco
     return results
 
 
-def thread_candidates(conn: sqlite3.Connection, scope: str, limit: int = 12) -> list[dict]:
+def thread_candidates(conn: sqlite3.Connection, scope: str, limit: int | None = 12) -> list[dict]:
     """Return bounded group-local hints; none of these states imply verified facts."""
-    rows = _rows(conn.execute(
-        'SELECT id,scope,title,status,known,missing,evidence_json,category,value FROM knowledge_threads '
-        'WHERE scope=? ORDER BY source_stamp DESC,source_message_id DESC,id LIMIT ?',
-        (scope, _limit(limit, 50))))
+    query = ('SELECT id,scope,title,status,known,missing,evidence_json,category,value FROM knowledge_threads '
+             'WHERE scope=? ORDER BY source_stamp DESC,source_message_id DESC,id')
+    args = [scope]
+    if limit is not None:
+        query += ' LIMIT ?'
+        args.append(_limit(limit, 50))
+    rows = _rows(conn.execute(query, args))
     for row in rows:
         row['title'] = row['title'][:300]
         row['known'] = row['known'][:1600]
@@ -312,15 +315,18 @@ def thread_candidates(conn: sqlite3.Connection, scope: str, limit: int = 12) -> 
     return rows
 
 
-def threads(conn: sqlite3.Connection, scope: str | None = None, limit: int = 200) -> list[dict]:
+def threads(conn: sqlite3.Connection, scope: str | None = None, limit: int | None = 200) -> list[dict]:
     """Read selected topics with their complete immutable event history."""
     query = 'SELECT * FROM knowledge_threads'
     args = []
     if scope is not None:
         query += ' WHERE scope=?'
         args.append(scope)
-    rows = _rows(conn.execute(query + ' ORDER BY source_stamp DESC,source_message_id DESC,id LIMIT ?',
-                              [*args, _limit(limit, 200)]))
+    query += ' ORDER BY source_stamp DESC,source_message_id DESC,id'
+    if limit is not None:
+        query += ' LIMIT ?'
+        args.append(_limit(limit, 200))
+    rows = _rows(conn.execute(query, args))
     for row in rows:
         row['evidence_ids'] = json.loads(row.pop('evidence_json'))
         row['resource'] = json.loads(row.pop('resource_json'))
