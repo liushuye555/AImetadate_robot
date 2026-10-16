@@ -8,5 +8,6 @@ if (-not (Test-Path -LiteralPath $PanelExe)) {
     exit 1
 }
 
-# Qt shows its own window; avoid creating a visible launcher console.
-Start-Process -FilePath $PanelExe -WorkingDirectory $BotDir -WindowStyle Hidden | Out-Null
+# This is the interactive GUI itself; hiding it also hides Qt's native window.
+# Console wrappers may stay hidden, but the requested manager must be visible.
+Start-Process -FilePath $PanelExe -WorkingDirectory $BotDir -WindowStyle Normal | Out-Null

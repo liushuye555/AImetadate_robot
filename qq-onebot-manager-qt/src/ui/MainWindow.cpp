@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "WindowActivation.h"
 #include "Strings.h"
 #include "theme/ThemeManager.h"
 #include <QApplication>
@@ -172,7 +173,7 @@ QWidget *MainWindow::pageWidget(const QString &id) const {
 void MainWindow::setupTray() {
     m_tray = new QSystemTrayIcon(QIcon(":/icons/app.svg"), this);
     auto *menu = new QMenu(this);
-    menu->addAction(Strings::zh("overview"), this, [this] { showNormal(); raise(); activateWindow(); });
+    menu->addAction(Strings::zh("overview"), this, [this] { showAndActivateWindow(this); });
     menu->addSeparator();
     menu->addAction(Strings::zh("start"), this, [this] { emit trayAction("start"); });
     menu->addAction(Strings::zh("stop"), this, [this] { emit trayAction("stop"); });
@@ -185,9 +186,7 @@ void MainWindow::setupTray() {
     m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
-            showNormal();
-            raise();
-            activateWindow();
+            showAndActivateWindow(this);
         }
     });
     m_tray->show();

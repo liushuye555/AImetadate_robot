@@ -3,6 +3,9 @@
 #include <QTimer>
 #include <QVariant>
 #include <QEventLoop>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 SingleInstance::SingleInstance(const QString &name, QObject *parent)
     : QObject(parent), m_name(name) {
@@ -39,6 +42,14 @@ bool SingleInstance::tryLock(const QString &action) {
     QLocalSocket probe;
     probe.connectToServer(m_name);
     if (probe.waitForConnected(200)) {
+#ifdef Q_OS_WIN
+        if (action == QStringLiteral("show")) {
+            // Transfer this explicit launch's foreground permission only to its owner.
+            ULONG ownerPid = 0;
+            if (GetNamedPipeServerProcessId(reinterpret_cast<HANDLE>(probe.socketDescriptor()), &ownerPid))
+                AllowSetForegroundWindow(ownerPid);
+        }
+#endif
         // Keep the Windows pipe open until the owner has consumed the command.
         // Closing an unaccepted pipe can discard its buffered request entirely.
         QEventLoop acknowledgement;

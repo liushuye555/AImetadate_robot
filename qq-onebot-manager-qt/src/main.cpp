@@ -18,6 +18,7 @@
 #include "core/ServiceControl.h"
 #include "core/StatusMonitor.h"
 #include "ui/MainWindow.h"
+#include "ui/WindowActivation.h"
 #include "ui/Strings.h"
 #include "ui/pages/CollectionPage.h"
 #include "ui/pages/RelayPage.h"
@@ -82,10 +83,7 @@ int main(int argc, char *argv[]) {
     };
     MainWindow window(pages);
     QObject::connect(&single, &SingleInstance::anotherInstanceRequested, &window, [&window] {
-        if (window.isMinimized()) window.showNormal();
-        else window.show();
-        window.raise();
-        window.activateWindow();
+        showAndActivateWindow(&window);
     });
 
     auto *overview = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
@@ -380,7 +378,7 @@ int main(int argc, char *argv[]) {
     QObject::connect(statsTimer, &QTimer::timeout, fetchStats);
     statsTimer->start();
 
-    window.show();
+    showAndActivateWindow(&window);
     QTimer::singleShot(0, &window, [&] { runBackend(false); });
     return app.exec();
 }
