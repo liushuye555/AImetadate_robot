@@ -896,13 +896,15 @@ def test_stale_view_counts_fills_all_gallery(tmp_path):
     view = tmp_path / "view"
     (view / "02_群友好评").mkdir(parents=True)
     (view / "02_群友好评" / "a.png").write_bytes(b"x")
+    (view / "04_候选待观察").mkdir(parents=True)
+    (view / "04_候选待观察" / "candidate.png").write_bytes(b"y")
     (view / ALL_GALLERY_DIR).mkdir(parents=True)
     (view / ALL_GALLERY_DIR / "chunks").mkdir()
     (view / ALL_GALLERY_DIR / "chunks" / "chunk-0001.js").write_text("[]", encoding="utf-8")
 
     counts = stale_view_counts(view)
 
-    assert counts == {"02_群友好评": 1, ALL_GALLERY_DIR: 1}
+    assert counts == {"02_群友好评": 1, "04_候选待观察": 1, ALL_GALLERY_DIR: 1}
 
 
 def test_category_gallery_page_has_no_cat_filter(tmp_path):

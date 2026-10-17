@@ -520,7 +520,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 def cmd_view_list(args: argparse.Namespace) -> int:
     """快速列出现有报告分类（不重建视图）。"""
     try:
-        from .build_image_view import ALL_GALLERY_DIR
+        from .build_image_view import ALL_GALLERY_DIR, CATEGORY_NAMES
         from .resource_view import RESOURCE_CHUNKS_DIR
         view = REPO_ROOT / "data" / "view"
         categories = []
@@ -531,8 +531,9 @@ def cmd_view_list(args: argparse.Namespace) -> int:
                     continue
                 count = sum(1 for f in p.rglob("*") if f.is_file() and f.suffix.lower() in exts)
                 categories.append({"name": p.name, "count": count, "url": p.name + "/index.html"})
-        # 合并图库目录不落图片文件：条目数用其余目录之和兜底
-        total = sum(c["count"] for c in categories if c["name"] != ALL_GALLERY_DIR)
+        # 合并图库不含候选暂存区；快速列表与实际页面保持相同范围。
+        total = sum(c["count"] for c in categories
+                    if c["name"] not in (ALL_GALLERY_DIR, CATEGORY_NAMES['candidate']))
         for c in categories:
             if c["name"] == ALL_GALLERY_DIR:
                 c["count"] = total

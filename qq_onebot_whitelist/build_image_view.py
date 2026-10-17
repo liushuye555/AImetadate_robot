@@ -58,9 +58,12 @@ def stale_view_counts(view: Path) -> dict[str, int]:
                 n = sum(1 for f in cat.rglob('*') if f.is_file() and f.suffix.lower() in image_exts)
                 if n:
                     counts[cat.name] = n
-        # 合并图库目录不落图片文件：条目数用其余目录之和兜底
+        # 合并图库目录不落图片文件：忙时兜底按归档类目目录计数，不含候选暂存区。
         if (view / ALL_GALLERY_DIR).is_dir():
-            counts[ALL_GALLERY_DIR] = sum(v for k, v in counts.items() if k != ALL_GALLERY_DIR)
+            counts[ALL_GALLERY_DIR] = sum(
+                v for k, v in counts.items()
+                if k not in (ALL_GALLERY_DIR, CATEGORY_NAMES['candidate'])
+            )
     return counts
 
 
@@ -144,7 +147,7 @@ def member_name_map_from_conn(conn: sqlite3.Connection) -> dict[str, str]:
 
 CATEGORY_ICONS = {'00': '🌐', '01': '🎨', '02': '⭐', '03': '🧩', '04': '👀', '05': '🍅', '06': '📌'}
 CATEGORY_DESC = {
-    '00': '包含归档图片与04候选待观察；默认不限分组，可按分组筛选',
+    '00': '汇总已归档主展示图片；不含04候选待观察，可按分组筛选',
     '01': '文件中保留生成参数或工作流，便于查看与复用；不代表图像质量评级',
     '02': '被引用、好评或求提示词后晋升',
     '03': '图片与提示词/参数成对出现',
@@ -1323,6 +1326,7 @@ __CAT_TOOLBAR__
       const p={token:PAGE_TOKEN,dry_run:!!dry,link:exportLink.checked,no_captions:exportNoCap.checked};
       if(CATEGORY)p.category=[CATEGORY];
       if(catFilter)p.category=[catFilter];
+      else if(!CATEGORY&&catSel)p.category=Array.from(catSel.options).map(o=>o.value).filter(Boolean);
       if(userFilter)p.user=[userFilter];
       if(sizeFilter)p.orientation=sizeFilter;
       if(minRes)p.min_side=minRes;
@@ -1688,6 +1692,8 @@ def write_all_gallery(
     缩略图仍引用各分组目录（不新增硬链接、不重生成缩略图）；item.cat 供页内
     分组筛选、搜索与导出前缀过滤。返回合并条目数；无条目时不生成页面。
     '''
+    # 防止直接调用者或旧调用路径把候选暂存内容混入总览。
+    entries = [entry for entry in entries if entry.get('cat') != CATEGORY_NAMES['candidate']]
     if not entries:
         return 0
     all_dir = view / ALL_GALLERY_DIR
@@ -2230,7 +2236,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 text=discussion_text,
             )
             plan.entries.append(entry)
-            all_entries.append(entry)
+            if cat != CATEGORY_NAMES['candidate']:
+                all_entries.append(entry)
         # 交叉显示：05 的确认混淆图按 context_reason 回到原分类
         _place_context_display(row, src, sha256, size_class, ext, is_deobfuscated,
                                plans=plans, dedup_seen=dedup_seen, discussion=discussion)
@@ -2319,7 +2326,8 @@ def build_view(project_dir: Path) -> dict[str, int]:
     # 跨分组合并图库（不限分组浏览/筛选/导出）：条目签名不变且页面骨架完整时跳过
     if all_entries:
         merged_sig = hashlib.sha1(
-            json.dumps(all_entries, ensure_ascii=False, sort_keys=True).encode('utf-8')
+            b'archived-only-v1\0'
+            + json.dumps(all_entries, ensure_ascii=False, sort_keys=True).encode('utf-8')
         ).hexdigest()[:10]
         prev_all = state.get('all_gallery') or {}
         all_dir = view / ALL_GALLERY_DIR
@@ -2335,6 +2343,9 @@ def build_view(project_dir: Path) -> dict[str, int]:
                 print(f'all-gallery generation failed: {type(exc).__name__}: {exc}')
         if merged_count:
             counts[ALL_GALLERY_DIR] = merged_count
+    else:
+        # 若最后一张归档图降级为候选，清理旧合并页和签名，避免旧候选信息继续可访问。
+        state.pop('all_gallery', None)
     if copy_fallbacks:
         remaining = [dst for src, dst in copy_fallbacks if not relink_view_copy(src, dst)]
         if remaining:
@@ -2376,7 +2387,7 @@ def build_view(project_dir: Path) -> dict[str, int]:
         '05_小番茄混淆：经 Gilbert 曲线逆置换验证的混淆图（算法级确认）。\n'
         '05_小番茄混淆_压缩：重压/缩放后的混淆图（弱信号，逆置换无法完全还原）。\n'
         '带元数据的确认混淆图：还原后元数据保留在文件上，并同时显示回其来源 01 分类。\n'
-        '00_全部：包含各分组主展示图片及04候选待观察，交叉展示副本不重复计数；可按分组筛选。\n\n'
+        '00_全部：包含各分组已归档主展示图片，不含04候选待观察；交叉展示副本不重复计数，可按分组筛选。\n\n'
         '每个图库页面支持按用户（发送者）、尺寸（横/竖/方）、分辨率短边、月份、\n'
         '关键词（元数据文本/QQ号/ID）与"只看重复/同批"组合筛选；可切换缩略图大小、\n'
         '按分辨率/大小/名称排序。导出训练数据集用：\n'

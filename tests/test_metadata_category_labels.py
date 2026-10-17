@@ -114,7 +114,8 @@ def test_unknown_metadata_main_and_context_share_category_without_quality_claim(
     assert '不是所有元数据图片的总数' in index
 
 
-def test_new_candidate_is_added_to_all_gallery_sort_chunks_on_rebuild(tmp_path):
+def test_candidate_stays_out_of_all_gallery_and_downgrade_removes_old_entry(tmp_path):
+    import json
     from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
 
     _make_project_db(tmp_path)
@@ -125,23 +126,44 @@ def test_new_candidate_is_added_to_all_gallery_sort_chunks_on_rebuild(tmp_path):
     candidate = _image(tmp_path / 'candidate.png', (20, 80, 20))
     _insert_image(tmp_path, path=candidate, reason='candidate', source=None, sha='candidate',
                   seen_at='2026-10-02 10:00:00')
+    retained = _image(tmp_path / 'retained.png', (20, 20, 80))
+    _insert_image(tmp_path, path=retained, reason='positive_feedback', source=None, sha='retained',
+                  seen_at='2026-10-03 10:00:00')
     counts = build_view(tmp_path)
 
     assert counts['04_候选待观察'] == 1
     assert counts[ALL_GALLERY_DIR] == 2
     candidate_dir = tmp_path / 'data' / 'view' / '04_候选待观察'
     assert len(list(candidate_dir.rglob('*.png'))) == 1
+    assert (candidate_dir / 'chunks' / 'chunk-0001.js').exists()
+    assert '%232_24x18_candidate.png' in (candidate_dir / 'chunks' / 'chunk-0001.js').read_text(encoding='utf-8')
     all_dir = tmp_path / 'data' / 'view' / ALL_GALLERY_DIR
     for subdir in ('chunks', 'chunks-size', 'chunks-name', 'chunks-res'):
         files = list((all_dir / subdir).glob('chunk-*.js'))
         assert files, subdir
         payloads = '\n'.join(p.read_text(encoding='utf-8') for p in files)
-        assert '%232_24x18_candidate.png' in payloads, subdir
-        assert '04_候选待观察' in payloads, subdir
-    # 分组选择器也列出候选分类，便于从总览页筛选。
+        assert '%232_24x18_candidate.png' not in payloads, subdir
+        assert '04_候选待观察' not in payloads, subdir
+    # 候选仍在独立分类中，但不出现在总览页筛选器或快捷筛选。
     all_index = (all_dir / 'index.html').read_text(encoding='utf-8')
-    assert '04_候选待观察（1张）' in all_index
-    assert 'id="candidateQuick"' in all_index and '待观察 1 张' in all_index
+    assert 'value="04_候选待观察"' not in all_index
+    assert 'id="candidateQuick"' not in all_index
+    assert 'Array.from(catSel.options).map(o=>o.value).filter(Boolean)' in all_index
+
+    # 原有归档图片降级为候选后，00 页仍保留其他归档图，但清除旧条目及 info 入口。
+    with sqlite3.connect(tmp_path / 'data' / 'bot.db') as conn:
+        conn.execute("UPDATE images SET retention_reason='candidate' WHERE id=1")
+    counts = build_view(tmp_path)
+    assert counts['04_候选待观察'] == 2
+    assert counts[ALL_GALLERY_DIR] == 1
+    for subdir in ('chunks', 'chunks-size', 'chunks-name', 'chunks-res'):
+        payloads = '\n'.join(p.read_text(encoding='utf-8') for p in (all_dir / subdir).glob('chunk-*.js'))
+        assert '%231_24x18_positive_feedback.png' not in payloads, subdir
+        assert '%232_24x18_candidate.png' not in payloads, subdir
+    assert not (all_dir / 'info' / '1.js').exists()
+    state = json.loads((tmp_path / 'data' / 'view-build-state.json').read_text(encoding='utf-8'))
+    assert state['all_gallery']['count'] == 1
+    assert len(list((tmp_path / 'data' / 'view' / '04_候选待观察').rglob('*.png'))) == 2
 
 
 def test_changed_metadata_category_refreshes_existing_all_page_info(tmp_path):

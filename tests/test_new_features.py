@@ -60,13 +60,20 @@ def test_echo_unlimited_window_consecutive():
 
 
 def test_cmd_view_list_prints_categories(tmp_path, monkeypatch, capsys):
+    import json
+
     view = tmp_path / "data" / "view"
     (view / "01_AI元数据").mkdir(parents=True)
     (view / "01_AI元数据" / "a.png").write_bytes(b"x")
+    (view / "04_候选待观察").mkdir()
+    (view / "04_候选待观察" / "candidate.png").write_bytes(b"y")
+    (view / "00_全部").mkdir()
     monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
     assert control.cmd_view_list(None) == 0
     out = capsys.readouterr().out
     assert "01_AI元数据" in out and '"count": 1' in out
+    counts = {item['name']: item['count'] for item in json.loads(out)['categories']}
+    assert counts == {'00_全部': 1, '01_AI元数据': 1, '04_候选待观察': 1}
 
 
 def test_cleanup_expired_candidates(tmp_path):
