@@ -56,6 +56,50 @@ def test_views_escape_user_content_and_provide_empty_states(tmp_path, monkeypatc
         assert "本页暂无正式资料。" in views[filename]
 
 
+def test_saved_file_actions_are_local_group_scoped_and_encoded(tmp_path, monkeypatch):
+    monkeypatch.setattr('qq_onebot_whitelist.knowledge_feedback.feedback_token', lambda *_: 'test-token')
+    data_dir = tmp_path / 'data'
+    own_dir = data_dir / 'knowledge-files' / '123'
+    other_dir = data_dir / 'knowledge-files' / '999'
+    own_dir.mkdir(parents=True)
+    other_dir.mkdir(parents=True)
+    own_file = own_dir / '资料 文件#1.pdf'
+    other_file = other_dir / 'other.pdf'
+    outside_file = tmp_path / 'outside.pdf'
+    for path in (own_file, other_file, outside_file):
+        path.write_bytes(b'local-test')
+    views = knowledge_view.render_views(data_dir, items=[], glossary=[], runs=[], assets=[
+        {'scope': 'group:123', 'name': '报告 "最终版" & <附件>.pdf', 'status': 'saved', 'path': str(own_file)},
+        {'scope': 'group:123', 'name': '越界文件.pdf', 'status': 'saved', 'path': str(outside_file)},
+        {'scope': 'group:123', 'name': '别群文件.pdf', 'status': 'saved', 'path': str(other_file)},
+        {'scope': 'group:123', 'name': '失败文件.pdf', 'status': 'failed', 'path': str(own_file)},
+    ])
+
+    page = views['knowledge-files.html']
+    expected_href = '../knowledge-files/123/%E8%B5%84%E6%96%99%20%E6%96%87%E4%BB%B6%231.pdf'
+    action_blocks = re.findall(r'<p class="actions">(.*?)</p>', page, re.S)
+    assert len(action_blocks) == 1
+    assert action_blocks[0].count('href="' + expected_href + '"') == 2
+    assert 'download="报告 &quot;最终版&quot; &amp; &lt;附件&gt;.pdf"' in page
+    assert 'outside.pdf' not in action_blocks[0] and '999/other.pdf' not in action_blocks[0]
+    assert 'failed.pdf' not in action_blocks[0]
+
+
+def test_file_status_and_recovery_errors_are_rendered_in_chinese(tmp_path, monkeypatch):
+    monkeypatch.setattr('qq_onebot_whitelist.knowledge_feedback.feedback_token', lambda *_: 'test-token')
+    views = knowledge_view.render_views(tmp_path, items=[], glossary=[], runs=[], assets=[
+        {'scope': 'group:123', 'name': 'a.pdf', 'status': 'saved'},
+        {'scope': 'group:123', 'name': 'b.pdf', 'status': 'failed', 'error': 'FileReferenceUnavailable'},
+        {'scope': 'group:123', 'name': 'c.pdf', 'status': 'failed', 'error': 'AmbiguousFileReference'},
+        {'scope': 'group:123', 'name': 'd.pdf', 'status': 'pending'},
+    ])
+
+    page = views['knowledge-files.html']
+    assert '已保存' in page and '保存失败' in page and '待保存' in page
+    assert '旧文件引用已失效，群文件列表中未找到匹配。' in page
+    assert '群内存在同名同大小文件，无法安全确认对应文件。' in page
+
+
 @pytest.mark.parametrize('filename', ['knowledge.html', 'glossary.html', 'knowledge-summary.html', 'knowledge-files.html'])
 def test_generated_filters_run_for_each_page(tmp_path, monkeypatch, filename):
     node = shutil.which('node')

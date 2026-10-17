@@ -6,6 +6,7 @@ import pytest
 from qq_onebot_whitelist.knowledge import write_view
 from qq_onebot_whitelist.knowledge_publish import publish_history
 from qq_onebot_whitelist.knowledge_store import KnowledgeDB
+from qq_onebot_whitelist.config import AppConfig
 from qq_onebot_whitelist import knowledge_organization, knowledge_topics
 from qq_onebot_whitelist.store import Store
 
@@ -33,6 +34,47 @@ def prepared(tmp_path):
     return source, target, db
 
 
+def attach_file(directory, scope, message_id, file_id, name='source guide.pdf', size=123, busid=8):
+    db_path = directory / 'bot.db'
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute('SELECT raw_json FROM messages WHERE scope=? AND id=?', (scope, message_id)).fetchone()
+        raw = json.loads(row[0])
+        raw.setdefault('message', []).append({'type': 'file', 'data': {
+            'id': file_id, 'name': name, 'size': size, 'busid': busid,
+            'url': 'https://signed.invalid/source-only',
+        }})
+        conn.execute('UPDATE messages SET raw_json=? WHERE scope=? AND id=?',
+                     (json.dumps(raw, ensure_ascii=False), scope, message_id))
+
+
+def prepared_file_bundle(tmp_path, file_ids=('fid-1',)):
+    source, target, source_db = prepared(tmp_path)
+    for directory in (source, target):
+        attach_file(directory, SCOPE, 1, 'fid-1')
+    # These are real files, but not present in the item's cited message/group.
+    target_store = Store(target / 'bot.db')
+    target_store.record_message(scope=SCOPE, user_id='7', text='未引用的另一条消息',
+        raw={'message_id': 10, 'time': 1791777600, 'message': [
+            {'type': 'file', 'data': {'id': 'fid-unreferenced', 'name': 'other.pdf', 'size': 5}}]})
+    target_store.record_message(scope='group:456', user_id='7', text='另一个群的附件',
+        raw={'message_id': 11, 'time': 1791777600, 'message': [
+            {'type': 'file', 'data': {'id': 'fid-foreign', 'name': 'foreign.pdf', 'size': 6}}]})
+    with source_db.conn() as conn:
+        run = conn.execute('SELECT result_json FROM runs WHERE key=?', ('history-run',)).fetchone()
+        result = json.loads(run[0])
+        result['items'][0].update(value='candidate', evidence_state='reported', file_ids=list(file_ids))
+        conn.execute('UPDATE runs SET result_json=? WHERE key=?',
+                     (json.dumps(result, ensure_ascii=False), 'history-run'))
+    return source, target, source_db
+
+
+def file_config(data_dir, *, enabled=True, mode='high_value'):
+    return AppConfig(data_dir=data_dir, knowledge={
+        'enabled': True,
+        'groups': {SCOPE: {'enabled': True, 'files': {'enabled': enabled, 'mode': mode}}},
+    })
+
+
 def test_publish_makes_offline_results_visible_without_enabling_ai(tmp_path):
     source, target, source_db = prepared(tmp_path)
     result = publish_history(source, target, SCOPE)
@@ -47,6 +89,85 @@ def test_publish_makes_offline_results_visible_without_enabling_ai(tmp_path):
     assert '调整节点后恢复' in (page.parent / 'knowledge-summary.html').read_text(encoding='utf-8')
     assert len(source_db.items()) == 1
     assert not (target / 'config.yaml').exists()
+
+
+def test_publish_queues_only_explicit_candidate_files_from_same_group_evidence(tmp_path):
+    source, target, source_db = prepared_file_bundle(
+        tmp_path, file_ids=('fid-1', 'fid-unreferenced', 'fid-foreign'))
+    source_db.asset({'scope': SCOPE, 'file_id': 'fid-1', 'message_id': 1, 'file_name': 'source guide.pdf'},
+                    {'status': 'saved', 'path': str(source / 'knowledge-files' / '123' / 'old.pdf'),
+                     'sha256': 'old-hash', 'size': 1})
+    with source_db.conn() as conn:
+        conn.execute('UPDATE assets SET source_json=? WHERE file_id=?',
+                     (json.dumps({'scope': SCOPE, 'file_id': 'fid-1', 'url': 'https://signed.invalid/secret'}), 'fid-1'))
+
+    result = publish_history(source, target, SCOPE, config=file_config(target))
+
+    assert result['files_queued'] == 1
+    dest = KnowledgeDB(target / 'knowledge.db')
+    with dest.conn() as conn:
+        row = conn.execute('SELECT scope,file_id,message_id,name,path,status,source_json FROM assets').fetchone()
+    assert tuple(row[:6]) == (SCOPE, 'fid-1', 1, 'source guide.pdf', None, 'pending')
+    metadata = json.loads(row['source_json'])
+    assert set(metadata) == {'scope', 'file_id', 'message_id', 'file_name', 'file_size', 'busid'}
+    assert metadata == {'scope': SCOPE, 'file_id': 'fid-1', 'message_id': 1,
+                        'file_name': 'source guide.pdf', 'file_size': 123, 'busid': 8}
+    assert 'signed.invalid' not in row['source_json'] and str(source) not in row['source_json']
+    item = dest.items(SCOPE)[0]
+    assert item['value'] == 'candidate' and item['evidence_state'] == 'reported'
+    assert not dest.items('group:456')
+
+
+@pytest.mark.parametrize('config_mode', ['none', 'disabled'])
+def test_publish_does_not_queue_files_without_explicit_enabled_target_config(tmp_path, config_mode):
+    source, target, _ = prepared_file_bundle(tmp_path)
+    config = None if config_mode == 'none' else file_config(target, enabled=False)
+
+    result = publish_history(source, target, SCOPE, **({'config': config} if config else {}))
+
+    assert result['files_queued'] == 0
+    with KnowledgeDB(target / 'knowledge.db').conn() as conn:
+        assert conn.execute('SELECT count(*) FROM assets').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('mode', ['review', 'index_only'])
+def test_publish_records_explicit_files_for_nonautomatic_modes_as_review(tmp_path, mode):
+    source, target, _ = prepared_file_bundle(tmp_path)
+
+    result = publish_history(source, target, SCOPE, config=file_config(target, mode=mode))
+
+    assert result['files_queued'] == 1
+    with KnowledgeDB(target / 'knowledge.db').conn() as conn:
+        row = conn.execute('SELECT status FROM assets WHERE file_id=?', ('fid-1',)).fetchone()
+    assert row[0] == 'review'
+
+
+@pytest.mark.parametrize('existing_status', ['saved', 'failed', 'review'])
+def test_republish_fills_missing_queue_without_overwriting_existing_asset_state(tmp_path, existing_status):
+    source, target, _ = prepared_file_bundle(tmp_path)
+    first = publish_history(source, target, SCOPE)
+    assert first['files_queued'] == 0
+    dest = KnowledgeDB(target / 'knowledge.db')
+    with dest.conn() as conn:
+        conn.execute('''INSERT INTO assets(scope,file_id,message_id,name,path,status,error,source_json)
+            VALUES (?,?,?,?,?,?,?,?)''', (SCOPE, 'fid-1', 1, 'user-edited.pdf', 'kept/local/path',
+                                           existing_status, 'user-note', '{"user":"kept"}'))
+
+    repeated = publish_history(source, target, SCOPE, config=file_config(target))
+
+    assert repeated['status'] == 'unchanged' and repeated['files_queued'] == 0
+    with dest.conn() as conn:
+        row = conn.execute('SELECT name,path,status,error,source_json FROM assets WHERE file_id=?', ('fid-1',)).fetchone()
+    assert tuple(row) == ('user-edited.pdf', 'kept/local/path', existing_status,
+                          'user-note', '{"user":"kept"}')
+
+
+def test_publish_rejects_target_config_pointing_at_another_data_dir(tmp_path):
+    source, target, _ = prepared_file_bundle(tmp_path)
+
+    with pytest.raises(ValueError, match='数据目录'):
+        publish_history(source, target, SCOPE, config=file_config(tmp_path / 'other-data'))
+    assert not (target / 'knowledge.db').exists()
 
 
 def test_repeated_publication_is_idempotent_and_keeps_runtime_state(tmp_path):

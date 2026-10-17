@@ -261,6 +261,105 @@ def test_files_only_feature_does_not_persist_knowledge_cards(tmp_path, monkeypat
         assert conn.execute('SELECT status FROM assets').fetchone()[0] == 'saved'
 
 
+def _candidate_resource_file_result():
+    result = response([1], files=['fid-1'])
+    item = result['items'][0]
+    item.update(value='candidate', evidence_state='reported', category='resource',
+                quality={'basis': 'resource_lead', 'conditions': [], 'actions': [], 'result_quote': None})
+    return result
+
+
+def test_candidate_resource_lead_with_explicit_file_id_is_archived_without_promoting_text(tmp_path, monkeypatch):
+    path, store = configured(tmp_path, features=('files', 'extraction'), files={'enabled': True, 'mode': 'high_value'})
+    record(store, '这里有一个未经实测的资料线索。', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    import qq_onebot_whitelist.knowledge_files as files
+    archived = []
+
+    def archive(source, root, **kwargs):
+        archived.append((source, root))
+        return {'status': 'saved', 'path': str(root / 'file.pdf'), 'sha256': 'hash', 'size': 9}
+
+    monkeypatch.setattr(files, 'archive_file', archive)
+    result = analyze(path, '123', feature='files', kind='batch',
+                     request=lambda *_: (_candidate_resource_file_result(), 50), model=MODEL)
+
+    assert len(archived) == 1 and archived[0][0]['file_id'] == 'fid-1'
+    db = KnowledgeDB(store.path.parent / 'knowledge.db')
+    item = db.items('group:123')[0]
+    assert item['value'] == 'candidate'
+    assert item['evidence_state'] == 'reported'
+    with db.conn() as conn:
+        assert conn.execute('SELECT status FROM assets WHERE file_id=?', ('fid-1',)).fetchone()[0] == 'saved'
+
+
+def test_candidate_without_explicit_file_id_does_not_download_or_archive(tmp_path, monkeypatch):
+    path, store = configured(tmp_path, features=('files',), files={'enabled': True})
+    record(store, '出现了一个未选择附件的线索。', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    import qq_onebot_whitelist.knowledge_files as files
+    monkeypatch.setattr(files, 'archive_file', lambda *a, **k: pytest.fail('unselected file must not archive'))
+    result = _candidate_resource_file_result()
+    result['items'][0]['file_ids'] = []
+
+    analyze(path, '123', feature='files', kind='batch', request=lambda *_: (result, 50), model=MODEL)
+
+    db = KnowledgeDB(store.path.parent / 'knowledge.db')
+    with db.conn() as conn:
+        assert conn.execute('SELECT count(*) FROM assets').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('mode', ['review', 'index_only'])
+def test_review_and_index_only_modes_do_not_auto_download_explicit_candidate_file(tmp_path, monkeypatch, mode):
+    path, store = configured(tmp_path, features=('files',), files={'enabled': True, 'mode': mode})
+    record(store, '资料线索对应此附件。', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    import qq_onebot_whitelist.knowledge_files as files
+    monkeypatch.setattr(files, 'archive_file', lambda *a, **k: pytest.fail(f'{mode} must not auto archive'))
+
+    analyze(path, '123', feature='files', kind='batch',
+            request=lambda *_: (_candidate_resource_file_result(), 50), model=MODEL)
+
+    db = KnowledgeDB(store.path.parent / 'knowledge.db')
+    with db.conn() as conn:
+        row = conn.execute('SELECT status FROM assets WHERE file_id=?', ('fid-1',)).fetchone()
+    assert row and row[0] == 'review'
+
+
+def test_files_disabled_does_not_archive_or_create_file_archive_directory(tmp_path, monkeypatch):
+    path, store = configured(tmp_path)
+    record(store, '资料线索对应此附件。', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    import qq_onebot_whitelist.knowledge_files as files
+    monkeypatch.setattr(files, 'archive_file', lambda *a, **k: pytest.fail('disabled feature must not archive'))
+
+    result = analyze(path, '123', feature='files', kind='batch',
+                     request=lambda *_: (_candidate_resource_file_result(), 50), model=MODEL)
+
+    assert result['status'] == 'disabled'
+    assert not (store.path.parent / 'knowledge-files').exists()
+
+
+def test_failed_download_keeps_pre_registered_retryable_asset(tmp_path, monkeypatch):
+    path, store = configured(tmp_path, features=('files',), files={'enabled': True})
+    record(store, '资料线索对应此附件。', file={'name': '资料.pdf', 'id': 'fid-1', 'size': 9})
+    import qq_onebot_whitelist.knowledge_files as files
+    db = KnowledgeDB(store.path.parent / 'knowledge.db')
+    seen_before_archive = []
+
+    def fail_after_observing_pending(source, *args, **kwargs):
+        with db.conn() as conn:
+            row = conn.execute('SELECT status FROM assets WHERE file_id=?', (source['file_id'],)).fetchone()
+        seen_before_archive.append(row[0] if row else None)
+        return {'status': 'failed', 'error': 'TemporaryFailure'}
+
+    monkeypatch.setattr(files, 'archive_file', fail_after_observing_pending)
+    analyze(path, '123', feature='files', kind='batch',
+            request=lambda *_: (_candidate_resource_file_result(), 50), model=MODEL)
+
+    assert seen_before_archive == ['pending']
+    with db.conn() as conn:
+        row = conn.execute('SELECT status,error FROM assets WHERE file_id=?', ('fid-1',)).fetchone()
+    assert tuple(row) == ('failed', 'TemporaryFailure')
+    assert [r['file_id'] for r in db.pending_assets('group:123')] == ['fid-1']
+
+
 def test_secondary_feature_closed_during_call_is_not_cached_as_complete(tmp_path):
     path, store = configured(tmp_path)
     record(store, '跑图时节点出错', mid=1)

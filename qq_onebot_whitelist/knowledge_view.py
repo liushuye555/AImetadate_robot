@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .content_utils import redact_secrets
 from .knowledge_evidence import render_evidence
@@ -85,6 +85,39 @@ def _grade_reason(grade):
     return '<p class="grade-reason"><strong>阅读分级：' + _safe(grade['label']) + '</strong> · ' + _safe(grade['reason']) + '</p>'
 
 
+def _asset_actions(data_dir, asset):
+    """Link only saved originals inside this group's own local archive."""
+    if asset.get('status') != 'saved' or not asset.get('path'):
+        return ''
+    scope = str(asset.get('scope') or '')
+    if not scope.startswith('group:') or not scope.removeprefix('group:').isdigit():
+        return ''
+    root = (Path(data_dir) / 'knowledge-files').resolve()
+    try:
+        path = Path(asset['path']).resolve()
+        path.relative_to(root / scope.removeprefix('group:'))
+        if not path.is_file():
+            return ''
+        href = '../knowledge-files/' + quote(path.relative_to(root).as_posix(), safe='/')
+    except (ValueError, OSError):
+        return ''
+    return '<p class="actions"><a href="' + _safe(href) + '">打开本地文件</a><a class="copy-link" href="' + _safe(href) + '" download="' + _safe(asset.get('name') or path.name) + '">另存为原文件名</a></p>'
+
+
+def _asset_error(asset):
+    message = {
+        'FileReferenceUnavailable': '旧文件引用已失效，群文件列表中未找到匹配。',
+        'AmbiguousFileReference': '群内存在同名同大小文件，无法安全确认对应文件。',
+        'RuntimeError': '下载接口未返回可用结果，等待重试。',
+        'HTTPError': '旧下载链接已无法取回文件，尚未保存。',
+        'BudgetExceeded': '已达到本群文件保留空间限额。',
+        'FileTooLarge': '超过单文件大小限制。',
+        'PolicyExcluded': '此扩展名不在允许保留范围内。',
+        'IntegrityFailure': '本地文件缺失或校验失败，等待恢复。',
+    }.get(asset.get('error'), asset.get('error'))
+    return '<p class="meta">保存说明：' + _safe(message) + '</p>' if message else ''
+
+
 def _background_reference():
     from .knowledge_background import load_background
     data = load_background()
@@ -148,7 +181,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
         'knowledge.html': '先选主题，再找具体情形。知识、待跟进和归档分开浏览，文字讨论也可独立收录。',
         'glossary.html': '遇到不熟悉的行业说法，先查释义，再展开原消息核对。同词的不同解释分别保留。',
         'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
-        'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
+        'knowledge-files.html': '附件保留与文字等级独立。在此查看保存结果、打开本地文件或按原文件名另存；未保存的资料会标明原因。',
     }
     empty = ('<div class="empty"><strong>本页暂无正式资料。</strong>'
              '<p>若已完成历史分析，请先发布整理结果。</p>'
@@ -445,10 +478,13 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
     file_cards = []
     for asset in assets:
         ids = [asset.get("message_id")] if type(asset.get("message_id")) is int and asset.get("message_id") > 0 else []
+        file_status = {'saved': '已保存', 'pending': '待保存', 'failed': '保存失败',
+                       'review': '等待确认', 'skipped': '暂未保存', 'disabled': '已关闭'}.get(asset.get('status'), asset.get('status'))
         file_cards.append(f'<article data-group="{_safe(asset.get("scope"))}"><h2>文件 · {_safe(asset.get("name"))}</h2>'
-                          f'<p class="meta">{_safe(asset.get("scope"))} · {_safe(asset.get("status"))} · 原消息 '
+                          f'<p class="meta">{_safe(asset.get("scope"))} · {_safe(file_status)} · 原消息 '
                           f'{("#" + str(ids[0])) if ids else "编号不可用"}</p><pre>{_safe(asset.get("path") or asset.get("error") or "未保存本体")}</pre>'
-                          f'{evidence(asset.get("scope"), ids)}</article>')
+                          + _asset_actions(data_dir, asset) + _asset_error(asset)
+                          + f'{evidence(asset.get("scope"), ids)}</article>')
     files_html = _frame("knowledge-files.html", "群文件", file_cards, groups, "", background=background)
     return {"knowledge.html": knowledge_html, "glossary.html": glossary_html,
             "knowledge-summary.html": summary_html, "knowledge-files.html": files_html}

@@ -13,8 +13,8 @@ from pathlib import Path
 import sqlite3
 import uuid
 
-from .knowledge_config import group_scope
-from .knowledge_store import KnowledgeDB, LOCAL_TZ
+from .knowledge_config import group_scope, profile_for
+from .knowledge_store import KnowledgeDB, LOCAL_TZ, read_records
 
 
 SCOPED_TABLES = ('runs', 'items', 'terms', 'knowledge_threads',
@@ -98,7 +98,56 @@ def _read_bundle(source, target, scope):
         return bundle, ids
 
 
-def publish_history(source_dir: Path, data_dir: Path, scope: str) -> dict:
+def _selected_file_sources(bundle: dict, target: Path, scope: str, ids: set[int]) -> list[dict]:
+    """Resolve explicitly selected run file IDs against live same-group evidence only."""
+    selected: dict[str, set[int]] = {}
+    for run in bundle.get('runs', []):
+        try:
+            result = json.loads(run.get('result_json') or '{}')
+        except (TypeError, ValueError) as exc:
+            raise ValueError('整理结果的文件关联格式无效，未发布') from exc
+        if not isinstance(result, dict):
+            continue
+        for item in result.get('items') or []:
+            if not isinstance(item, dict):
+                continue
+            file_ids = item.get('file_ids') or []
+            evidence_ids = item.get('evidence_ids') or []
+            if not isinstance(file_ids, list) or not isinstance(evidence_ids, list):
+                raise ValueError('整理结果的文件关联格式无效，未发布')
+            valid_evidence = {mid for mid in evidence_ids if type(mid) is int and mid in ids}
+            for file_id in file_ids:
+                if isinstance(file_id, str) and file_id and valid_evidence:
+                    selected.setdefault(file_id, set()).update(valid_evidence)
+
+    if not selected:
+        return []
+
+    found: dict[str, dict] = {}
+    # Point lookups avoid truncating large histories while still loading only
+    # explicitly cited IDs from this exact live group.
+    for message_id in sorted({mid for mids in selected.values() for mid in mids}):
+        records = read_records(target / 'bot.db', scope, after_id=message_id - 1,
+                               before_id=message_id, limit=1)
+        for record in records:
+            if record.get('scope') != scope or record.get('id') != message_id:
+                continue
+            for source in record.get('files') or []:
+                file_id = str(source.get('file_id') or '')
+                if message_id not in selected.get(file_id, set()):
+                    continue
+                found.setdefault(file_id, {
+                    'scope': scope,
+                    'file_id': file_id,
+                    'message_id': message_id,
+                    'file_name': str(source.get('file_name') or ''),
+                    'file_size': source.get('file_size'),
+                    'busid': source.get('busid'),
+                })
+    return list(found.values())
+
+
+def publish_history(source_dir: Path, data_dir: Path, scope: str, *, config=None) -> dict:
     """Merge one reviewed group, rejecting conflicts rather than overwriting edits.
 
     The caller explicitly chooses an analysis directory. No directory discovery
@@ -110,6 +159,16 @@ def publish_history(source_dir: Path, data_dir: Path, scope: str) -> dict:
             (source / 'knowledge.db', source / 'bot.db', target / 'bot.db')):
         raise ValueError('需要独立的分析目录及现有正式原消息库')
     bundle, ids = _read_bundle(source, target, scope)
+    file_sources: list[dict] = []
+    file_status = 'pending'
+    if config is not None:
+        if Path(config.data_dir).resolve() != target:
+            raise ValueError('目标运行配置的数据目录与发布目录不一致，未发布')
+        profile = profile_for(config, scope)
+        if profile.allows('files'):
+            file_sources = _selected_file_sources(bundle, target, scope, ids)
+            if (profile.settings.get('files') or {}).get('mode', 'high_value') != 'high_value':
+                file_status = 'review'
     digest = sha256(json.dumps([scope, bundle], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     database_path = target / 'knowledge.db'
     backup = None
@@ -146,6 +205,14 @@ def publish_history(source_dir: Path, data_dir: Path, scope: str) -> dict:
         conn.execute('INSERT OR IGNORE INTO knowledge_publications VALUES (?,?,?,?,?,?,?,?)',
                      (digest, scope, str(source), datetime.now(LOCAL_TZ).isoformat(), len(ids),
                       min(ids), max(ids), json.dumps({table: len(rows) for table, rows in bundle.items()})))
+        files_queued = 0
+        for source_file in file_sources:
+            cur = conn.execute('''INSERT OR IGNORE INTO assets
+                (scope,file_id,message_id,name,status,source_json,last_attempt_at)
+                VALUES (?,?,?,?,?,?,?)''',
+                (scope, source_file['file_id'], source_file['message_id'], source_file['file_name'],
+                 file_status, json.dumps(source_file, ensure_ascii=False), ''))
+            files_queued += max(0, cur.rowcount)
     return {'status': 'published' if any(inserted.values()) else 'unchanged',
             'scope': scope, 'message_count': len(ids), 'inserted': inserted,
-            'backup': str(backup) if backup else None}
+            'backup': str(backup) if backup else None, 'files_queued': files_queued}

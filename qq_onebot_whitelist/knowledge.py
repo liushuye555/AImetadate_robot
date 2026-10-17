@@ -63,7 +63,7 @@ items是数组，每项含title,summary,kind,topic,value(high或candidate),evide
 只有原消息出现实际解决反馈且evidence_state=verified，才能提出resolved；同时给resolution_evidence数组，每项含message_id与原句quote，必须来自当前批次。建议、到货、准备试不能算解决反馈。
 kind可用教程、排错、经验、资源、对比、公告、未解决。summary写明结论/步骤、适用条件与验证情况。
 未解决问题、有分歧或未经验证的猜测使用candidate；不得给未解决的问题补写“可能需要某工具/训练”等材料中没有的建议。
-file_ids只使用材料中实际存在且在证据消息中的文件ID；只有明确值得长期保留的文件才列入。
+file_ids只使用材料中实际存在且在证据消息中的文件ID；只有明确值得长期保留的文件才列入。这是独立的附件保留选择，不是所有提到的附件；文字条目为candidate或未经实测，不妨碍有保留价值的附件列入file_ids。不要为了保存附件提高文字价值或验证状态。
 terms是数组，每项含term,meaning,evidence_ids。不同上下文有不同含义时保留歧义，不全局硬套。
 术语用本群原话的规范名称，同一含义的别名合并，不把“养号”和“养号 / 号养好了”另存两条。
 meaning仅解释本段含义，不混入未经核实的技术常识、操作建议或个人经验；只提到词但没有解释时，明确含义待确认。
@@ -708,7 +708,9 @@ def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict
     mode = settings.get('mode', 'high_value')
     if not enabled():
         return
-    selected = {fid for item in result['items'] if item['value'] == 'high' for fid in item.get('file_ids', [])}
+    # file_ids is the model's explicit retention selection, validated against
+    # this item's real source files. Text quality and file value are separate.
+    selected = {fid for item in result['items'] for fid in item.get('file_ids', [])}
     for record in records:
         for source in record['files']:
             if source.get('file_id') not in selected or not enabled() or db.asset_saved(scope, source['file_id']):
@@ -725,7 +727,11 @@ def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict
                 current = load_config(config_path)
                 return fetch_download_url_once(f['scope'].split(':')[1], f['file_id'],
                                                **({'busid':f['busid']} if f.get('busid') is not None else {}),
-                                               ws_url=current.onebot_ws_url)
+                                               ws_url=current.onebot_ws_url,
+                                               file_name=f.get('file_name'), file_size=f.get('file_size'))
+            # Record the intention before network I/O so interrupted downloads
+            # remain visible and recoverable through the existing retry queue.
+            db.asset(source, {'status': 'pending'})
             saved = archive_file(source, root, max_bytes=max_bytes, budget_bytes=quota,
                                  enabled=enabled, fetch_url=fetch_url)
             db.asset(source, saved)
@@ -1086,7 +1092,7 @@ def main():
             result = {'path': str(write_view(cfg.data_dir, cfg).resolve())}
         elif args.action == 'publish-history':
             from .knowledge_publish import publish_history
-            result = publish_history(args.source, cfg.data_dir, args.group)
+            result = publish_history(args.source, cfg.data_dir, args.group, config=cfg)
             result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
         elif args.action in ('organize-subjects', 'organize-tags'):
             from .knowledge_subject_review import review_subjects
