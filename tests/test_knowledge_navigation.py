@@ -12,7 +12,7 @@ def test_deep_links_queue_navigation_paging_and_reset_work_together(tmp_path):
     if not node:
         pytest.skip('Node.js is needed for report interaction tests')
     html = render_views(tmp_path, items=[], runs=[], assets=[], glossary=[])['knowledge.html']
-    script = re.search(r'<script>(.*?)</script>', html, re.S).group(1)
+    script = re.search(r'<script id="knowledge-script">(.*?)</script>', html, re.S).group(1)
     harness = r'''
 const vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 function element(value=''){return {value,events:{},addEventListener(name,fn){this.events[name]=fn;},focus(){this.focused=true;},setAttribute(name,value){this[name]=value;}};}

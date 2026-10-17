@@ -78,7 +78,7 @@ def test_render_groups_variants_but_status_filter_keeps_matching_meaning(tmp_pat
     assert "term means image generation" in page
     assert page.count("<h2>term</h2>") == 2
     assert "validatedAlias" not in page and "原文别名：term" in page
-    script = re.search(r"<script>(.*?)</script>", page, re.S).group(1)
+    script = re.search(r'<script id="knowledge-script">(.*?)</script>', page, re.S).group(1)
     harness = r'''const vm=require('vm'),assert=require('assert/strict');
 const elements={group:{value:''},search:{value:''},'term-status':{value:'active'},'term-kind':{value:''},'filter-empty':{hidden:true},'shown-count':{textContent:'3'}};
 for(const e of Object.values(elements))e.addEventListener=()=>{};

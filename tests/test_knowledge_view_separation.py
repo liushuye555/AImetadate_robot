@@ -63,7 +63,7 @@ def test_generated_filters_run_for_each_page(tmp_path, monkeypatch, filename):
         pytest.skip('Node.js is needed to run report filters')
     monkeypatch.setattr('qq_onebot_whitelist.knowledge_feedback.feedback_token', lambda *_: 'test-token')
     page = knowledge_view.render_views(tmp_path, items=[], runs=[], assets=[], glossary=[])[filename]
-    script = re.search(r'<script>(.*?)</script>', page, re.S).group(1)
+    script = re.search(r'<script id="knowledge-script">(.*?)</script>', page, re.S).group(1)
     harness = r'''
 const vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));

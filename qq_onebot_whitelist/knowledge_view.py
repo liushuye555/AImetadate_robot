@@ -64,8 +64,8 @@ def _safe_name(value):
 def _entity_markup(names):
     if not names:
         return ''
-    return '<div class="content-tags" aria-label="对象标签">' + ''.join(
-        '<span class="content-tag entity-tag">' + _safe(name) + '<small>对象</small></span>' for name in names) + '</div>'
+    return '<div class="content-tags" aria-label="对象标签"><span class="tag-label">对象</span>' + ''.join(
+        '<span class="content-tag entity-tag">' + _safe(name) + '</span>' for name in names) + '</div>'
 
 
 def _unassigned_note(rows):
@@ -106,8 +106,8 @@ def _content_tag_markup(row):
             tags_by_name.setdefault(name, []).append(tag)
     names = _content_tag_names(row)
     if not names:
-        return '', []
-    chips = ''.join('<span class="content-tag">' + _safe(name) + '<small>AI归类</small></span>' for name in names)
+        return '', '', []
+    chips = ''.join('<span class="content-tag">' + _safe(name) + '</span>' for name in names)
     evidence_rows, seen_evidence = [], set()
     for name in names:
         for tag in tags_by_name.get(name, []):
@@ -125,15 +125,16 @@ def _content_tag_markup(row):
         evidence = '<details class="content-tag-evidence"><summary>查看主题归类依据</summary>' + ''.join(
             '<p><strong>' + _safe(name) + '</strong> · 原消息 #' + _safe(mid) + ' · ' + _safe(source_field) + '</p><blockquote>' + _safe(quote) + '</blockquote>'
             for name, mid, quote, source_field in evidence_rows[:12]) + '</details>'
-    return '<div class="content-tags" aria-label="资料主题">' + chips + '</div>' + evidence, names
+    return '<div class="content-tags" aria-label="资料主题"><span class="tag-label">AI归类</span>' + chips + '</div>', evidence, names
 
 
 def _frame(filename: str, title: str, cards: list[str], groups: set[str], filters: str, subject_groups=None, subject_index=None) -> str:
     from .knowledge_presentation import STYLE, SCRIPT
+    from .view_theme import THEME_INIT_JS, THEME_TOGGLE_HTML, THEME_TOGGLE_JS
     opts = ''.join(f'<option value="{_safe(group)}">{_safe(group.removeprefix("group:"))}</option>' for group in sorted(groups))
     count = len(cards)
     descriptions = {
-        'knowledge.html': '可按平台、工具等对象，以及闲鱼、虚拟卡等资料主题查找，再看额度、接入、故障等具体情形。资料主题是 AI 归类，展开卡片可核对原消息依据；标签不表示当前使用成功。用途标签说明对象类型，不代表效果已验证。同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
+        'knowledge.html': '先选主题，再找具体情形。知识、待跟进和归档分开浏览，文字讨论也可独立收录。',
         'glossary.html': '遇到不熟悉的行业说法，先查释义，再展开原消息核对。同词的不同解释分别保留。',
         'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
         'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
@@ -151,32 +152,35 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
             for lane,label in [('knowledge','知识'),('followup','待跟进'),('archive','已归档'),('','全部')]) + '</div>'
         filters = filters.replace('<label>处理队列', '<label class="screen-reader">处理队列')
     sidebar = ''
-    background_reference = _background_reference() if filename == 'knowledge.html' else ''
+    background_reference = ('<details class="reading-guide"><summary>如何阅读这些资料</summary>'
+        '<p>按平台、工具或资料主题浏览相关情形，再看额度、接入、故障等具体情况。资料主题由 AI 归类，标签不表示当前使用成功；用途标签说明对象类型，不代表效果已验证。</p>'
+        '<p>同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。跨主题讨论只保留一份；“对象待确认”只表示事件中的实体指代未明。展开详情可核对完整内容和原消息证据。</p></details>'
+        + _background_reference()) if filename == 'knowledge.html' else ''
     if subject_groups:
         content = ''.join('<section class="subject-section" data-subject-group="' + subject_id(name) + '">'
             + '<header class="subject-heading"><h2>' + _safe(name) + '</h2><span data-subject-visible-count>'
             + str(len(cases)) + '</span><span data-related-context hidden></span></header><div class="subject-cases">' + ''.join(cases) + '</div></section>'
             for name, cases in subject_groups)
-        sidebar = '<aside class="subject-sidebar"><h2>主题目录</h2><p>按平台、工具或资料主题浏览相关情形。资料主题由 AI 归类，跨主题讨论只保留一份；“对象待确认”只表示事件中的实体指代未明。</p><nav id="subject-nav" aria-label="按主题浏览">'
+        sidebar = '<aside class="subject-sidebar"><details id="subject-directory" open><summary>主题目录<span id="selected-subject">全部主题</span></summary><div class="subject-directory-body"><label class="screen-reader" for="subject-search">查找主题</label><input id="subject-search" type="search" placeholder="查找平台、工具、主题" autocomplete="off"><nav id="subject-nav" aria-label="按主题浏览">'
         sidebar += '<button type="button" data-subject-target="" data-subject-name="全部主题" aria-pressed="true">全部主题<span data-subject-count>' + str(count) + '</span></button>'
         sidebar += ''.join('<button type="button" data-subject-target="' + subject_id(name)
             + '" data-subject-name="' + _safe(name) + '" aria-pressed="false">' + _safe(name)
             + '<span data-subject-count>' + str(size) + '</span></button>' for name, size in subject_index)
-        sidebar += '</nav></aside>'
+        sidebar += '</nav><p id="subject-search-empty" class="meta" hidden>没有匹配的主题</p></div></details></aside>'
     listing = f'''<div class="result-line"><span>找到 <strong id="shown-count">{count}</strong> 项</span><span>展开详情可查看原消息与整理依据</span></div>
 <main id="results">{content}</main><div id="filter-empty" class="empty" hidden><strong>没有符合条件的资料</strong><p>试试更短的关键词，或清除筛选条件。</p></div>
 <div class="pager"><button type="button" id="previous-page">上一页</button><span id="page-info" aria-live="polite"></span><button type="button" id="next-page">下一页</button></div>'''
     if sidebar:
         listing = '<div class="knowledge-layout">' + sidebar + '<div class="knowledge-content">' + listing + '</div></div>'
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · 群资料库</title>
-<style>{STYLE}</style></head><body class="{'knowledge-page' if filename == 'knowledge.html' else 'report-page'}"><a class="skip-link" href="#results">跳到资料列表</a>
-<header id="report-top" class="site-header"><div class="header-inner"><a class="brand" href="knowledge.html">群资料库<small>从群聊中整理，回到原文中核对</small></a>{_nav(filename)}</div></header>
-<div class="shell"><div class="page-heading"><h1>{title}</h1><p class="page-intro">{descriptions[filename]}</p><span class="page-total">本页共 {count} 项</span>{queues}</div>
+<script>{THEME_INIT_JS}</script><style>{STYLE}</style></head><body class="{'knowledge-page' if filename == 'knowledge.html' else 'report-page'}"><a class="skip-link" href="#results">跳到资料列表</a>
+<header id="report-top" class="site-header"><div class="header-inner"><a class="brand" href="index.html">群资料库<small>返回资料总览 ↗</small></a>{_nav(filename)}{THEME_TOGGLE_HTML}</div></header>
+<div class="shell"><div class="page-heading"><div class="heading-title"><h1>{title}</h1><span class="page-total">{count} 项资料</span></div><p class="page-intro">{descriptions[filename]}</p>{queues}</div>
 <section class="toolbar" aria-label="查找资料"><div class="search-row"><label class="search-label"><span>搜索</span><input id="search" type="search" placeholder="输入关键词查找本页资料" aria-label="搜索本页内容" autocomplete="off"></label><button type="button" id="clear-filters" class="clear-button">清除筛选</button></div>
 <div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div></section>
 {listing}{background_reference}
 <footer><a class="back-top" href="#report-top">回到顶部 ↑</a>本地整理报告 · 群友说法与已验证反馈会分别标注；来源编号用于回查原消息。</footer></div>
-<script>{SCRIPT}</script></body></html>'''
+<script id="knowledge-script">{SCRIPT}</script>{THEME_TOGGLE_JS}</body></html>'''
 
 
 
@@ -223,20 +227,21 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                  "disputed": "存在分歧"}.get(item.get("evidence_state"), "群友说法")
         msgrefs = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
         entities = subjects_for(item, scope_catalog(subject_catalog, item.get('scope')))
-        tag_markup, tag_names = _content_tag_markup(item)
+        tag_markup, tag_evidence, tag_names = _content_tag_markup(item)
         names = list(dict.fromkeys([*entities, *tag_names])) or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
         usages = usage_for(item, subject_catalog)
         knowledge_cards.append(
             f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(item.get("title"))}</h2>' + _entity_markup(entities) + usage_markup(usages) + tag_markup
-            + (_unassigned_note([item]) if names == [UNASSIGNED] else '') + f'<p class="meta">涉及对象/资料主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
-            f'{_safe(item.get("topic"))} · {_safe(item.get("kind"))} · '
-            f'{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state} · {msgrefs}</p>'
+            f'<h2>{_safe(item.get("title"))}</h2><p class="card-status">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state}</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
+            + (_unassigned_note([item]) if names == [UNASSIGNED] else '')
             + _excerpt(item.get('body', item.get('summary')))
-            + '<details><summary>查看完整内容与依据</summary>'
+            + '<details class="card-details"><summary>查看完整内容与依据</summary>'
+            + f'<p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · {_safe(item.get("topic"))} · {_safe(item.get("kind"))} · {msgrefs}</p>'
+            + f'<p class="meta">情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p>'
             + f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details({**item, "lifecycle": lifecycle})}{evidence(item.get("scope"), ids)}'
+            + tag_evidence + usage_markup(usages, show_badges=False)
             + f'{_feedback_controls(item)}</details></article>')
     by_key = {item.get('key'): item for item in items}
     for thread in threads:
@@ -265,7 +270,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         catalog = scope_catalog(subject_catalog, thread['scope'])
         entities = list(dict.fromkeys(name for event in reversed(events) for name in subjects_for(event, catalog)))
         tag_names = list(dict.fromkeys(name for event in events for name in _content_tag_names(event)))
-        tag_markup, _ = _content_tag_markup({'organization': {'topic_tags': [tag for event in events
+        tag_markup, tag_evidence, _ = _content_tag_markup({'organization': {'topic_tags': [tag for event in events
             for tag in ((event.get('organization') or {}).get('topic_tags', []) if isinstance(event.get('organization'), dict) else [])]}})
         names = list(dict.fromkeys([*entities, *tag_names])) or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
@@ -290,14 +295,16 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         progress_label = _status(thread['status'], category)
         labels = list(dict.fromkeys([CATEGORIES[category], '精选' if val == 'high' else '待确认', state_label, progress_label]))
         knowledge_cards.append(f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(thread["title"])}</h2>' + _entity_markup(entities) + usage_markup(usages) + tag_markup
-            + (_unassigned_note(events) if names == [UNASSIGNED] else '') + f'<p class="meta">涉及对象/资料主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{" · ".join(labels)} · 话题记录 {len(events)} 次</p>'
+            f'<h2>{_safe(thread["title"])}</h2><p class="card-status">{" · ".join(labels)} · 话题记录 {len(events)} 次</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
+            + (_unassigned_note(events) if names == [UNASSIGNED] else '')
             + _excerpt(thread.get('known') or (events[-1].get('summary') if events else ''))
+            + '<details class="card-details"><summary>查看内容、进展与来源</summary><p class="meta">情形：' + _safe('、'.join(TOPICS.get(t,t) for t in topic_ids)) + '</p>'
             + '<details><summary>查看整理内容与缺少信息</summary>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
                         'resource': thread.get('resource'), 'quality': latest.get('quality'),
                         'quality_reason': latest.get('quality_reason'), 'lifecycle': lifecycle}) + '</details>'
-            + '<details><summary>查看讨论进展与证据</summary>' + ''.join(timeline) + '</details></article>')
+            + '<details><summary>查看讨论进展与证据</summary>' + ''.join(timeline) + '</details>'
+            + tag_evidence + usage_markup(usages, show_badges=False) + '</details></article>')
     knowledge_filters = '<label>处理队列 <select id="lane"><option value="knowledge">知识</option><option value="followup">待跟进</option><option value="archive">归档</option><option value="">全部</option></select></label>'
     grouped_cases, subject_counts = {}, {}
     for names, card in zip(case_subjects, knowledge_cards):

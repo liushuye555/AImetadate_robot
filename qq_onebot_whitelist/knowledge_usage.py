@@ -119,7 +119,7 @@ def usage_for(row, catalog=()):
     return result
 
 
-def usage_markup(entries):
+def usage_markup(entries, *, show_badges=True, show_evidence=True):
     safe = lambda value: escape(redact_secrets(str(value)), quote=True)
     if not entries:
         return ''
@@ -130,7 +130,9 @@ def usage_markup(entries):
         refs = '、'.join('#' + str(q['message_id']) + '：' + safe(q['quote']) for q in entry.get('evidence', []))
         notes.append('<p>' + safe(entry['subject']) + '：' + USAGE_TAGS[entry['tag']] + '。'
                      + safe(entry.get('note') or '') + ('<br>历史依据：' + refs if refs else '') + '</p>')
-    return '<div class="usage-tags">' + badges + '</div><details class="usage-basis"><summary>用途标签依据</summary>' + ''.join(notes) + '<p>用途分类不代表本次使用成功或效果已验证。</p></details>'
+    return (('<div class="usage-tags" aria-label="用途标签">' + badges + '</div>') if show_badges else '') + (
+        '<details class="usage-basis"><summary>用途标签依据</summary>' + ''.join(notes)
+        + '<p>用途分类不代表本次使用成功或效果已验证。</p></details>' if show_evidence else '')
 
 
 def set_subject_tag(data_dir, scope, subject, tag, *, aliases=(), note='', evidence=()):

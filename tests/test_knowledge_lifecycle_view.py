@@ -98,7 +98,7 @@ def test_lane_topic_and_type_filters_execute_together(tmp_path):
     node = shutil.which('node')
     if not node:
         pytest.skip('Node.js is needed to execute report filters')
-    script = re.search(r'<script>(.*?)</script>', _render(tmp_path), re.S).group(1)
+    script = re.search(r'<script id="knowledge-script">(.*?)</script>', _render(tmp_path), re.S).group(1)
     harness = r'''
 const vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 const elements={group:{value:''},search:{value:''},lane:{value:'knowledge'},topic:{value:''},category:{value:''},'filter-empty':{},'shown-count':{}};
