@@ -26,9 +26,10 @@ from .knowledge_quality import QUALITY_SYSTEM, normalize_quality
 from . import knowledge_topic_decisions
 from .llm_providers import routing_settings
 from . import knowledge_organization
+from . import knowledge_usage
 
 
-VERSION = 9
+VERSION = 10
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -79,7 +80,7 @@ known中的candidate或unresolved只是历史线索，不是验证过的结论�
 已有同一问题的新反馈须existing并填写候选id及具体依据；仅同名工具不够。没有关联信息会进入单独的话题判断，不会直接视作新话题。
 控制篇幅：优先有效技术内容，合并本批同一讨论；summary最多6项，items最多10项，terms最多12项，不为凑数量收录软件名和闲聊。
 terms只解释词语在本群语境中的含义。产品计费、限流、部署、速度、故障和操作经验属于items，不能塞进术语meaning；简称可说明指代对象，但不要附带该产品的具体行为结论。
-'''
+''' + '\n' + knowledge_usage.SYSTEM
 
 
 def model_request(messages: list[dict], cfg: LLMConfig, *, max_tokens: int = MAX_COMPLETION) -> tuple[dict, int | None]:
@@ -106,7 +107,7 @@ def model_request(messages: list[dict], cfg: LLMConfig, *, max_tokens: int = MAX
 
 
 def validate_result(value: dict, records: list[dict], *, allow_term_inference: bool = False,
-                    track_topics: bool = False) -> dict:
+                    track_topics: bool = False, subject_catalog=()) -> dict:
     if not isinstance(value, dict):
         raise ValueError('AI 输出必须是 JSON 对象')
     ids = {r['id'] for r in records} | {r['quoted_id'] for r in records if r.get('quoted_id')}
@@ -177,7 +178,7 @@ def validate_result(value: dict, records: list[dict], *, allow_term_inference: b
                 cleaned = normalize_quality({**cleaned, 'quality': row.get('quality')}, records)
                 if cleaned is None:
                     continue
-                cleaned['organization'] = knowledge_organization.prepare_organization({**cleaned, 'organization': row.get('organization')}, records)
+                cleaned['organization'] = knowledge_organization.prepare_organization({**cleaned, 'organization': row.get('organization')}, records, subject_catalog)
                 if cleaned['organization']['subject']['ambiguous']:
                     title = cleaned['title']
                     personal = (cleaned.get('quality') or {}).get('basis') == 'personal_opinion'
@@ -395,11 +396,13 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
              if wanted['extraction'] or wanted['files'] else [])
     terms = ([{'term': r['term'], 'meaning': r['meaning']} for r in db.terms(scope) if r['status'] == 'active']
              if wanted['glossary'] else [])
+    with db.conn() as conn:
+        subject_catalog = knowledge_usage.read_catalog(conn, scope)
     task = dict(mode=profile.settings.get('match_mode', 'hybrid'),
                 topics=[TOPICS.get(t, t) for t in profile.settings.get('topics', [])],
                 description=str(profile.settings.get('description') or '')[:2000],
                 requested=[k for k, enabled in wanted.items() if enabled], known=known, glossary=terms,
-                capabilities=capabilities, threads=threads, messages=_material(records))
+                capabilities=capabilities, threads=threads, subject_catalog=subject_catalog, messages=_material(records))
     messages = [{'role': 'system', 'content': SYSTEM},
                 {'role': 'user', 'content': redacted_json(task)}]
     policy = _model_policy(profile)
@@ -409,7 +412,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     preview_settings = profile.settings.get('files') or {}
     preview_policy = {**preview_settings, 'preview_enabled': profile.option_enabled('files', 'preview_enabled')}
     identity = [VERSION, profile.settings.get('analysis_revision', 1), scope, kind, wanted,
-                task['mode'], task['topics'], task['description'], task['messages'], preview_policy, capabilities,
+                task['mode'], task['topics'], task['description'], task['messages'], preview_policy, capabilities, subject_catalog,
                 profile.settings.get('lifecycle'), profile.option_enabled('lifecycle', 'enabled'),
                 [sorted(values) for values in db.archived_context(scope)]]
     primary_policy = {k: v for k, v in policy.items() if k not in ('review_provider', 'review_model')}
@@ -422,6 +425,9 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     def fresh_profile():
         current_config = load_config(config_path)
         current = profile_for(current_config, scope)
+        with db.conn() as conn:
+            if knowledge_usage.read_catalog(conn, scope) != subject_catalog:
+                return None
         if (not current.allows(feature) or (kind == 'history' and not current.allows('history'))
                 or current_config.ai_context_provider != config.ai_context_provider
                 or current_config.ai_context_providers != config.ai_context_providers
@@ -530,7 +536,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                     value, usage = (request or model_request)(messages, cfg)
                     db.record_usage(key, usage)
                     result = validate_result(value, records, allow_term_inference=capabilities['infer_context'],
-                                             track_topics=capabilities['track_topics'])
+                                             track_topics=capabilities['track_topics'], subject_catalog=subject_catalog)
                     if breaker:
                         breaker.success(cfg)
                     primary_tokens = usage if usage is not None else reserved
@@ -588,7 +594,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                     reviewed, review_usage = (request or model_request)(review_messages, review_cfg)
                     db.record_usage(review_key, review_usage)
                     result = validate_result(reviewed, records, allow_term_inference=capabilities['infer_context'],
-                                             track_topics=capabilities['track_topics'])
+                                             track_topics=capabilities['track_topics'], subject_catalog=subject_catalog)
                     if breaker:
                         breaker.success(review_cfg)
                 except Exception:
@@ -643,7 +649,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
                     raise
             mapped = knowledge_topic_decisions.apply_decisions(decision_run, result['items'], task['threads'], scope)
             checked = validate_result({'items': mapped}, records,
-                allow_term_inference=capabilities['infer_context'], track_topics=True)
+                allow_term_inference=capabilities['infer_context'], track_topics=True, subject_catalog=subject_catalog)
             result['items'] = checked['items']
             total_tokens += decision_run['tokens']
             estimated = estimated or decision_run['token_usage_estimated']
@@ -761,6 +767,7 @@ def write_view(data_dir: Path, config=None) -> Path:
         overrides = knowledge_organization.archive_overrides(conn)
         organizations = {r['item_key']: json.loads(r['organization_json'])
                          for r in conn.execute('SELECT * FROM item_organization')}
+        subject_catalog = knowledge_usage.read_catalog(conn)
     for asset in assets:
         if asset['status'] == 'saved' and not db.asset_saved(asset['scope'], asset['file_id']):
             asset['status'] = '文件缺失或校验失败'
@@ -772,7 +779,7 @@ def write_view(data_dir: Path, config=None) -> Path:
     scopes = {row['scope'] for rows in (items, threads) for row in rows}
     profiles = {scope: profile_for(config, scope) for scope in scopes} if config is not None else {}
     pages = render_views(data_dir, items=items, runs=runs, assets=assets, glossary=glossary,
-                         threads=threads, profiles=profiles, manual_archives=overrides)
+                         threads=threads, profiles=profiles, manual_archives=overrides, subject_catalog=subject_catalog)
     directory = data_dir / 'view'
     directory.mkdir(parents=True, exist_ok=True)
     for filename, page in pages.items():
@@ -1022,6 +1029,12 @@ def main():
     subjects_parser.add_argument('--group', required=True)
     subjects_parser.add_argument('--max-batches', type=int, default=20)
     subjects_parser.add_argument('--batch-size', type=int, default=10)
+    usage_parser = subs.add_parser('tag-subject', help='人工确认本群对象用途与别名；独立于词义和使用结果')
+    usage_parser.add_argument('--group', required=True)
+    usage_parser.add_argument('--subject', required=True)
+    usage_parser.add_argument('--tag', choices=tuple(knowledge_usage.USAGE_TAGS), required=True)
+    usage_parser.add_argument('--alias', action='append', default=[])
+    usage_parser.add_argument('--note', default='')
     archive_parser = subs.add_parser('archive', help='归档、保留或恢复自动策略；不删除原始记录')
     archive_parser.add_argument('--group', required=True)
     archive_target = archive_parser.add_mutually_exclusive_group(required=True)
@@ -1075,6 +1088,10 @@ def main():
             result = knowledge_organization.set_archive(KnowledgeDB(cfg.data_dir / 'knowledge.db'), scope,
                 'topic' if args.topic_id else 'item', args.topic_id or args.item_key, args.state, reason=args.reason)
             write_view(cfg.data_dir, cfg)
+        elif args.action == 'tag-subject':
+            result = knowledge_usage.set_subject_tag(cfg.data_dir, args.group, args.subject, args.tag,
+                                                      aliases=args.alias, note=args.note)
+            result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
         elif args.action == 'terms':
             scope = group_scope(args.group)
             if not profile_for(cfg, scope).allows('glossary'):

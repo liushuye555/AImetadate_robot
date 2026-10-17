@@ -15,6 +15,7 @@ from .knowledge_config import group_scope, profile_for
 from .knowledge_models import resolve_models
 from .knowledge_store import KnowledgeDB, LOCAL_TZ, read_records
 from .knowledge_subjects import ALIASES, prepare_subjects
+from .knowledge_usage import read_catalog
 from .llm_providers import routing_settings
 
 
@@ -101,7 +102,7 @@ def _material(row, evidence, records):
                          for mid in chosen]}
 
 
-def _decisions(value, rows, sources):
+def _decisions(value, rows, sources, catalog=()):
     decisions = value.get('decisions') if isinstance(value, dict) else None
     if not isinstance(decisions, list) or len(decisions) != len(rows):
         raise ValueError('invalid decisions')
@@ -124,9 +125,9 @@ def _decisions(value, rows, sources):
             # Do not silently turn rejected nonempty proposals into [] or drop
             # an unsupported quote from an otherwise accepted proposal.
             for quote in quotes:
-                if not prepare_subjects([{**candidate, 'evidence': [quote]}], item, sources[key]):
+                if not prepare_subjects([{**candidate, 'evidence': [quote]}], item, sources[key], catalog):
                     raise ValueError('unsupported subject')
-        prepared = prepare_subjects(raw, item, sources[key])
+        prepared = prepare_subjects(raw, item, sources[key], catalog)
         if len(prepared) != len(raw):
             raise ValueError('rejected or duplicate subject')
         result[key] = prepared
@@ -156,6 +157,8 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
     if not pending:
         return {'status': 'unchanged', 'processed': 0, 'remaining': 0, 'message': '本群主题已复核，无需再次调用模型。'}
     processed, backup = 0, None
+    with closing(_readonly(database)) as conn:
+        catalog = read_catalog(conn, scope)
     expected_policy = _policy(config, profile)
     budget = profile.number('max_tokens_per_day', 50000, 1000, 10000000)
 
@@ -164,6 +167,9 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
         active = profile_for(current, scope)
         if not active.allows('extraction') or _policy(current, active) != expected_policy:
             raise _Changed('policy changed')
+        with closing(_readonly(database)) as conn:
+            if read_catalog(conn, scope) != catalog:
+                raise _Changed('catalog changed')
 
     def outcome(status, message, error=None):
         result = {'status': status, 'processed': processed, 'remaining': len(pending) - processed,
@@ -192,7 +198,10 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
                 sources[row['key']] = records
                 fingerprints[row['key']] = _hash(records)
                 task_items.append(_material(row, evidence, records))
-            task = {'catalog': {label: list(aliases) for label, aliases in ALIASES.items()}, 'items': task_items}
+            alias_catalog = {label: list(aliases) for label, aliases in ALIASES.items()}
+            for entry in catalog:
+                alias_catalog.setdefault(entry['subject'], []).extend(entry.get('aliases', []))
+            task = {'catalog': alias_catalog, 'subject_catalog': catalog, 'items': task_items}
             messages = [{'role': 'system', 'content': SYSTEM},
                         {'role': 'user', 'content': redacted_json(task)}]
             reserve = len(json.dumps(messages, ensure_ascii=False).encode()) // 2 + MAX_COMPLETION
@@ -220,7 +229,7 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
                 value, usage = request(messages, selected, max_tokens=MAX_COMPLETION)
             else:
                 value, usage = cached, cached.get('tokens')
-            decisions = _decisions(value, rows, sources)
+            decisions = _decisions(value, rows, sources, catalog)
             fresh()
             for row in rows:
                 _, current_sources = _sources(config.data_dir, row)

@@ -20,7 +20,9 @@ ALIASES = {
     'ChatGPT / OpenAI': ('chatgpt', 'openai', 'gpt'),
     '通义 / Qwen': ('通义', '千问', 'qwen'),
     'Gemini': ('gemini',),
-    'DSh / Infinite Gen': ('dsh', 'dsh-infinite-gen', 'infinite gen', 'ig5'),
+    'Infinite Gen': ('dsh-infinite-gen', 'infinite gen'),
+    'IG5': ('ig5',),
+    'DSh': ('dsh',),
 }
 
 
@@ -37,8 +39,15 @@ def _mentions(text, alias):
     return alias in text
 
 
-def canonical_subject(name):
+def canonical_subject(name, catalog=()):
     value = redact_secrets(str(name or '').strip())[:64]
+    for entry in catalog:
+        if _normalized(value) == _normalized(entry['subject']) or any(
+                _normalized(value) == _normalized(alias) for alias in entry.get('aliases', [])):
+            return entry['subject']
+    # The old combined navigation label is not a proven equivalence.
+    if value == 'DSh / Infinite Gen':
+        return value
     for label, aliases in ALIASES.items():
         if _normalized(value) == _normalized(label) or any(_mentions(value, alias) for alias in aliases):
             return label
@@ -49,7 +58,7 @@ def subject_id(name):
     return sha256(_normalized(name).encode()).hexdigest()[:16]
 
 
-def prepare_subjects(raw, item, records):
+def prepare_subjects(raw, item, records, catalog=()):
     """Keep only labels with an exact quote and an actual subject mention."""
     if not isinstance(raw, list):
         return []
@@ -64,7 +73,7 @@ def prepare_subjects(raw, item, records):
     for candidate in raw[:6]:
         if not isinstance(candidate, dict) or not isinstance(candidate.get('name'), str):
             continue
-        name = canonical_subject(candidate['name'])
+        name = canonical_subject(candidate['name'], catalog)
         if not name or len(candidate['name']) > 100:
             continue
         quotes = candidate.get('evidence')
@@ -79,7 +88,7 @@ def prepare_subjects(raw, item, records):
             text = text.strip()
             if not any(text in source for source in sources[mid]):
                 continue
-            aliases = ALIASES.get(name, (name,))
+            aliases = aliases_for(name, catalog)
             if not any(_mentions(text, alias) for alias in aliases):
                 continue
             entry = by_name.setdefault(name, {'name': name, 'evidence': []})
@@ -89,12 +98,42 @@ def prepare_subjects(raw, item, records):
     return list(by_name.values())[:3]
 
 
-def subjects_for(row):
+def aliases_for(name, catalog=()):
+    learned = [alias for entry in catalog if entry['subject'] == name for alias in entry.get('aliases', [])]
+    return tuple(dict.fromkeys((name, *ALIASES.get(name, ()), *learned)))
+
+
+def _entry_names(entry, catalog):
+    name = entry.get('name')
+    if name != 'DSh / Infinite Gen':
+        name = canonical_subject(name, catalog)
+        if any(value['subject'] == name for value in catalog):
+            if not any(isinstance(quote, dict) and any(_mentions(quote.get('quote', ''), alias)
+                       for alias in aliases_for(name, catalog)) for quote in entry.get('evidence', [])):
+                return []
+        return [name]
+    # Recover the actual name from each source quote, rather than carrying an
+    # unsupported alias merge into the new directory.
+    names = []
+    for evidence in entry.get('evidence', []):
+        text = evidence.get('quote', '') if isinstance(evidence, dict) else ''
+        if any(_mentions(text, alias) for alias in ALIASES['Infinite Gen']):
+            names.append('Infinite Gen')
+        if _mentions(text, 'ig5'):
+            names.append('IG5')
+        standalone = re.sub(r'dsh-infinite-gen[^\s,，;；]*', '', _normalized(text))
+        if _mentions(standalone, 'dsh'):
+            names.append('DSh')
+    return names
+
+
+def subjects_for(row, catalog=()):
     org = row.get('organization') if isinstance(row.get('organization'), dict) else {}
     if isinstance(org.get('subjects'), list) and (org['subjects'] or org.get('subjects_complete') is not False):
-        return list(dict.fromkeys(canonical_subject(entry.get('name')) for entry in org['subjects']
-            if isinstance(entry, dict) and entry.get('name') and entry.get('evidence')))
+        return list(dict.fromkeys(name for entry in org['subjects']
+            if isinstance(entry, dict) and entry.get('name') and entry.get('evidence')
+            for name in _entry_names(entry, catalog)))
     legacy = org.get('subject')
     if isinstance(legacy, dict) and legacy.get('name') and legacy.get('ambiguous') is not True:
-        return [canonical_subject(legacy['name'])]
+        return _entry_names(legacy, catalog)
     return []

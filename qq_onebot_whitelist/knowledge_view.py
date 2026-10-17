@@ -12,6 +12,7 @@ from .knowledge_layers import CATEGORIES, category_for
 from .knowledge_lifecycle import lifecycle_for
 from .knowledge_organization import TOPICS
 from .knowledge_subjects import subjects_for, subject_id, UNASSIGNED
+from .knowledge_usage import USAGE_TAGS, scope_catalog, usage_for, usage_markup
 
 
 PAGES = (
@@ -54,7 +55,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
     opts = ''.join(f'<option value="{_safe(group)}">{_safe(group.removeprefix("group:"))}</option>' for group in sorted(groups))
     count = len(cards)
     descriptions = {
-        'knowledge.html': '先选主题，再看额度、接入、故障等具体情形。同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
+        'knowledge.html': '先按破甲工具、逆向工具等用途查找，或选择对象主题，再看额度、接入、故障等具体情形。用途标签说明对象类型，不代表效果已验证。同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
         'glossary.html': '遇到不熟悉的行业说法，先查释义，再展开原消息核对。同词的不同解释分别保留。',
         'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
         'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
@@ -103,7 +104,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
 def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets: list[dict],
                  glossary: list[dict], threads: list[dict] | None = None,
                  profiles: dict | None = None, manual_archives: dict | None = None,
-                 now=None) -> dict[str, str]:
+                 now=None, subject_catalog=()) -> dict[str, str]:
     """Return four independent static pages for knowledge, terms, summaries, and files."""
     data_dir = Path(data_dir)
     groups = {str(row.get("scope") or "") for rows in (items, runs, assets, glossary)
@@ -123,7 +124,12 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         return lifecycle_for(row, profile=profiles.get(scope),
                              manual=manual_archives.get((scope, record_type, record_id)), now=now)
 
-    knowledge_cards, case_subjects = [], []
+    knowledge_cards, case_subjects, used_tags = [], [], set()
+
+    def usage_attributes(entries):
+        tags = list(dict.fromkeys(entry['tag'] for entry in entries))
+        used_tags.update(tags)
+        return 'data-usage-tags="' + ','.join(tags) + '" data-usage-names="' + _safe(' / '.join(USAGE_TAGS[tag] for tag in tags)) + '"'
     for item in items:
         if item.get('key') in tracked_keys:
             continue
@@ -137,13 +143,14 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         state = {"unresolved": "未解决", "reported": "群友说法", "verified": "原消息有验证反馈",
                  "disputed": "存在分歧"}.get(item.get("evidence_state"), "群友说法")
         msgrefs = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
-        names = subjects_for(item)
+        names = subjects_for(item, scope_catalog(subject_catalog, item.get('scope')))
         names = names or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
+        usages = usage_for(item, subject_catalog)
         knowledge_cards.append(
-            f'<article data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(item.get("title"))}</h2><p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
+            f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(item.get("title"))}</h2>' + usage_markup(usages) + f'<p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
             f'{_safe(item.get("topic"))} · {_safe(item.get("kind"))} · '
             f'{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state} · {msgrefs}</p>'
             + _excerpt(item.get('body', item.get('summary')))
@@ -174,10 +181,16 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         current_state = events[-1].get('evidence_state', 'reported') if events else 'reported'
         state_label = {'unresolved': '未解决', 'reported': '群友说法',
                        'verified': '原消息有验证反馈', 'disputed': '存在分歧'}.get(current_state, '群友说法')
-        names = list(dict.fromkeys(name for event in reversed(events) for name in subjects_for(event)))
+        catalog = scope_catalog(subject_catalog, thread['scope'])
+        names = list(dict.fromkeys(name for event in reversed(events) for name in subjects_for(event, catalog)))
         names = names or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
+        usages = []
+        for event in reversed(events):
+            for entry in usage_for({**event, 'scope': thread['scope']}, subject_catalog):
+                if not any((r['subject'], r['tag']) == (entry['subject'], entry['tag']) for r in usages):
+                    usages.append(entry)
         timeline = []
         for event in events:
             event_org = event.get('organization') if isinstance(event.get('organization'), dict) else {}
@@ -192,8 +205,8 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                             + _feedback_controls(by_key.get(event['item_key'], {})) + '</section>')
         progress_label = _status(thread['status'], category)
         labels = list(dict.fromkeys([CATEGORIES[category], '精选' if val == 'high' else '待确认', state_label, progress_label]))
-        knowledge_cards.append(f'<article data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(thread["title"])}</h2><p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{" · ".join(labels)} · 话题记录 {len(events)} 次</p>'
+        knowledge_cards.append(f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(thread["title"])}</h2>' + usage_markup(usages) + f'<p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{" · ".join(labels)} · 话题记录 {len(events)} 次</p>'
             + _excerpt(thread.get('known') or (events[-1].get('summary') if events else ''))
             + '<details><summary>查看整理内容与缺少信息</summary>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
@@ -212,6 +225,8 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         f'<option value="{subject_id(name)}">{_safe(name)}</option>' for name, _ in subject_index) + '</select></label>'
     knowledge_filters += '<label>情形类型 <select id="topic"><option value="">全部情形</option>' + ''.join(
         f'<option value="{_safe(key)}">{_safe(label)}</option>' for key, label in TOPICS.items()) + '</select></label>'
+    knowledge_filters += '<label>用途标签 <select id="usage-tag"><option value="">全部用途</option>' + ''.join(
+        f'<option value="{key}">{USAGE_TAGS[key]}</option>' for key in USAGE_TAGS if key in used_tags) + '</select></label>'
     knowledge_filters += '<details class="more-filters"><summary>更多筛选</summary><div><label>资料类型 <select id="category"><option value="">全部类型</option>' + ''.join(
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
     knowledge_filters += '<label>价值 <select id="value"><option value="">全部知识</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select></label>'

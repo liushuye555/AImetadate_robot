@@ -24,6 +24,8 @@ organization.subjects用于按主题浏览，按主要对象优先列出最多3�
 
 
 def ensure_schema(conn):
+    from .knowledge_usage import ensure_schema as usage_schema
+    usage_schema(conn)
     conn.execute('CREATE TABLE IF NOT EXISTS item_organization (item_key TEXT PRIMARY KEY, organization_json TEXT NOT NULL)')
     conn.execute('''CREATE TABLE IF NOT EXISTS knowledge_archives (
         scope TEXT NOT NULL, record_type TEXT NOT NULL, record_id TEXT NOT NULL,
@@ -50,7 +52,7 @@ def _quote(value, item, records, *, current=False):
     return None
 
 
-def prepare_organization(item, records):
+def prepare_organization(item, records, subject_catalog=()):
     raw = item.get('organization')
     raw = raw if isinstance(raw, dict) else {}
     legacy = not raw or raw.get('legacy_unassessed') is True
@@ -80,8 +82,10 @@ def prepare_organization(item, records):
     if not name or not any(name in row['quote'] for row in evidence):
         name = ''
     from .knowledge_subjects import prepare_subjects
+    from .knowledge_usage import prepare_usage
     return {'topics': topics or ['other'], 'legacy_unassessed': legacy,
-            'subjects': prepare_subjects(raw.get('subjects'), item, records),
+            'subjects': prepare_subjects(raw.get('subjects'), item, records, subject_catalog),
+            'usage_tags': prepare_usage(raw.get('usage_tags'), item, records, subject_catalog),
             'subjects_version': 1 if isinstance(raw.get('subjects'), list) else 0,
             'subjects_complete': isinstance(raw.get('subjects'), list),
             'retention_class': 'brief' if raw.get('retention_class') == 'brief' else 'detailed',
