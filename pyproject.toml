@@ -16,3 +16,6 @@ dev = ["pytest>=8"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.setuptools.package-data]
+qq_onebot_whitelist = ["knowledge_background.json"]

@@ -14,9 +14,10 @@ from .content_utils import redact_secrets, redacted_json
 from .knowledge_config import group_scope, profile_for
 from .knowledge_models import resolve_models
 from .knowledge_store import KnowledgeDB, LOCAL_TZ, read_records
-from .knowledge_subjects import ALIASES, prepare_subjects
+from .knowledge_subjects import ALIASES, prepare_subjects, add_background_subjects
 from .knowledge_usage import read_catalog
 from .llm_providers import routing_settings
+from . import knowledge_tags, knowledge_background
 
 
 MAX_COMPLETION = 2500
@@ -98,11 +99,12 @@ def _material(row, evidence, records):
     old = legacy.get('name', '') if isinstance(legacy, dict) else ''
     return {'key': row['key'], 'title': redact_secrets(row['title'])[:180],
             'body': redact_secrets(row['body'])[:180], 'existing_subject': redact_secrets(str(old))[:64],
-            'messages': [{'message_id': mid, 'text': redact_secrets(by_id[mid]['text'])}
+            'messages': [{'message_id': mid, 'text': redact_secrets(by_id[mid]['text']),
+                          'file_names': [redact_secrets(str(file.get('file_name') or ''))[:200] for file in by_id[mid].get('files', []) if isinstance(file, dict)]}
                          for mid in chosen]}
 
 
-def _decisions(value, rows, sources, catalog=()):
+def _decisions(value, rows, sources, catalog=(), *, with_topics=False):
     decisions = value.get('decisions') if isinstance(value, dict) else None
     if not isinstance(decisions, list) or len(decisions) != len(rows):
         raise ValueError('invalid decisions')
@@ -130,13 +132,37 @@ def _decisions(value, rows, sources, catalog=()):
         prepared = prepare_subjects(raw, item, sources[key], catalog)
         if len(prepared) != len(raw):
             raise ValueError('rejected or duplicate subject')
-        result[key] = prepared
+        if with_topics:
+            prepared = add_background_subjects(prepared, item, sources[key], catalog)
+            raw_tags = decision.get('topic_tags')
+            if not isinstance(raw_tags, list) or len(raw_tags) > 4:
+                raise ValueError('invalid topic tags')
+            for candidate in raw_tags:
+                if (not isinstance(candidate, dict) or not isinstance(candidate.get('evidence'), list)
+                        or not 1 <= len(candidate['evidence']) <= 4):
+                    raise ValueError('invalid topic evidence')
+                for quote in candidate['evidence']:
+                    if not knowledge_tags.prepare_topic_tags([{**candidate, 'evidence': [quote]}], item, sources[key]):
+                        raise ValueError('unsupported topic tag')
+            tags = knowledge_tags.prepare_topic_tags(raw_tags, item, sources[key])
+            if len(tags) != len(raw_tags):
+                raise ValueError('rejected or duplicate topic tag')
+            note = decision.get('unknown_reason', decision.get('classification_note', ''))
+            if not prepared and not tags and (not isinstance(note, str) or not note.strip()):
+                raise ValueError('missing unassigned reason')
+            result[key] = {'subjects': prepared, 'topic_tags': tags,
+                           'classification_note': redact_secrets(str(note))[:300] if not prepared and not tags else '',
+                           'tags_complete': decision.get('classification_incomplete') is not True and decision.get('tags_complete') is not False}
+            if result[key]['tags_complete'] is False:
+                result[key]['classification_note'] = '部分候选缺少精确原文支持，已排除；保留有效分类并等待再复核。'
+        else:
+            result[key] = prepared
     if set(result) != set(by_key):
         raise ValueError('missing decisions')
     return result
 
 
-def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, request=None, model=None):
+def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, request=None, model=None, with_topics=False, only_keys=None):
     """Review only subject annotations; never run from collection or view refresh."""
     scope = group_scope(scope)
     if (type(max_batches) is not int or not 1 <= max_batches <= 1000
@@ -150,13 +176,24 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
     database = config.data_dir / 'knowledge.db'
     if not database.is_file():
         return {'status': 'unchanged', 'processed': 0, 'remaining': 0, 'message': '本群没有待复核知识。'}
-    pending = [row for row in _items(database, scope)
-               if not (type(_organization(row).get('subjects_version')) is int
+    background_hash = knowledge_background.background_fingerprint()
+    all_rows = _items(database, scope)
+    if only_keys is not None:
+        if (not isinstance(only_keys, (list, tuple, set)) or not only_keys
+                or any(not isinstance(key, str) for key in only_keys)
+                or not set(only_keys) <= {row['key'] for row in all_rows}):
+            raise ValueError('指定条目不属于本群或为空')
+        all_rows = [row for row in all_rows if row['key'] in set(only_keys)]
+    pending = [row for row in all_rows
+               if (with_topics and not (_organization(row).get('tags_version') == knowledge_tags.VERSION
+                                        and _organization(row).get('tags_complete') is True
+                                        and _organization(row).get('background_fingerprint') == background_hash))
+               or (not with_topics and not (type(_organization(row).get('subjects_version')) is int
                        and _organization(row)['subjects_version'] == 1
-                       and _organization(row).get('subjects_complete') is True)]
+                       and _organization(row).get('subjects_complete') is True))]
     if not pending:
         return {'status': 'unchanged', 'processed': 0, 'remaining': 0, 'message': '本群主题已复核，无需再次调用模型。'}
-    processed, backup = 0, None
+    processed, incomplete, backup = 0, 0, None
     with closing(_readonly(database)) as conn:
         catalog = read_catalog(conn, scope)
     expected_policy = _policy(config, profile)
@@ -167,12 +204,14 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
         active = profile_for(current, scope)
         if not active.allows('extraction') or _policy(current, active) != expected_policy:
             raise _Changed('policy changed')
+        if knowledge_background.background_fingerprint() != background_hash:
+            raise _Changed('background changed')
         with closing(_readonly(database)) as conn:
             if read_catalog(conn, scope) != catalog:
                 raise _Changed('catalog changed')
 
     def outcome(status, message, error=None):
-        result = {'status': status, 'processed': processed, 'remaining': len(pending) - processed,
+        result = {'status': status, 'processed': processed, 'remaining': len(pending) - processed + incomplete,
                   'message': message, 'backup': str(backup) if backup else None}
         if error:
             result['error'] = error
@@ -202,11 +241,24 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
             for entry in catalog:
                 alias_catalog.setdefault(entry['subject'], []).extend(entry.get('aliases', []))
             task = {'catalog': alias_catalog, 'subject_catalog': catalog, 'items': task_items}
-            messages = [{'role': 'system', 'content': SYSTEM},
+            system = SYSTEM
+            completion_limit = MAX_COMPLETION
+            if with_topics:
+                task['internet_background'] = knowledge_background.context_for([record for values in sources.values() for record in values])
+                task['preferred_tags'] = knowledge_tags.PREFERRED_TAGS
+                with closing(_readonly(database)) as conn:
+                    task['tag_catalog'] = sorted({name for row in _items(database, scope)
+                        for name in knowledge_tags.topic_tags_for({'organization': _organization(row)})})[:80]
+                system = SYSTEM.replace('没有明确产品名时使用subjects:[]。', '没有明确对象名时使用subjects:[]，但仍需独立判断资料主题。')
+                system += '\n' + knowledge_tags.SYSTEM + '\n' + knowledge_background.SYSTEM
+                system += '\n本次每个decision另外返回topic_tags数组（同organization.topic_tags结构）；subjects和topic_tags都为空时必须给unknown_reason解释缺少什么语境。平台名称、开源项目和通用资料主题都应检索，不局限AI厂商。主题名不要重复对象名称；优先preferred_tags，确有必要可以扩展。'
+                system += '\nfile_names是本条原消息已存在的附件名，可以用于识别资源主题；引文可逐字摘录附件名，不能推断文件内容或把附件名说成已读正文。Linux属于明确技术名；拼音和谐音应结合背景及本群语境。没有具名产品不妨碍讨论软件使用/维护、模型用量或资料主题，但仅有无法解释的“这个”等仍保留未知。'
+                completion_limit = 4000
+            messages = [{'role': 'system', 'content': system},
                         {'role': 'user', 'content': redacted_json(task)}]
-            reserve = len(json.dumps(messages, ensure_ascii=False).encode()) // 2 + MAX_COMPLETION
+            reserve = len(json.dumps(messages, ensure_ascii=False).encode()) // 2 + completion_limit
             candidate_key = 'subjects:' + _hash({'input': messages, 'source_hashes': fingerprints,
-                                                'original': rows, 'model': model_identity, 'version': 1})
+                                                'original': rows, 'model': model_identity, 'version': 2 if with_topics else 1})
             fresh()
             if db is None:
                 backup = config.data_dir / 'backups' / ('knowledge-before-subject-review-' + uuid.uuid4().hex + '.db')
@@ -218,6 +270,14 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
             try:
                 cached = db.claim(candidate_key, scope, 'model:subjects', reserve, budget,
                                   min(evidence_ids, default=0), max(evidence_ids, default=0))
+                if with_topics and cached is not None and any(decision.get('tags_complete') is False
+                        or decision.get('classification_incomplete') is True for decision in cached.get('decisions', [])):
+                    # A partial annotation is useful, but never a completed
+                    # classification cache. An explicit retry gets a fresh,
+                    # independently budgeted attempt instead of promoting it.
+                    candidate_key += ':retry:' + uuid.uuid4().hex
+                    cached = db.claim(candidate_key, scope, 'model:subjects', reserve, budget,
+                                      min(evidence_ids, default=0), max(evidence_ids, default=0))
             except RuntimeError as exc:
                 # Claim enforces the shared budget before a network request.
                 if '预算不足' in str(exc):
@@ -226,17 +286,20 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
             key = candidate_key
             fresh()
             if cached is None:
-                value, usage = request(messages, selected, max_tokens=MAX_COMPLETION)
+                value, usage = request(messages, selected, max_tokens=completion_limit)
             else:
                 value, usage = cached, cached.get('tokens')
-            decisions = _decisions(value, rows, sources, catalog)
+            decisions = _decisions(value, rows, sources, catalog, with_topics=with_topics)
             fresh()
             for row in rows:
                 _, current_sources = _sources(config.data_dir, row)
                 if _hash(current_sources) != fingerprints[row['key']]:
                     raise _Changed('source changed')
             tokens = usage if type(usage) is int and usage >= 0 else reserve
-            audit = {'decisions': [{'key': row['key'], 'subjects': decisions[row['key']]} for row in rows],
+            audit = {'decisions': [({'key': row['key'], **decisions[row['key']],
+                                     'classification_incomplete': not decisions[row['key']]['tags_complete'],
+                                     'unknown_reason': decisions[row['key']]['classification_note']} if with_topics else
+                                    {'key': row['key'], 'subjects': decisions[row['key']]}) for row in rows],
                      '_task': task, '_source_hashes': fingerprints, 'model': model_identity,
                      'tokens': tokens, 'token_usage_estimated': tokens == reserve and usage is None}
             if cached is None:
@@ -252,13 +315,19 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
                         raise _Changed('knowledge edited')
                 for row in rows:
                     org = _organization(row)
-                    org.update(subjects=decisions[row['key']], subjects_version=1, subjects_complete=True)
+                    if with_topics:
+                        org.update(decisions[row['key']], tags_version=knowledge_tags.VERSION,
+                                   background_fingerprint=background_hash, subjects_version=1, subjects_complete=True)
+                    else:
+                        org.update(subjects=decisions[row['key']], subjects_version=1, subjects_complete=True)
                     conn.execute('INSERT OR REPLACE INTO item_organization VALUES (?,?)',
                                  (row['key'], json.dumps(org, ensure_ascii=False)))
                 # The annotation update and successful audit must commit together.
                 conn.execute("UPDATE runs SET status='completed',tokens=?,result_json=?,error=NULL WHERE key=?",
                              (tokens, json.dumps(audit, ensure_ascii=False), key))
             processed += len(rows)
+            if with_topics:
+                incomplete += sum(decisions[row['key']]['tags_complete'] is False for row in rows)
         except Exception as exc:
             if key is not None and db is not None:
                 # Failed batches retain their conservative budget reservation.
@@ -269,5 +338,5 @@ def review_subjects(config_path, scope, *, max_batches=20, batch_size=10, reques
                 return outcome('partial' if processed else 'failed',
                                '功能、供应商、原消息或知识内容已变更，本批结果未发布。', type(exc).__name__)
             return outcome('partial' if processed else 'failed', '本批主题复核失败，结果未发布。', type(exc).__name__)
-    return outcome('completed' if processed == len(pending) else 'partial',
-                   '主题复核完成。' if processed == len(pending) else '达到本次批次数限制，仍有主题待复核。')
+    return outcome('completed' if processed == len(pending) and not incomplete else 'partial',
+                   '主题复核完成。' if processed == len(pending) and not incomplete else '仍有主题待复核。')

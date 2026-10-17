@@ -27,9 +27,10 @@ from . import knowledge_topic_decisions
 from .llm_providers import routing_settings
 from . import knowledge_organization
 from . import knowledge_usage
+from . import knowledge_background, knowledge_tags
 
 
-VERSION = 10
+VERSION = 11
 MAX_COMPLETION = 6000
 TOPICS = {
     'ai_drawing': 'AI 绘图：模型、LoRA、工作流、节点、提示词、训练、图像参数与排错经验。',
@@ -80,7 +81,7 @@ known中的candidate或unresolved只是历史线索，不是验证过的结论�
 已有同一问题的新反馈须existing并填写候选id及具体依据；仅同名工具不够。没有关联信息会进入单独的话题判断，不会直接视作新话题。
 控制篇幅：优先有效技术内容，合并本批同一讨论；summary最多6项，items最多10项，terms最多12项，不为凑数量收录软件名和闲聊。
 terms只解释词语在本群语境中的含义。产品计费、限流、部署、速度、故障和操作经验属于items，不能塞进术语meaning；简称可说明指代对象，但不要附带该产品的具体行为结论。
-''' + '\n' + knowledge_usage.SYSTEM
+''' + '\n' + knowledge_usage.SYSTEM + '\n' + knowledge_tags.SYSTEM + '\n' + knowledge_background.SYSTEM
 
 
 def model_request(messages: list[dict], cfg: LLMConfig, *, max_tokens: int = MAX_COMPLETION) -> tuple[dict, int | None]:
@@ -398,11 +399,13 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
              if wanted['glossary'] else [])
     with db.conn() as conn:
         subject_catalog = knowledge_usage.read_catalog(conn, scope)
+    internet_background = knowledge_background.context_for(records)
     task = dict(mode=profile.settings.get('match_mode', 'hybrid'),
                 topics=[TOPICS.get(t, t) for t in profile.settings.get('topics', [])],
                 description=str(profile.settings.get('description') or '')[:2000],
                 requested=[k for k, enabled in wanted.items() if enabled], known=known, glossary=terms,
-                capabilities=capabilities, threads=threads, subject_catalog=subject_catalog, messages=_material(records))
+                capabilities=capabilities, threads=threads, subject_catalog=subject_catalog,
+                internet_background=internet_background, preferred_tags=knowledge_tags.PREFERRED_TAGS, messages=_material(records))
     messages = [{'role': 'system', 'content': SYSTEM},
                 {'role': 'user', 'content': redacted_json(task)}]
     policy = _model_policy(profile)
@@ -412,7 +415,7 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     preview_settings = profile.settings.get('files') or {}
     preview_policy = {**preview_settings, 'preview_enabled': profile.option_enabled('files', 'preview_enabled')}
     identity = [VERSION, profile.settings.get('analysis_revision', 1), scope, kind, wanted,
-                task['mode'], task['topics'], task['description'], task['messages'], preview_policy, capabilities, subject_catalog,
+                task['mode'], task['topics'], task['description'], task['messages'], preview_policy, capabilities, subject_catalog, internet_background,
                 profile.settings.get('lifecycle'), profile.option_enabled('lifecycle', 'enabled'),
                 [sorted(values) for values in db.archived_context(scope)]]
     primary_policy = {k: v for k, v in policy.items() if k not in ('review_provider', 'review_model')}
@@ -425,6 +428,8 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
     def fresh_profile():
         current_config = load_config(config_path)
         current = profile_for(current_config, scope)
+        if knowledge_background.background_fingerprint() != internet_background['fingerprint']:
+            return None
         with db.conn() as conn:
             if knowledge_usage.read_catalog(conn, scope) != subject_catalog:
                 return None
@@ -1029,6 +1034,11 @@ def main():
     subjects_parser.add_argument('--group', required=True)
     subjects_parser.add_argument('--max-batches', type=int, default=20)
     subjects_parser.add_argument('--batch-size', type=int, default=10)
+    tags_parser = subs.add_parser('organize-tags', help='复核所有现有对象与资料主题，包括旧版已复核但漏分类的记录')
+    tags_parser.add_argument('--group', required=True)
+    tags_parser.add_argument('--max-batches', type=int, default=40)
+    tags_parser.add_argument('--batch-size', type=int, default=5)
+    tags_parser.add_argument('--item-key', action='append', default=None, help='只复核本群指定条目，可重复提供')
     usage_parser = subs.add_parser('tag-subject', help='人工确认本群对象用途与别名；独立于词义和使用结果')
     usage_parser.add_argument('--group', required=True)
     usage_parser.add_argument('--subject', required=True)
@@ -1078,9 +1088,10 @@ def main():
             from .knowledge_publish import publish_history
             result = publish_history(args.source, cfg.data_dir, args.group)
             result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
-        elif args.action == 'organize-subjects':
+        elif args.action in ('organize-subjects', 'organize-tags'):
             from .knowledge_subject_review import review_subjects
-            result = review_subjects(args.config, args.group, max_batches=args.max_batches, batch_size=args.batch_size)
+            result = review_subjects(args.config, args.group, max_batches=args.max_batches, batch_size=args.batch_size,
+                                     with_topics=args.action == 'organize-tags', only_keys=getattr(args, 'item_key', None))
             if result.get('processed') or result.get('status') == 'unchanged':
                 result['path'] = str(write_view(cfg.data_dir, cfg).resolve())
         elif args.action == 'archive':

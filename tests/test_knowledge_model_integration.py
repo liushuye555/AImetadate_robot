@@ -153,12 +153,14 @@ def test_review_retry_reuses_primary_and_charges_each_stage_once(tmp_path, monke
 
 
 def test_review_budget_shortage_retries_without_repeating_primary(tmp_path, monkeypatch):
-    path = configured(tmp_path, models={'review_enabled': True}, budget=20000)
+    # Enough for the expanded classification/background primary prompt, then
+    # deliberately leave too little for an independent review reservation.
+    path = configured(tmp_path, models={'review_enabled': True}, budget=30000)
     monkeypatch.setattr(knowledge, 'resolve_review_model', lambda *a: REVIEW)
     calls = []
     def request(messages, cfg):
         calls.append(cfg.model)
-        return output(json.loads(messages[1]['content'])), 18000 if cfg.model == 'primary' else 70
+        return output(json.loads(messages[1]['content'])), 28000 if cfg.model == 'primary' else 70
     assert knowledge.analyze(path, '123', kind='batch', records=rows(), request=request)['status'] == 'review_failed'
     assert calls == ['primary']
     raw = yaml.safe_load(path.read_text(encoding='utf-8'))

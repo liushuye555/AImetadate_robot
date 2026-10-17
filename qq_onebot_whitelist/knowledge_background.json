@@ -1,0 +1,466 @@
+{
+  "version": 4,
+  "updated_at": "2026-10-17",
+  "scope": "阅读与检索背景；不能替代群聊证据，不含实时价格或平台当前限制",
+  "entries": [
+    {
+      "canonical": "闲鱼",
+      "kind": "entity",
+      "definition": "二手交易平台名称；交易平台与所交易账号所属平台分别确认。",
+      "aliases": [
+        {
+          "text": "闲鱼",
+          "status": "standard"
+        },
+        {
+          "text": "咸鱼",
+          "status": "contextual",
+          "requires_any": [
+            "二手",
+            "账号",
+            "国内号",
+            "二手交易",
+            "交易平台",
+            "挂单",
+            "卖家",
+            "买家",
+            "日抛号",
+            "日卡",
+            "天卡",
+            "挂咸鱼"
+          ],
+          "excludes_any": [
+            "做饭",
+            "好吃",
+            "下饭",
+            "腌制",
+            "菜谱",
+            "食材",
+            "咸鱼干"
+          ]
+        },
+        {
+          "text": "海鲜市场",
+          "status": "contextual",
+          "requires_any": [
+            "二手",
+            "账号",
+            "国内号",
+            "二手交易",
+            "交易平台",
+            "挂单",
+            "卖家",
+            "买家",
+            "日抛号",
+            "日卡",
+            "天卡",
+            "挂咸鱼"
+          ],
+          "excludes_any": [
+            "做饭",
+            "好吃",
+            "下饭",
+            "腌制",
+            "菜谱",
+            "食材",
+            "咸鱼干"
+          ]
+        }
+      ],
+      "sources": [
+        "https://www.alibabagroup.com/en-US/about-alibaba-businesses-1747081802473799680"
+      ],
+      "limits": "咸鱼也可指食品或状态，不能无语境全局替换；账号平台和诈骗因果仍需原文。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "虚拟卡",
+      "kind": "concept",
+      "definition": "非实体形式的支付卡或支付凭据；卡组织、发卡机构、开卡渠道和适用地区是不同信息。",
+      "aliases": [
+        {
+          "text": "虚拟visa卡",
+          "status": "conventional"
+        },
+        {
+          "text": "虚拟 Visa 卡",
+          "status": "conventional"
+        },
+        {
+          "text": "虚拟信用卡",
+          "status": "conventional"
+        },
+        {
+          "text": "virtual card",
+          "status": "standard"
+        }
+      ],
+      "sources": [
+        "https://www.visa.com/en-us/business/cards/virtual-card"
+      ],
+      "limits": "不能从Visa名称推断发卡平台、是否要人脸或地区可用性。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "Visa",
+      "kind": "concept",
+      "definition": "支付网络或卡组织名称；也可能在英文中指签证，结合卡片/支付语境区分。",
+      "aliases": [
+        {
+          "text": "visa卡",
+          "status": "contextual",
+          "requires_any": [
+            "卡",
+            "支付",
+            "开卡"
+          ]
+        }
+      ],
+      "sources": [
+        "https://usa.visa.com/about-visa.html"
+      ],
+      "limits": "不能把所有Visa卡当成同一发卡产品。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "API接入",
+      "kind": "concept",
+      "definition": "通过程序接口访问服务；网页客户端、官方接口和第三方兼容接口可分别存在。",
+      "aliases": [
+        {
+          "text": "API",
+          "status": "standard"
+        },
+        {
+          "text": "接口调用",
+          "status": "conventional"
+        },
+        {
+          "text": "API key",
+          "status": "standard"
+        }
+      ],
+      "sources": [
+        "https://developer.mozilla.org/en-US/docs/Glossary/API"
+      ],
+      "limits": "知道客户端名称不代表知道实际供应商或请求路由；不得输出真实凭据。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "接口中转",
+      "kind": "concept",
+      "definition": "请求经第三方服务转发或适配；兼容某接口格式不证明是该品牌官方服务。",
+      "aliases": [
+        {
+          "text": "中转站",
+          "status": "contextual",
+          "requires_any": [
+            "API",
+            "接口",
+            "模型",
+            "key"
+          ]
+        },
+        {
+          "text": "反代",
+          "status": "contextual",
+          "requires_any": [
+            "API",
+            "接口",
+            "服务",
+            "请求"
+          ]
+        }
+      ],
+      "sources": [
+        "https://developer.mozilla.org/en-US/docs/Glossary/Proxy_server"
+      ],
+      "limits": "中转的经营方、上游、价格与稳定性需原文或独立核验。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "邮箱别名",
+      "kind": "concept",
+      "definition": "可投递到既有收件箱的其他邮箱地址形式，具体行为取决于服务商。",
+      "aliases": [
+        {
+          "text": "邮箱alias",
+          "status": "conventional"
+        },
+        {
+          "text": "邮件别名",
+          "status": "conventional"
+        },
+        {
+          "text": "plus addressing",
+          "status": "standard"
+        }
+      ],
+      "sources": [
+        "https://support.google.com/a/users/answer/9282734?hl=en"
+      ],
+      "limits": "邮箱别名、独立邮箱和临时邮箱不能直接等同；注册风控效果需原文反馈。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "临时邮箱",
+      "kind": "concept",
+      "definition": "供临时收信使用的邮箱服务称谓，与个人长期邮箱、邮箱别名和自建域名邮箱分开。",
+      "aliases": [
+        {
+          "text": "一次性邮箱",
+          "status": "conventional"
+        },
+        {
+          "text": "十分钟邮箱",
+          "status": "conventional"
+        },
+        {
+          "text": "临邮",
+          "status": "conventional"
+        },
+        {
+          "text": "disposable email",
+          "status": "standard"
+        }
+      ],
+      "sources": [],
+      "limits": "不推断保密性、可恢复性或某平台一定接受。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "账号",
+      "kind": "concept",
+      "definition": "互联网服务登录身份；账号区域、注册邮箱和服务所属平台需分别确认。",
+      "aliases": [
+        {
+          "text": "国内号",
+          "status": "contextual",
+          "requires_any": [
+            "账号",
+            "登录",
+            "注册",
+            "买",
+            "卖",
+            "三块"
+          ]
+        },
+        {
+          "text": "成品号",
+          "status": "contextual",
+          "requires_any": [
+            "账号",
+            "登录",
+            "注册",
+            "交易"
+          ]
+        }
+      ],
+      "sources": [],
+      "limits": "仅称号、国内号、美区号不能确定具体平台。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "网络代理",
+      "kind": "concept",
+      "definition": "代转网络请求的机制或服务；不是某个固定产品名。",
+      "aliases": [
+        {
+          "text": "梯子",
+          "status": "candidate",
+          "candidates": [
+            "网络代理/VPN",
+            "字面工具"
+          ]
+        },
+        {
+          "text": "魔法",
+          "status": "candidate",
+          "candidates": [
+            "网络代理语境",
+            "其他专群用语"
+          ]
+        }
+      ],
+      "sources": [
+        "https://developer.mozilla.org/en-US/docs/Glossary/Proxy_server"
+      ],
+      "limits": "有网络代理话题时可打通用主题，不能由梯子猜出某代理供应商。",
+      "definition_level": "reference"
+    },
+    {
+      "canonical": "额度与计费",
+      "kind": "concept",
+      "definition": "调用量、余额、订阅权益、速率限制和请求成本是不同维度，需看原文单位及对象。",
+      "aliases": [
+        {
+          "text": "刀",
+          "status": "candidate",
+          "candidates": [
+            "美元金额",
+            "工具或其他用语"
+          ]
+        },
+        {
+          "text": "米",
+          "status": "candidate",
+          "candidates": [
+            "钱或价格",
+            "单位或其他用语"
+          ]
+        },
+        {
+          "text": "豆子",
+          "status": "candidate",
+          "candidates": [
+            "服务积分/额度",
+            "普通用词"
+          ]
+        }
+      ],
+      "sources": [],
+      "limits": "不从价格黑话补造币种、汇率、当前价格或额度。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "逆向分析",
+      "kind": "concept",
+      "definition": "理解软件实现的分析活动；工具、操作目标、操作方式和结果分开记录。",
+      "aliases": [
+        {
+          "text": "反编译",
+          "status": "conventional"
+        },
+        {
+          "text": "脱壳",
+          "status": "contextual",
+          "requires_any": [
+            "程序",
+            "软件",
+            "壳",
+            "逆向",
+            "exe",
+            "dll"
+          ]
+        }
+      ],
+      "sources": [],
+      "limits": "脱壳、反编译、解密和模型限制规避不是同义词。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "破甲",
+      "kind": "group_candidate",
+      "definition": "部分AI讨论中用于限制规避语境；确切含义须结合当前群历史，不能当通用软件名。",
+      "aliases": [
+        {
+          "text": "甲",
+          "status": "candidate",
+          "candidates": [
+            "模型限制/保护语境",
+            "软件保护或其他含义"
+          ]
+        },
+        {
+          "text": "全破",
+          "status": "candidate",
+          "candidates": [
+            "本群工具/能力用语",
+            "无法确认具体对象"
+          ]
+        }
+      ],
+      "sources": [],
+      "limits": "富江、无限各代的人工确认目录按群生效；破甲字样不能证明涉及DSh或某个具体插件。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "歧义称呼",
+      "kind": "ambiguous",
+      "definition": "缩写和谐音须结合引用、发言条件与群内已确认说明。",
+      "aliases": [
+        {
+          "text": "料",
+          "status": "candidate",
+          "candidates": [
+            "资料/文件",
+            "账号或凭据数据",
+            "其他行业含义"
+          ]
+        },
+        {
+          "text": "车",
+          "status": "candidate",
+          "candidates": [
+            "共享订阅/拼团",
+            "产品或字面含义"
+          ]
+        },
+        {
+          "text": "五代",
+          "status": "candidate",
+          "candidates": [
+            "不同工具的版本称呼",
+            "无法确认项目"
+          ]
+        }
+      ],
+      "sources": [],
+      "limits": "不能仅凭单字、代际或相似英文词合并产品；仍需保留未知对象。",
+      "definition_level": "general_hint"
+    },
+    {
+      "canonical": "邮箱掩码",
+      "kind": "concept",
+      "definition": "转发邮件到真实收件箱的另一个地址；不必是短期邮箱。",
+      "aliases": [
+        {
+          "text": "email mask",
+          "status": "standard"
+        },
+        {
+          "text": "邮箱转发地址",
+          "status": "conventional"
+        }
+      ],
+      "sources": [
+        "https://support.mozilla.org/en-US/kb/firefox-relay-what-email-mask?redirectlocale=en-US&redirectslug=firefox-relay-what-email-alias"
+      ],
+      "definition_level": "reference",
+      "limits": "掩码、转发地址、plus地址变体和临时邮箱分别判断。"
+    },
+    {
+      "canonical": "Linux",
+      "kind": "entity",
+      "definition": "操作系统与相关软件生态的名称，可独立作为技术主题；具体发行版、工具与配置仍需原文。",
+      "aliases": [
+        {
+          "text": "linux",
+          "status": "standard"
+        }
+      ],
+      "sources": [],
+      "definition_level": "general_hint",
+      "limits": "不能从Linux推出Ubuntu等具体发行版，也不能证明某破甲工具兼容。"
+    },
+    {
+      "canonical": "拼音与混合写法",
+      "kind": "ambiguous",
+      "definition": "中文词可能用拼音或中英混写表达，需结合领域与引用确认。",
+      "aliases": [
+        {
+          "text": "pojia",
+          "status": "candidate",
+          "candidates": [
+            "破甲（AI或工具语境）",
+            "项目名或其他拼音"
+          ]
+        }
+      ],
+      "sources": [],
+      "definition_level": "general_hint",
+      "limits": "拼音提示仅帮助理解，不能从pojia猜出具体工具或把五代等代际自动并入产品。"
+    }
+  ],
+  "sources_checked_at": "2026-10-17"
+}

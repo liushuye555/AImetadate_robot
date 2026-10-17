@@ -81,11 +81,20 @@ def prepare_organization(item, records, subject_catalog=()):
     name = redact_secrets(raw_name.strip())[:300] if isinstance(raw_name, str) else ''
     if not name or not any(name in row['quote'] for row in evidence):
         name = ''
-    from .knowledge_subjects import prepare_subjects
+    from .knowledge_subjects import prepare_subjects, add_background_subjects
     from .knowledge_usage import prepare_usage
+    from .knowledge_tags import prepare_topic_tags
+    from .knowledge_background import background_fingerprint
+    from .knowledge_tags import VERSION as TAGS_VERSION
+    tags = prepare_topic_tags(raw.get('topic_tags'), item, records)
+    subjects = add_background_subjects(prepare_subjects(raw.get('subjects'), item, records, subject_catalog), item, records, subject_catalog)
     return {'topics': topics or ['other'], 'legacy_unassessed': legacy,
-            'subjects': prepare_subjects(raw.get('subjects'), item, records, subject_catalog),
+            'subjects': subjects,
             'usage_tags': prepare_usage(raw.get('usage_tags'), item, records, subject_catalog),
+            'topic_tags': tags,
+            'tags_version': TAGS_VERSION if isinstance(raw.get('topic_tags'), list) else 0,
+            'tags_complete': isinstance(raw.get('topic_tags'), list) and bool(tags or subjects),
+            'background_fingerprint': background_fingerprint() if isinstance(raw.get('topic_tags'), list) else '',
             'subjects_version': 1 if isinstance(raw.get('subjects'), list) else 0,
             'subjects_complete': isinstance(raw.get('subjects'), list),
             'retention_class': 'brief' if raw.get('retention_class') == 'brief' else 'detailed',

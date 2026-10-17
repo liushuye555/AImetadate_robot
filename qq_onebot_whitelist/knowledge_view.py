@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .content_utils import redact_secrets
 from .knowledge_evidence import render_evidence
@@ -12,6 +13,7 @@ from .knowledge_layers import CATEGORIES, category_for
 from .knowledge_lifecycle import lifecycle_for
 from .knowledge_organization import TOPICS
 from .knowledge_subjects import subjects_for, subject_id, UNASSIGNED
+from .knowledge_tags import topic_tags_for
 from .knowledge_usage import USAGE_TAGS, scope_catalog, usage_for, usage_markup
 
 
@@ -50,12 +52,88 @@ def _excerpt(value, limit=240):
     return '<p class="card-excerpt">' + _safe(text[:limit] + ('…' if len(text) > limit else '')) + '</p>' if text else ''
 
 
+def _content_tag_names(row):
+    """Return bounded, deduplicated broad topic labels for a record."""
+    return list(dict.fromkeys(_safe_name(name) for name in topic_tags_for(row) if _safe_name(name)))[:8]
+
+
+def _safe_name(value):
+    return redact_secrets(str(value or '').strip())[:80]
+
+
+def _entity_markup(names):
+    if not names:
+        return ''
+    return '<div class="content-tags" aria-label="对象标签">' + ''.join(
+        '<span class="content-tag entity-tag">' + _safe(name) + '<small>对象</small></span>' for name in names) + '</div>'
+
+
+def _unassigned_note(rows):
+    notes = list(dict.fromkeys(str((row.get('organization') or {}).get('classification_note') or '')
+                              for row in rows if isinstance(row.get('organization'), dict)))
+    notes = [note for note in notes if note]
+    return '<p class="meta">分类待确认：' + _safe('；'.join(notes)[:500]) + '</p>' if notes else ''
+
+
+def _background_reference():
+    from .knowledge_background import load_background
+    data = load_background()
+    entries = []
+    for entry in data['entries']:
+        aliases = []
+        for alias in entry.get('aliases', []):
+            state = {'standard': '标准称呼', 'conventional': '常见称呼', 'contextual': '需语境', 'candidate': '有歧义'}.get(alias.get('status'), '待核对')
+            aliases.append(str(alias.get('text') or '') + '（' + state + '）')
+        links = [url for url in entry.get('sources', []) if isinstance(url, str) and urlparse(url).scheme == 'https']
+        references = ' · '.join('<a href="' + _safe(url) + '">' + _safe(urlparse(url).netloc) + '</a>' for url in links)
+        entries.append('<section><h3>' + _safe(entry['canonical']) + '</h3><p>' + _safe(entry['definition']) + '</p>'
+                       + '<p class="meta">' + _safe('、'.join(aliases)) + '</p><p class="meta">边界：' + _safe(entry['limits']) + '</p>'
+                       + ('<p class="meta">参考来源：' + references + '</p>' if references else '<p class="meta">通用阅读提示，尚无独立参考来源。</p>') + '</section>')
+    return '<details class="background-reference"><summary>分类参考：互联网常识与谐音（' + str(len(entries)) + ' 组）</summary>' \
+        + '<p>本地背景词典 · 更新 ' + _safe(data['updated_at']) + '。帮助理解和分类，不能替代原消息证据；本群已确认的定义优先。</p>' \
+        + ''.join(entries) + '</details>'
+
+
+def _content_tag_markup(row):
+    org = row.get('organization') if isinstance(row.get('organization'), dict) else {}
+    tags = org.get('topic_tags') if isinstance(org.get('topic_tags'), list) else []
+    tags_by_name = {}
+    for tag in tags[:8]:
+        if not isinstance(tag, dict) or not isinstance(tag.get('name'), str):
+            continue
+        name = _safe_name(tag['name'])
+        if name:
+            tags_by_name.setdefault(name, []).append(tag)
+    names = _content_tag_names(row)
+    if not names:
+        return '', []
+    chips = ''.join('<span class="content-tag">' + _safe(name) + '<small>AI归类</small></span>' for name in names)
+    evidence_rows, seen_evidence = [], set()
+    for name in names:
+        for tag in tags_by_name.get(name, []):
+            for ev in tag.get('evidence', [])[:3] if isinstance(tag.get('evidence'), list) else []:
+                if (not isinstance(ev, dict) or type(ev.get('message_id')) is not int
+                        or ev.get('message_id') <= 0 or not isinstance(ev.get('quote'), str)):
+                    continue
+                quote = redact_secrets(ev['quote'].strip())[:240]
+                key = (name, ev.get('message_id'), quote, '附件名' if ev.get('source_field') == 'file_name' else '原文')
+                if quote and key not in seen_evidence:
+                    seen_evidence.add(key)
+                    evidence_rows.append(key)
+    evidence = ''
+    if evidence_rows:
+        evidence = '<details class="content-tag-evidence"><summary>查看主题归类依据</summary>' + ''.join(
+            '<p><strong>' + _safe(name) + '</strong> · 原消息 #' + _safe(mid) + ' · ' + _safe(source_field) + '</p><blockquote>' + _safe(quote) + '</blockquote>'
+            for name, mid, quote, source_field in evidence_rows[:12]) + '</details>'
+    return '<div class="content-tags" aria-label="资料主题">' + chips + '</div>' + evidence, names
+
+
 def _frame(filename: str, title: str, cards: list[str], groups: set[str], filters: str, subject_groups=None, subject_index=None) -> str:
     from .knowledge_presentation import STYLE, SCRIPT
     opts = ''.join(f'<option value="{_safe(group)}">{_safe(group.removeprefix("group:"))}</option>' for group in sorted(groups))
     count = len(cards)
     descriptions = {
-        'knowledge.html': '先按破甲工具、逆向工具等用途查找，或选择对象主题，再看额度、接入、故障等具体情形。用途标签说明对象类型，不代表效果已验证。同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
+        'knowledge.html': '可按平台、工具等对象，以及闲鱼、虚拟卡等资料主题查找，再看额度、接入、故障等具体情形。资料主题是 AI 归类，展开卡片可核对原消息依据；标签不表示当前使用成功。用途标签说明对象类型，不代表效果已验证。同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。文字讨论可独立收录，不要求图片或附件。',
         'glossary.html': '遇到不熟悉的行业说法，先查释义，再展开原消息核对。同词的不同解释分别保留。',
         'knowledge-summary.html': '按批次回顾群里讨论了什么，再查看原消息了解细节。',
         'knowledge-files.html': '查看已整理的保留文件及保存状态；全部采集文件可从资料中心打开。',
@@ -73,12 +151,13 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
             for lane,label in [('knowledge','知识'),('followup','待跟进'),('archive','已归档'),('','全部')]) + '</div>'
         filters = filters.replace('<label>处理队列', '<label class="screen-reader">处理队列')
     sidebar = ''
+    background_reference = _background_reference() if filename == 'knowledge.html' else ''
     if subject_groups:
         content = ''.join('<section class="subject-section" data-subject-group="' + subject_id(name) + '">'
             + '<header class="subject-heading"><h2>' + _safe(name) + '</h2><span data-subject-visible-count>'
             + str(len(cases)) + '</span><span data-related-context hidden></span></header><div class="subject-cases">' + ''.join(cases) + '</div></section>'
             for name, cases in subject_groups)
-        sidebar = '<aside class="subject-sidebar"><h2>主题目录</h2><p>选择对象，查看相关情形。跨主题讨论只保留一份。</p><nav id="subject-nav" aria-label="按主题浏览">'
+        sidebar = '<aside class="subject-sidebar"><h2>主题目录</h2><p>按平台、工具或资料主题浏览相关情形。资料主题由 AI 归类，跨主题讨论只保留一份；“对象待确认”只表示事件中的实体指代未明。</p><nav id="subject-nav" aria-label="按主题浏览">'
         sidebar += '<button type="button" data-subject-target="" data-subject-name="全部主题" aria-pressed="true">全部主题<span data-subject-count>' + str(count) + '</span></button>'
         sidebar += ''.join('<button type="button" data-subject-target="' + subject_id(name)
             + '" data-subject-name="' + _safe(name) + '" aria-pressed="false">' + _safe(name)
@@ -95,7 +174,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
 <div class="shell"><div class="page-heading"><h1>{title}</h1><p class="page-intro">{descriptions[filename]}</p><span class="page-total">本页共 {count} 项</span>{queues}</div>
 <section class="toolbar" aria-label="查找资料"><div class="search-row"><label class="search-label"><span>搜索</span><input id="search" type="search" placeholder="输入关键词查找本页资料" aria-label="搜索本页内容" autocomplete="off"></label><button type="button" id="clear-filters" class="clear-button">清除筛选</button></div>
 <div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div></section>
-{listing}
+{listing}{background_reference}
 <footer><a class="back-top" href="#report-top">回到顶部 ↑</a>本地整理报告 · 群友说法与已验证反馈会分别标注；来源编号用于回查原消息。</footer></div>
 <script>{SCRIPT}</script></body></html>'''
 
@@ -143,14 +222,16 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         state = {"unresolved": "未解决", "reported": "群友说法", "verified": "原消息有验证反馈",
                  "disputed": "存在分歧"}.get(item.get("evidence_state"), "群友说法")
         msgrefs = "、".join("#" + str(mid) for mid in ids) or "无来源编号"
-        names = subjects_for(item, scope_catalog(subject_catalog, item.get('scope')))
-        names = names or [UNASSIGNED]
+        entities = subjects_for(item, scope_catalog(subject_catalog, item.get('scope')))
+        tag_markup, tag_names = _content_tag_markup(item)
+        names = list(dict.fromkeys([*entities, *tag_names])) or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
         usages = usage_for(item, subject_catalog)
         knowledge_cards.append(
             f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(item.get("title"))}</h2>' + usage_markup(usages) + f'<p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
+            f'<h2>{_safe(item.get("title"))}</h2>' + _entity_markup(entities) + usage_markup(usages) + tag_markup
+            + (_unassigned_note([item]) if names == [UNASSIGNED] else '') + f'<p class="meta">涉及对象/资料主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · '
             f'{_safe(item.get("topic"))} · {_safe(item.get("kind"))} · '
             f'{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state} · {msgrefs}</p>'
             + _excerpt(item.get('body', item.get('summary')))
@@ -182,8 +263,11 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         state_label = {'unresolved': '未解决', 'reported': '群友说法',
                        'verified': '原消息有验证反馈', 'disputed': '存在分歧'}.get(current_state, '群友说法')
         catalog = scope_catalog(subject_catalog, thread['scope'])
-        names = list(dict.fromkeys(name for event in reversed(events) for name in subjects_for(event, catalog)))
-        names = names or [UNASSIGNED]
+        entities = list(dict.fromkeys(name for event in reversed(events) for name in subjects_for(event, catalog)))
+        tag_names = list(dict.fromkeys(name for event in events for name in _content_tag_names(event)))
+        tag_markup, _ = _content_tag_markup({'organization': {'topic_tags': [tag for event in events
+            for tag in ((event.get('organization') or {}).get('topic_tags', []) if isinstance(event.get('organization'), dict) else [])]}})
+        names = list(dict.fromkeys([*entities, *tag_names])) or [UNASSIGNED]
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
         usages = []
@@ -206,7 +290,8 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         progress_label = _status(thread['status'], category)
         labels = list(dict.fromkeys([CATEGORIES[category], '精选' if val == 'high' else '待确认', state_label, progress_label]))
         knowledge_cards.append(f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(thread["title"])}</h2>' + usage_markup(usages) + f'<p class="meta">涉及主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{" · ".join(labels)} · 话题记录 {len(events)} 次</p>'
+            f'<h2>{_safe(thread["title"])}</h2>' + _entity_markup(entities) + usage_markup(usages) + tag_markup
+            + (_unassigned_note(events) if names == [UNASSIGNED] else '') + f'<p class="meta">涉及对象/资料主题：{_safe(" / ".join(names))} · 情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p><p class="meta">{" · ".join(labels)} · 话题记录 {len(events)} 次</p>'
             + _excerpt(thread.get('known') or (events[-1].get('summary') if events else ''))
             + '<details><summary>查看整理内容与缺少信息</summary>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
