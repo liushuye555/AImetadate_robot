@@ -51,6 +51,22 @@ def test_subject_directory_is_collapsible_and_has_its_own_search(tmp_path, monke
     assert re.search(r'<input\b[^>]*id="subject-search"', page)
 
 
+def test_reading_grade_filter_offers_recommended_all_and_each_grade(tmp_path, monkeypatch):
+    page = _page(tmp_path, monkeypatch, item={
+        "key": "grade-filter-case", "scope": "群A", "title": "待评级资料",
+        "body": "原文内容", "value": "candidate", "evidence_ids": [],
+    })
+    match = re.search(r'<select\b[^>]*id="reading-grade"[^>]*>(.*?)</select>', page, re.S)
+
+    assert match, "knowledge report should include a reading-grade filter"
+    select = match.group(1)
+    for option in ('value="recommended"', 'value=""', 'value="a"', 'value="b"',
+                   'value="c"', 'value="d"', 'value="unrated"'):
+        assert option in select
+    assert re.search(r'<option\b[^>]*value="recommended"[^>]*selected', select)
+    assert 'data-reading-grade="unrated"' in page
+
+
 def test_existing_view_wallpaper_is_shared_by_all_report_pages(tmp_path, monkeypatch):
     view_dir = tmp_path / "view"
     view_dir.mkdir()

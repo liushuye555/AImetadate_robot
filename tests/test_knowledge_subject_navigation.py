@@ -72,3 +72,32 @@ assert.equal(counts.Alpha.textContent,21);assert.equal(counts.Gamma.textContent,
 '''
     result = subprocess.run([node, '-e', harness], input=SCRIPT, text=True, encoding='utf-8', capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+def test_reading_grade_filters_combine_with_queue_and_update_topic_counts():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node.js is needed for report interaction tests')
+    harness = r'''
+const vm=require('node:vm'),assert=require('node:assert/strict');
+function element(value=''){return {value,hidden:false,events:{},dataset:{},addEventListener(name,fn){this.events[name]=fn;},setAttribute(name,value){this[name]=value;},focus(){},querySelector(){return null;},querySelectorAll(){return [];}};}
+const e={group:element(),search:element(),subject:element(),'subject-search':element(),'usage-tag':element(),lane:element('knowledge'),topic:element(),category:element(),value:element(),
+ 'reading-grade':element('recommended'),'filter-empty':element(),'subject-search-empty':element(),'shown-count':element(),'page-info':element(),'previous-page':element(),'next-page':element(),'clear-filters':element(),results:element(),'selected-subject':element()};
+const cards=[];
+for(let i=0;i<21;i++)cards.push({dataset:{subject:'Alpha',subjects:'Alpha',subjectName:'Alpha',group:'g',lane:'knowledge',topics:'x',category:'knowledge',readingGrade:'a'},textContent:'alpha '+i,hidden:false,querySelectorAll(){return [];}});
+cards.push({dataset:{subject:'Beta',subjects:'Beta',subjectName:'Beta',group:'g',lane:'knowledge',topics:'x',category:'knowledge',readingGrade:'c'},textContent:'beta',hidden:false,querySelectorAll(){return [];}});
+cards.push({dataset:{subject:'Delta',subjects:'Delta',subjectName:'Delta',group:'g',lane:'knowledge',topics:'x',category:'knowledge',readingGrade:'d'},textContent:'delta',hidden:false,querySelectorAll(){return [];}});
+cards.push({dataset:{subject:'Gamma',subjects:'Gamma',subjectName:'Gamma',group:'g',lane:'followup',topics:'x',category:'knowledge',readingGrade:'b'},textContent:'gamma',hidden:false,querySelectorAll(){return [];}});
+const counts={};const names=['','Alpha','Beta','Delta','Gamma'];
+const subjects=names.map(name=>{counts[name]=element();return {...element(),dataset:{subjectTarget:name,subjectName:name||'全部主题'},querySelector(){return counts[name];}};});
+const doc={getElementById:id=>e[id]||null,querySelectorAll:s=>s==='article'?cards:s==='[data-subject-target]'?subjects:s==='.subject-section'?[]:s==='[data-lane-target]'?[]:[],addEventListener(){}};
+const context={document:doc,window:{location:{hash:''},addEventListener(){}}};vm.createContext(context);vm.runInContext(require('node:fs').readFileSync(0,'utf8'),context);
+assert.equal(e['shown-count'].textContent,21,'recommended defaults to A and B');assert.equal(counts.Alpha.textContent,21);assert.equal(e['page-info'].textContent,'1 / 2 页');
+e['reading-grade'].value='';e['reading-grade'].events.change();assert.equal(e['shown-count'].textContent,23,'empty grade means all grades');assert.equal(counts.Beta.textContent,1);assert.equal(counts.Delta.textContent,1);
+e['reading-grade'].value='a';e['reading-grade'].events.change();assert.equal(e['shown-count'].textContent,21);assert.equal(counts.Beta.textContent,0);
+e.lane.value='followup';e.lane.events.change();assert.equal(e['shown-count'].textContent,0,'grade and queue filters combine');assert.equal(counts.Gamma.textContent,0);assert.equal(subjects[4].hidden,true);
+e['reading-grade'].value='b';e['reading-grade'].events.change();assert.equal(e['shown-count'].textContent,1);assert.equal(counts.Gamma.textContent,1);assert.equal(subjects[4].hidden,false);
+e['clear-filters'].events.click();assert.equal(e['reading-grade'].value,'','clear resets grade to all');assert.equal(e['shown-count'].textContent,1,'queue remains active when clearing other filters');
+'''
+    result = subprocess.run([node, '-e', harness], input=SCRIPT, text=True, encoding='utf-8', capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr

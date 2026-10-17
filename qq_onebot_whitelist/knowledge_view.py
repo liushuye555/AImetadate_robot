@@ -15,6 +15,7 @@ from .knowledge_organization import TOPICS
 from .knowledge_subjects import subjects_for, subject_id, UNASSIGNED
 from .knowledge_tags import topic_tags_for
 from .knowledge_usage import USAGE_TAGS, scope_catalog, usage_for, usage_markup
+from .knowledge_reading_grade import GRADES, GRADE_ORDER, grade_for, thread_grade
 
 
 PAGES = (
@@ -73,6 +74,15 @@ def _unassigned_note(rows):
                               for row in rows if isinstance(row.get('organization'), dict)))
     notes = [note for note in notes if note]
     return '<p class="meta">分类待确认：' + _safe('；'.join(notes)[:500]) + '</p>' if notes else ''
+
+
+def _grade_badge(grade):
+    prefix = grade['id'].upper() + ' · ' if grade['id'] != 'unrated' else ''
+    return '<span class="reading-grade-badge grade-' + grade['id'] + '">' + prefix + _safe(grade['label']) + '</span>'
+
+
+def _grade_reason(grade):
+    return '<p class="grade-reason"><strong>阅读分级：' + _safe(grade['label']) + '</strong> · ' + _safe(grade['reason']) + '</p>'
 
 
 def _background_reference():
@@ -156,6 +166,9 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
     background_reference = ('<details class="reading-guide"><summary>如何阅读这些资料</summary>'
         '<p>按平台、工具或资料主题浏览相关情形，再看额度、接入、故障等具体情况。资料主题由 AI 归类，标签不表示当前使用成功；用途标签说明对象类型，不代表效果已验证。</p>'
         '<p>同主题的不同经历分别保留，未解决的问题在“待跟进”中查看。跨主题讨论只保留一份；“对象待确认”只表示事件中的实体指代未明。展开详情可核对完整内容和原消息证据。</p></details>'
+        '<details class="reading-guide"><summary>阅读分级如何判断</summary><p>默认优先阅读 A 精选知识与 B 经验参考。C 待核线索和 D 一般讨论可通过“阅读等级”查看；缺少质量或原消息依据的资料标为未评级。</p>'
+        '<p>A 需要原有精选标注及条件、操作、结果的逐字来源支持；B 有原文支持的结果或方法，但未达到精选要求；C 是资源或问题线索；D 主要是观点、临时状态或低依据讨论。分级由现有质量标注和原消息保守推导，不是新的 AI 价值评分。</p>'
+        '<p>阅读优先级与真实性、解决状态分别判断；经验参考仍可能是群友说法、未解决或有分歧。没有达到精选条件时 A 档可以为空。</p></details>'
         + _background_reference()) if filename == 'knowledge.html' else ''
     if subject_groups:
         content = ''.join('<section class="subject-section" data-subject-group="' + subject_id(name) + '">'
@@ -169,7 +182,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
             + '<span data-subject-count>' + str(size) + '</span></button>' for name, size in subject_index)
         sidebar += '</nav><p id="subject-search-empty" class="meta" hidden>没有匹配的主题</p></div></details></aside>'
     listing = f'''<div class="result-line"><span>找到 <strong id="shown-count">{count}</strong> 项</span><span>展开详情可查看原消息与整理依据</span></div>
-<main id="results">{content}</main><div id="filter-empty" class="empty" hidden><strong>没有符合条件的资料</strong><p>试试更短的关键词，或清除筛选条件。</p></div>
+<main id="results">{content}</main><div id="filter-empty" class="empty" hidden><strong>没有符合条件的资料</strong><p>试试更短的关键词、切换全部等级，或清除筛选条件。</p></div>
 <div class="pager"><button type="button" id="previous-page">上一页</button><span id="page-info" aria-live="polite"></span><button type="button" id="next-page">下一页</button></div>'''
     if sidebar:
         listing = '<div class="knowledge-layout">' + sidebar + '<div class="knowledge-content">' + listing + '</div></div>'
@@ -179,7 +192,7 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
 <header id="report-top" class="site-header"><div class="header-inner"><a class="brand" href="index.html">群资料库<small>返回资料总览 ↗</small></a>{_nav(filename)}{THEME_TOGGLE_HTML}</div></header>
 <div class="shell"><div class="page-heading"><div class="heading-title"><h1>{title}</h1><span class="page-total">{count} 项资料</span></div><p class="page-intro">{descriptions[filename]}</p>{queues}</div>
 <section class="toolbar" aria-label="查找资料"><div class="search-row"><label class="search-label"><span>搜索</span><input id="search" type="search" placeholder="输入关键词查找本页资料" aria-label="搜索本页内容" autocomplete="off"></label><button type="button" id="clear-filters" class="clear-button">清除筛选</button></div>
-<div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div></section>
+<div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div>{'<p id="reading-grade-note" class="filter-note">正在优先展示 A、B 档资料；查看资源、问题线索或一般讨论，请切换“全部等级”。队列数字包含所有等级。</p>' if filename == 'knowledge.html' else ''}</section>
 {listing}{background_reference}
 <footer><a class="back-top" href="#report-top">回到顶部 ↑</a>本地整理报告 · 群友说法与已验证反馈会分别标注；来源编号用于回查原消息。</footer></div>
 <script id="knowledge-script">{SCRIPT}</script>{THEME_TOGGLE_JS}{defer}</body></html>'''
@@ -206,13 +219,35 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
     profiles = profiles or {}
     manual_archives = manual_archives or {}
 
+    source_cache = {}
+
+    def grade_records(row):
+        from .knowledge_store import read_records
+        if not isinstance(row.get('quality'), dict):
+            return []
+        scope = str(row.get('scope') or '')
+        ids = _ids(row)
+        quality = row.get('quality') if isinstance(row.get('quality'), dict) else {}
+        quote = quality.get('result_quote') if isinstance(quality.get('result_quote'), dict) else {}
+        quote_id = quote.get('message_id')
+        requested = ([quote_id] if type(quote_id) is int and quote_id in ids else []) + ids
+        records = []
+        for mid in dict.fromkeys(requested):
+            key = (scope, mid)
+            if key not in source_cache:
+                source_cache[key] = read_records(data_dir / 'bot.db', scope, after_id=mid - 1, before_id=mid, limit=1)
+            records.extend(source_cache[key])
+            if row.get('value') != 'high' and records:
+                break
+        return records
+
     def life(row, record_type):
         scope = str(row.get('scope') or '')
         record_id = row.get('id') if record_type == 'topic' else row.get('key')
         return lifecycle_for(row, profile=profiles.get(scope),
                              manual=manual_archives.get((scope, record_type, record_id)), now=now)
 
-    knowledge_cards, case_subjects, used_tags = [], [], set()
+    knowledge_cards, case_subjects, case_grades, used_tags = [], [], [], set()
 
     def usage_attributes(entries):
         tags = list(dict.fromkeys(entry['tag'] for entry in entries))
@@ -237,12 +272,15 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         name = names[0] if names else UNASSIGNED
         case_subjects.append(names)
         usages = usage_for(item, subject_catalog)
+        grade = grade_for(item_row, grade_records(item_row))
+        case_grades.append(grade['id'])
         knowledge_cards.append(
-            f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(item.get("title"))}</h2><p class="card-status">{CATEGORIES[category]} · {"精选" if val == "high" else "待确认"} · {state}</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
+            f'<article data-reading-grade="{grade["id"]}" {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(item.get("scope"))}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(item.get("title"))}</h2><p class="card-status">' + _grade_badge(grade) + f' {CATEGORIES[category]} · {state}</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
             + (_unassigned_note([item]) if names == [UNASSIGNED] else '')
             + _excerpt(item.get('body', item.get('summary')))
             + '<details class="card-details"><summary>查看完整内容与依据</summary>'
+            + _grade_reason(grade)
             + f'<p class="meta">{_safe(item.get("scope"))} · {_safe(item.get("created_at"))} · {_safe(item.get("topic"))} · {_safe(item.get("kind"))} · {msgrefs}</p>'
             + f'<p class="meta">情形：{_safe("、".join(TOPICS.get(t,t) for t in topic_ids))}</p>'
             + f'<pre>{_safe(item.get("body", item.get("summary")))}</pre>{_details({**item, "lifecycle": lifecycle})}{evidence(item.get("scope"), ids)}'
@@ -298,12 +336,15 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                             + evidence(thread['scope'], event['evidence_ids'])
                             + _feedback_controls(by_key.get(event['item_key'], {})) + '</section>')
         progress_label = _status(thread['status'], category)
-        labels = list(dict.fromkeys([CATEGORIES[category], '精选' if val == 'high' else '待确认', state_label, progress_label]))
-        knowledge_cards.append(f'<article {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
-            f'<h2>{_safe(thread["title"])}</h2><p class="card-status">{" · ".join(labels)} · 话题记录 {len(events)} 次</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
+        labels = list(dict.fromkeys([CATEGORIES[category], state_label, progress_label]))
+        grade = thread_grade([{**event, 'scope': thread['scope']} for event in events], by_key, grade_records)
+        case_grades.append(grade['id'])
+        knowledge_cards.append(f'<article data-reading-grade="{grade["id"]}" {usage_attributes(usages)} data-subject="{subject_id(name)}" data-subjects="{",".join(subject_id(n) for n in names)}" data-subject-name="{_safe(" / ".join(names))}" data-group="{_safe(thread["scope"])}" data-value="{val}" data-category="{category}" data-lane="{lifecycle["lane"]}" data-topics="{_safe(",".join(topic_ids))}">'
+            f'<h2>{_safe(thread["title"])}</h2><p class="card-status">' + _grade_badge(grade) + f' {" · ".join(labels)} · 话题记录 {len(events)} 次</p><div class="card-tags">' + _entity_markup(entities) + usage_markup(usages, show_evidence=False) + tag_markup + '</div>'
             + (_unassigned_note(events) if names == [UNASSIGNED] else '')
             + _excerpt(thread.get('known') or (events[-1].get('summary') if events else ''))
             + '<details class="card-details"><summary>查看内容、进展与来源</summary><p class="meta">情形：' + _safe('、'.join(TOPICS.get(t,t) for t in topic_ids)) + '</p>'
+            + _grade_reason(grade)
             + '<details><summary>查看整理内容与缺少信息</summary>'
             + _details({'known': thread.get('known'), 'missing': thread.get('missing'), 'source_time': thread.get('source_time'),
                         'resource': thread.get('resource'), 'quality': latest.get('quality'),
@@ -312,7 +353,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
             + tag_evidence + usage_markup(usages, show_badges=False) + '</details></article>')
     knowledge_filters = '<label>处理队列 <select id="lane"><option value="knowledge">知识</option><option value="followup">待跟进</option><option value="archive">归档</option><option value="">全部</option></select></label>'
     grouped_cases, subject_counts = {}, {}
-    for names, card in zip(case_subjects, knowledge_cards):
+    for names, card, _ in sorted(zip(case_subjects, knowledge_cards, case_grades), key=lambda entry: GRADE_ORDER[entry[2]]):
         grouped_cases.setdefault(names[0], []).append(card)
         for name in names:
             subject_counts[name] = subject_counts.get(name, 0) + 1
@@ -324,9 +365,10 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         f'<option value="{_safe(key)}">{_safe(label)}</option>' for key, label in TOPICS.items()) + '</select></label>'
     knowledge_filters += '<label>用途标签 <select id="usage-tag"><option value="">全部用途</option>' + ''.join(
         f'<option value="{key}">{USAGE_TAGS[key]}</option>' for key in USAGE_TAGS if key in used_tags) + '</select></label>'
+    knowledge_filters += '<label>阅读等级 <select id="reading-grade"><option value="recommended" selected>优先阅读（A、B）</option><option value="">全部等级</option>' + ''.join(
+        f'<option value="{key}">{key.upper() + " · " if key != "unrated" else ""}{label}</option>' for key, label in GRADES.items()) + '</select></label>'
     knowledge_filters += '<details class="more-filters"><summary>更多筛选</summary><div><label>资料类型 <select id="category"><option value="">全部类型</option>' + ''.join(
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
-    knowledge_filters += '<label>价值 <select id="value"><option value="">全部知识</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select></label>'
     knowledge_filters += '</div></details>'
     knowledge_html = _frame("knowledge.html", "群知识", knowledge_cards, groups, knowledge_filters,
                             subject_groups, subject_index, background=background)
