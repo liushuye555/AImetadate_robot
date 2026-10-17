@@ -30,7 +30,7 @@ function filterRows(resetPage=true){
   if(matchedOtherFilters){otherCount++;subs.forEach(sub=>subjectCounts.set(sub,(subjectCounts.get(sub)||0)+1));}
   card.hidden=!(matchedOtherFilters&&(!selectedSubject||subs.includes(selectedSubject)));if(!card.hidden){count++;matched.push(card);}
  });
- let selectedName='';document.querySelectorAll('[data-subject-target]').forEach(button=>{if(button.dataset.subjectTarget===undefined)return;const id=button.dataset.subjectTarget||'',n=id?(subjectCounts.get(id)||0):otherCount,label=button.querySelector?.('[data-subject-count]');if(label)label.textContent=n;button.setAttribute?.('aria-current',String(id===selectedSubject));button.setAttribute?.('aria-pressed',String(id===selectedSubject));if(id===selectedSubject)selectedName=button.dataset.subjectName||'';});
+ let selectedName='';document.querySelectorAll('[data-subject-target]').forEach(button=>{if(button.dataset.subjectTarget===undefined)return;const id=button.dataset.subjectTarget||'',n=id?(subjectCounts.get(id)||0):otherCount,label=button.querySelector?.('[data-subject-count]');button.dataset.matchCount=String(n);if(label)label.textContent=n;button.setAttribute?.('aria-current',String(id===selectedSubject));button.setAttribute?.('aria-pressed',String(id===selectedSubject));if(id===selectedSubject)selectedName=button.dataset.subjectName||'';});
  const selectedLabel=document.getElementById('selected-subject');if(selectedLabel)selectedLabel.textContent=selectedName||'全部主题';
  document.getElementById('filter-empty').hidden=count>0;
  const shown=document.getElementById('shown-count');if(shown)shown.textContent=count;
@@ -38,10 +38,12 @@ function filterRows(resetPage=true){
  if(pager){const pages=Math.max(1,Math.ceil(count/pageSize));currentPage=Math.min(Math.max(1,currentPage),pages);matched.forEach((card,i)=>card.hidden=i<(currentPage-1)*pageSize||i>=currentPage*pageSize);pager.textContent=count?`${currentPage} / ${pages} 页`:'0 / 0 页';const prev=document.getElementById('previous-page'),next=document.getElementById('next-page');if(prev)prev.disabled=currentPage<=1;if(next)next.disabled=currentPage>=pages;}
  document.querySelectorAll('.subject-section').forEach(section=>{if(section.dataset?.subjectGroup===undefined)return;const cards=section.querySelectorAll?.('article')||[];let visible=0;cards.forEach(card=>{if(!card.hidden)visible++;});section.hidden=visible===0;const badge=section.querySelector?.('[data-subject-visible-count]');if(badge)badge.textContent=`${visible} 条`;const related=section.querySelector?.('[data-related-context]');if(related){related.hidden=!selectedSubject||section.dataset.subjectGroup===selectedSubject;related.textContent=selectedName?`与${selectedName}相关`:'';}});
  document.querySelectorAll('[data-lane-target]').forEach(button=>{if(button.dataset.laneTarget===undefined)return;button.setAttribute?.('aria-pressed',String(button.dataset.laneTarget===lane));});
+ filterSubjects();
 }
 function filterSubjects(){
  const q=(document.getElementById('subject-search')?.value||'').trim().toLocaleLowerCase();let found=0;
- document.querySelectorAll('[data-subject-target]').forEach(button=>{if(button.dataset.subjectTarget===undefined)return;const all=!button.dataset.subjectTarget;button.hidden=!all&&!(button.dataset.subjectName||'').toLocaleLowerCase().includes(q);if(!all&&!button.hidden)found++;});
+ const selected=subject?.value||'';
+ document.querySelectorAll('[data-subject-target]').forEach(button=>{if(button.dataset.subjectTarget===undefined)return;const id=button.dataset.subjectTarget||'',all=!id,empty=button.dataset.matchCount==='0'&&id!==selected;button.hidden=!all&&(empty||!(button.dataset.subjectName||'').toLocaleLowerCase().includes(q));if(!all&&!button.hidden)found++;});
  const empty=document.getElementById('subject-search-empty');if(empty)empty.hidden=!q||found>0;
 }
 document.getElementById('subject-search')?.addEventListener('input',filterSubjects);
