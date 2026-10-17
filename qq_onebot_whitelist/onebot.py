@@ -662,6 +662,20 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
 async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
     if _is_self_message(event):
         return False
+    if event.get('post_type') == 'notice' and event.get('notice_type') == 'group_upload':
+        gid = str(event.get('group_id') or '')
+        if gid.isdigit() and gid not in config.blocked_groups:
+            from .resources import extract_file_segments
+            for source in extract_file_segments(event):
+                if not source.get('file_id'):
+                    continue
+                upload = {**event, 'post_type': 'message', 'message_type': 'group',
+                          'message_id': f"file-upload:{source['file_id']}",
+                          'message': [{'type': 'file', 'data': {
+                              'file_id': source['file_id'], 'name': source['file_name'],
+                              'size': source.get('file_size'), 'busid': source.get('busid')}}]}
+                record_event(store, upload, config)
+        return False
     if event.get('post_type') == 'notice' and event.get('notice_type') == 'group_recall':
         # 撤回审计：只记事件不回滚已采集内容。notice 事件没有 message_type 字段，
         # is_blocked_event 判不了屏蔽群，这里直接对 group_id 判。
@@ -700,6 +714,10 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
         return False
     echo_text = echo_reply_text(event, config)
     if echo_text is not None:
+        from .resources import extract_file_segments
+        if extract_file_segments(event):
+            # A repeated caption must not bypass attachment capture.
+            record_event(store, event, config)
         await send_reply(ws, event, echo_text)
         return True
     record_event(store, event, config)
@@ -843,6 +861,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         backup_task = asyncio.create_task(background_backup_loop(config, config_path))
         from .knowledge import knowledge_loop
         knowledge_task = asyncio.create_task(knowledge_loop(config_path))
+        from .knowledge_capture import capture_loop
+        capture_task = asyncio.create_task(capture_loop(config_path))
         try:
             async with websockets.connect(config.onebot_ws_url) as ws:
                 login_info = await probe_login_info(config)
@@ -878,10 +898,10 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             # NapCat 未登录/未就绪时连接会被拒，重试等待而不是直接退出
             print(f'OneBot connect failed: {type(exc).__name__}: {exc}')
         finally:
-            for task in (sync_task, image_task, backup_task, knowledge_task):
+            for task in (sync_task, image_task, backup_task, knowledge_task, capture_task):
                 task.cancel()
             await asyncio.gather(
-                *(t for t in (sync_task, image_task, backup_task, knowledge_task) if not t.done()),
+                *(t for t in (sync_task, image_task, backup_task, knowledge_task, capture_task) if not t.done()),
                 return_exceptions=True,
             )
             try:

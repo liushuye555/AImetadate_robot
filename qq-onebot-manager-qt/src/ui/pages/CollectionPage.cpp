@@ -667,8 +667,14 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     const QJsonObject defaultFiles = m_knowledgeDefaults.value("files").toObject();
     auto *filesMode = new QComboBox(content);
     filesMode->setObjectName("knowledgeFilesMode");
-    filesMode->addItems({"high_value", "review", "index_only"});
-    filesMode->setCurrentText(files.value("mode").toString(defaultFiles.value("mode").toString("high_value")));
+    filesMode->addItem(QStringLiteral("AI 筛选保存（只自动保存 AI 选中的附件）"), "high_value");
+    filesMode->addItem(QStringLiteral("全部先保存（先本地保存，再由 AI 整理）"), "save_all");
+    filesMode->addItem(QStringLiteral("候选审阅（人工确认后保存）"), "review");
+    filesMode->addItem(QStringLiteral("仅索引（只记录文件信息）"), "index_only");
+    QString defaultFilesMode = defaultFiles.value("mode").toString("high_value");
+    if (defaultFilesMode == "save_all") defaultFilesMode = "high_value";
+    filesMode->setCurrentIndex(filesMode->findData(files.value("mode").toString(defaultFilesMode)));
+    if (filesMode->currentIndex() < 0) filesMode->setCurrentIndex(filesMode->findData("high_value"));
     form->addRow(QStringLiteral("文件模式"), filesMode);
     auto *maxFile = new QSpinBox(content);
     maxFile->setObjectName("knowledgeMaxFileMb");
@@ -794,7 +800,7 @@ void CollectionPage::openKnowledgeDialog(const QString &scope) {
     newSummary.insert("weekly", weekly->isChecked());
     group.insert("summary", newSummary);
     QJsonObject newFiles = group.value("files").toObject();
-    newFiles.insert("mode", filesMode->currentText());
+    newFiles.insert("mode", filesMode->currentData().toString());
     newFiles.insert("max_file_mb", maxFile->value());
     newFiles.insert("budget_gb", budget->value());
     newFiles.insert("preview_enabled", preview->isChecked());

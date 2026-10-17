@@ -342,6 +342,17 @@ class KnowledgeDB:
             conn.execute('INSERT INTO cursors VALUES (?,?,?,?) ON CONFLICT(scope,kind) DO UPDATE SET last_id=max(last_id,excluded.last_id),updated_at=excluded.updated_at',
                          (scope, kind, last_id, datetime.now(LOCAL_TZ).isoformat()))
 
+    def queue_asset(self, source: dict) -> bool:
+        """Persist capture intent without overwriting saved files or retaining signed URLs."""
+        compact = {k: source.get(k) for k in ('scope', 'file_id', 'message_id', 'file_name', 'file_size', 'busid')}
+        with self.conn() as conn:
+            inserted = conn.execute(
+                "INSERT OR IGNORE INTO assets (scope,file_id,message_id,name,status,source_json,last_attempt_at) "
+                "VALUES (?,?,?,?,'pending',?,?)",
+                (source['scope'], source['file_id'], source['message_id'], source['file_name'],
+                 json.dumps(compact), datetime.now(LOCAL_TZ).isoformat()))
+            return inserted.rowcount == 1
+
     def asset(self, source: dict, result: dict):
         with self.conn() as conn:
             compact = {k: source.get(k) for k in ('scope','file_id','message_id','file_name','file_size','busid')}

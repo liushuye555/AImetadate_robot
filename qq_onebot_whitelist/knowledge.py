@@ -288,7 +288,7 @@ def file_limits(settings: dict) -> tuple[int,int]:
         allowed=settings.get('allowed_extensions')
         if allowed is not None and (not isinstance(allowed,list) or not all(isinstance(v,str) and v.startswith('.') for v in allowed)):
             raise ValueError
-        if settings.get('mode','high_value') not in ('high_value','review','index_only'):
+        if settings.get('mode','high_value') not in ('high_value','review','index_only','save_all'):
             raise ValueError
         return int(max_mb*1024**2),int(quota_gb*1024**3)
     except (ValueError,TypeError,OverflowError) as exc:
@@ -695,12 +695,22 @@ def analyze(config_path: Path | str, scope: str, *, feature: str = 'summary', ki
         raise RuntimeError(f'群知识分析失败（{detail}），进度未推进。') from None
 
 
-def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict], result: dict, *, manual: bool = False):
+def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict], result: dict, *, manual: bool = False,
+                          capture: bool = False):
     from .file_sync import fetch_download_url_once
     from .knowledge_files import archive_file
     scope = records[0]['scope']
     def enabled():
-        return profile_for(load_config(config_path), scope).allows('files')
+        current = load_config(config_path)
+        profile = profile_for(current, scope)
+        if not profile.allows('files'):
+            return False
+        if capture:
+            from .collection import is_collection_paused
+            return ((profile.settings.get('files') or {}).get('mode') == 'save_all'
+                    and current.collection_groups.get(scope, {}).get('files', True)
+                    and not is_collection_paused())
+        return True
     config = load_config(config_path)
     profile = profile_for(config, scope)
     settings = profile.settings.get('files') or {}
@@ -715,7 +725,10 @@ def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict
         for source in record['files']:
             if source.get('file_id') not in selected or not enabled() or db.asset_saved(scope, source['file_id']):
                 continue
-            if mode != 'high_value' and not manual:
+            if mode == 'save_all' and not manual and not capture:
+                db.queue_asset(source)
+                continue
+            if mode != 'high_value' and not manual and not (capture and mode == 'save_all'):
                 db.asset(source, {'status': 'review'})
                 continue
             allowed = settings.get('allowed_extensions')
@@ -734,6 +747,10 @@ def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict
             db.asset(source, {'status': 'pending'})
             saved = archive_file(source, root, max_bytes=max_bytes, budget_bytes=quota,
                                  enabled=enabled, fetch_url=fetch_url)
+            if capture and (saved.get('status') == 'disabled' or saved.get('error') == 'ArchiveBusy'):
+                # A paused switch or another local writer must not strand a
+                # durable arrival outside the automatic worker's retry queue.
+                saved = {'status': 'pending'}
             db.asset(source, saved)
 
 
@@ -813,7 +830,7 @@ def history(config_path: Path | str, scope: str, start: str, end: str, *, max_ba
         return {'status': 'disabled', 'message': '请主动开启该群历史分析及需要的分析功能。'}
     bounds = date_bounds(start, end)
     db = KnowledgeDB(config.data_dir / 'knowledge.db')
-    if p.allows('files'):
+    if p.allows('files') and (p.settings.get('files') or {}).get('mode') != 'save_all':
         retry_files(config_path, scope, manual=False)
     cursor_kind = 'history:' + sha256(json.dumps([start,end,VERSION,p.settings.get('analysis_revision',1),
                   p.settings.get('topics'),p.settings.get('match_mode'),p.settings.get('description'),
@@ -875,7 +892,7 @@ def with_context(db_path: Path, scope: str, after: int, records: list[dict]) -> 
 def _tick_group(config_path, config, p, *, request=None, model=None) -> list[dict]:
     results = []
     db = KnowledgeDB(config.data_dir / 'knowledge.db')
-    if p.allows('files'):
+    if p.allows('files') and (p.settings.get('files') or {}).get('mode') != 'save_all':
         retry_files(config_path, p.scope, manual=False)
     summary = p.settings.get('summary') or {}
     now = datetime.now(LOCAL_TZ)
@@ -890,7 +907,8 @@ def _tick_group(config_path, config, p, *, request=None, model=None) -> list[dic
         if summary.get('weekly') is True and now.weekday() == 6:
             results.append(summarize_range(config_path, p.scope, (now.date() - timedelta(days=6)).isoformat(),
                                            now.date().isoformat(), request=request, model=model))
-    feature = next((f for f in ('extraction', 'glossary', 'files') if p.allows(f)), None)
+    feature = next((f for f in ('extraction', 'glossary', 'files') if p.allows(f)
+                    and (f != 'files' or (p.settings.get('files') or {}).get('mode') != 'save_all')), None)
     if not feature:
         return results
     after, updated = db.cursor(p.scope, 'live')

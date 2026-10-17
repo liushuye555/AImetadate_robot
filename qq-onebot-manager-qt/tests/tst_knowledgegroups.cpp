@@ -207,7 +207,8 @@ void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {
     const QJsonObject glossary{{"enabled", true}, {"infer_context", true}, {"unknown", "keep"}};
     const QJsonObject defaults{{"extraction", QJsonObject{{"enabled", true}, {"track_topics", true}}},
                                {"glossary", QJsonObject{{"enabled", true}, {"infer_context", true}}}};
-    const QJsonObject original{{"extraction", extraction}, {"glossary", glossary}};
+    const QJsonObject original{{"extraction", extraction}, {"glossary", glossary},
+        {"files", QJsonObject{{"enabled", true}, {"mode", "save_all"}}}};
     page.setConfig(QJsonObject{{"knowledge", QJsonObject{{"defaults", defaults},
         {"groups", QJsonObject{{"group:123", original}}}}}});
     selectGroup(page, "group:123");
@@ -223,6 +224,10 @@ void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {
         QVERIFY(inferContext);
         QVERIFY(trackTopics->isChecked());
         QVERIFY(inferContext->isChecked());
+        auto *filesMode = dialog->findChild<QComboBox *>("knowledgeFilesMode");
+        QVERIFY(filesMode);
+        QCOMPARE(filesMode->currentData().toString(), QStringLiteral("save_all"));
+        filesMode->setCurrentIndex(filesMode->findData("high_value"));
         trackTopics->setChecked(false);
         inferContext->setChecked(false);
         dialog->findChild<QDialogButtonBox *>("knowledgeDialogButtons")->button(QDialogButtonBox::Ok)->click();
@@ -233,6 +238,7 @@ void TestKnowledgeGroups::knowledgeOptInsRoundTrip() {
     QCOMPARE(saved.value("glossary").toObject().value("infer_context"), QJsonValue(false));
     QCOMPARE(saved.value("extraction").toObject().value("unknown").toString(), QStringLiteral("keep"));
     QCOMPARE(saved.value("glossary").toObject().value("unknown").toString(), QStringLiteral("keep"));
+    QCOMPARE(saved.value("files").toObject().value("mode").toString(), QStringLiteral("high_value"));
 }
 
 void TestKnowledgeGroups::lifecycleRoundTrip() {
@@ -280,7 +286,7 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
     QJsonObject defaults{{"enabled", true}, {"match_mode", "specialist"},
                          {"topics", QJsonArray{"研究"}},
                          {"summary", QJsonObject{{"enabled", true}, {"daily", true}, {"weekly", true}}},
-                         {"files", QJsonObject{{"enabled", true}, {"preview_enabled", true}, {"max_file_mb", 99}}},
+                         {"files", QJsonObject{{"enabled", true}, {"preview_enabled", true}, {"max_file_mb", 99}, {"mode", "save_all"}}},
                          {"models", QJsonObject{{"tiered_enabled", true}, {"review_enabled", true}, {"circuit_enabled", true}}},
                          {"feedback", QJsonObject{{"enabled", true}, {"optimization_enabled", true}}}};
     defaults.insert("extraction", QJsonObject{{"enabled", true}, {"track_topics", true}});
@@ -311,6 +317,7 @@ void TestKnowledgeGroups::defaultsCannotEnableFeatures() {
         QCOMPARE(dialog->findChild<QComboBox *>("knowledgeMatchMode")->currentText(), QStringLiteral("specialist"));
         QCOMPARE(dialog->findChild<QPlainTextEdit *>("knowledgeTopics")->toPlainText(), QStringLiteral("研究"));
         QCOMPARE(dialog->findChild<QSpinBox *>("knowledgeMaxFileMb")->value(), 99);
+        QCOMPARE(dialog->findChild<QComboBox *>("knowledgeFilesMode")->currentData().toString(), QStringLiteral("high_value"));
         QVERIFY(!dialog->findChild<QCheckBox *>("knowledgeFeature_notifications")->isEnabled());
         dialog->reject();
     });

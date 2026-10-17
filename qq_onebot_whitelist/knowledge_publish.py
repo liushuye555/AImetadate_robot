@@ -167,7 +167,7 @@ def publish_history(source_dir: Path, data_dir: Path, scope: str, *, config=None
         profile = profile_for(config, scope)
         if profile.allows('files'):
             file_sources = _selected_file_sources(bundle, target, scope, ids)
-            if (profile.settings.get('files') or {}).get('mode', 'high_value') != 'high_value':
+            if (profile.settings.get('files') or {}).get('mode', 'high_value') not in ('high_value', 'save_all'):
                 file_status = 'review'
     digest = sha256(json.dumps([scope, bundle], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     database_path = target / 'knowledge.db'

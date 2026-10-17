@@ -65,6 +65,11 @@ def profile_for(config, scope: str) -> GroupProfile:
     if not isinstance(defaults, dict) or not isinstance(groups, dict) or not isinstance(explicit, dict):
         raise ValueError('knowledge.defaults/groups 必须是配置对象')
     settings = _merge(defaults, explicit)
+    # Saving every attachment is a group-specific opt-in, never an inherited
+    # preference that silently expands an already enabled files feature.
+    if ((settings.get('files') or {}).get('mode') == 'save_all'
+            and (explicit.get('files') or {}).get('mode') != 'save_all'):
+        settings['files']['mode'] = 'high_value'
     mode = settings.get('match_mode', 'hybrid')
     if mode not in ('specialist', 'generic', 'hybrid'):
         raise ValueError('match_mode 必须为 specialist/generic/hybrid')

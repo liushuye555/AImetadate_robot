@@ -448,6 +448,9 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> boo
                         file_name=file_item['file_name'],
                         file_size=file_item.get('file_size'),
                     )
+    if message_db_id is not None and collection_allows(scope, 'files', config):
+        from .knowledge_capture import enqueue_event_files
+        enqueue_event_files(config, scope, event, message_db_id)
     nearby_text = '\n'.join(x for x in [store.recent_text_context(scope, limit=8), text] if x)
     try:
         _promote_recent_candidate_if_needed(store, scope, text, config, user_id=user_id)

@@ -156,6 +156,8 @@ knowledge:
       preview_enabled: false
       max_file_mb: 512
       budget_gb: 20
+      # 默认使用 AI 筛选保存；save_all 需在具体群主动设置，附件先保存到本地再交由 AI 整理。
+      # 可选：high_value（AI筛选保存）| save_all（全部先保存）| review（候选审阅）| index_only（仅索引）
       mode: high_value
     models:
       circuit_enabled: false
