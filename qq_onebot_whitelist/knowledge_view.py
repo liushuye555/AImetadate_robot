@@ -128,9 +128,10 @@ def _content_tag_markup(row):
     return '<div class="content-tags" aria-label="资料主题"><span class="tag-label">AI归类</span>' + chips + '</div>', evidence, names
 
 
-def _frame(filename: str, title: str, cards: list[str], groups: set[str], filters: str, subject_groups=None, subject_index=None) -> str:
+def _frame(filename: str, title: str, cards: list[str], groups: set[str], filters: str,
+           subject_groups=None, subject_index=None, background: str = '') -> str:
     from .knowledge_presentation import STYLE, SCRIPT
-    from .view_theme import THEME_INIT_JS, THEME_TOGGLE_HTML, THEME_TOGGLE_JS
+    from .view_theme import THEME_INIT_JS, THEME_TOGGLE_HTML, THEME_TOGGLE_JS, WALLPAPER_DEFER_JS
     opts = ''.join(f'<option value="{_safe(group)}">{_safe(group.removeprefix("group:"))}</option>' for group in sorted(groups))
     count = len(cards)
     descriptions = {
@@ -172,15 +173,16 @@ def _frame(filename: str, title: str, cards: list[str], groups: set[str], filter
 <div class="pager"><button type="button" id="previous-page">上一页</button><span id="page-info" aria-live="polite"></span><button type="button" id="next-page">下一页</button></div>'''
     if sidebar:
         listing = '<div class="knowledge-layout">' + sidebar + '<div class="knowledge-content">' + listing + '</div></div>'
+    defer = WALLPAPER_DEFER_JS if background else ''
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · 群资料库</title>
-<script>{THEME_INIT_JS}</script><style>{STYLE}</style></head><body class="{'knowledge-page' if filename == 'knowledge.html' else 'report-page'}"><a class="skip-link" href="#results">跳到资料列表</a>
+<script>{THEME_INIT_JS}</script><style>{STYLE}{background}</style></head><body class="{'knowledge-page' if filename == 'knowledge.html' else 'report-page'}"><a class="skip-link" href="#results">跳到资料列表</a>
 <header id="report-top" class="site-header"><div class="header-inner"><a class="brand" href="index.html">群资料库<small>返回资料总览 ↗</small></a>{_nav(filename)}{THEME_TOGGLE_HTML}</div></header>
 <div class="shell"><div class="page-heading"><div class="heading-title"><h1>{title}</h1><span class="page-total">{count} 项资料</span></div><p class="page-intro">{descriptions[filename]}</p>{queues}</div>
 <section class="toolbar" aria-label="查找资料"><div class="search-row"><label class="search-label"><span>搜索</span><input id="search" type="search" placeholder="输入关键词查找本页资料" aria-label="搜索本页内容" autocomplete="off"></label><button type="button" id="clear-filters" class="clear-button">清除筛选</button></div>
 <div class="filters"><label>群组 <select id="group"><option value="">全部群</option>{opts}</select></label>{filters}</div></section>
 {listing}{background_reference}
 <footer><a class="back-top" href="#report-top">回到顶部 ↑</a>本地整理报告 · 群友说法与已验证反馈会分别标注；来源编号用于回查原消息。</footer></div>
-<script id="knowledge-script">{SCRIPT}</script>{THEME_TOGGLE_JS}</body></html>'''
+<script id="knowledge-script">{SCRIPT}</script>{THEME_TOGGLE_JS}{defer}</body></html>'''
 
 
 
@@ -190,6 +192,9 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                  now=None, subject_catalog=()) -> dict[str, str]:
     """Return four independent static pages for knowledge, terms, summaries, and files."""
     data_dir = Path(data_dir)
+    from .view_theme import background_css, find_wallpaper
+    wallpaper = find_wallpaper(data_dir / 'view')
+    background = background_css(wallpaper)
     groups = {str(row.get("scope") or "") for rows in (items, runs, assets, glossary)
               for row in rows if row.get("scope")}
 
@@ -323,7 +328,8 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         f'<option value="{key}">{label}</option>' for key, label in CATEGORIES.items()) + '</select></label>'
     knowledge_filters += '<label>价值 <select id="value"><option value="">全部知识</option><option value="high">精选讨论</option><option value="candidate">待确认讨论</option></select></label>'
     knowledge_filters += '</div></details>'
-    knowledge_html = _frame("knowledge.html", "群知识", knowledge_cards, groups, knowledge_filters, subject_groups, subject_index)
+    knowledge_html = _frame("knowledge.html", "群知识", knowledge_cards, groups, knowledge_filters,
+                            subject_groups, subject_index, background=background)
     from .knowledge_feedback import feedback_script, feedback_token
     knowledge_html = knowledge_html.replace("</body>", feedback_script(feedback_token(data_dir)) + "</body>")
 
@@ -363,7 +369,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                           + ''.join(variant_cards) + '</article>')
     term_filters = '<label>解释状态 <select id="term-status"><option value="">全部</option><option value="candidate">候选</option><option value="active">已用于本群分析</option><option value="user">人工解释</option></select></label>'
     term_filters += '<label>解释依据 <select id="term-kind"><option value="">全部依据</option><option value="explicit">明确解释</option><option value="inferred">上下文推断</option><option value="ambiguous">含义有分歧</option><option value="unconfirmed">待确认</option></select></label>'
-    glossary_html = _frame("glossary.html", "群内术语", term_cards, groups, term_filters)
+    glossary_html = _frame("glossary.html", "群内术语", term_cards, groups, term_filters, background=background)
 
     summary_cards = []
     for run in runs:
@@ -392,7 +398,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
         summary_cards.append(f'<article data-group="{_safe(run.get("scope"))}"><h2>群总结 · {_safe(run.get("scope"))}</h2>'
                              f'<p class="meta">{_safe(run.get("created_at"))} · {_safe(run.get("kind"))} · 覆盖 {_safe(coverage)} 条消息</p>'
                              f'<pre>{summary_text}</pre>{evidence(run.get("scope"), sorted(set(ids)))}</article>')
-    summary_html = _frame("knowledge-summary.html", "群聊总结", summary_cards, groups, "")
+    summary_html = _frame("knowledge-summary.html", "群聊总结", summary_cards, groups, "", background=background)
 
     file_cards = []
     for asset in assets:
@@ -401,7 +407,7 @@ def render_views(data_dir: Path, *, items: list[dict], runs: list[dict], assets:
                           f'<p class="meta">{_safe(asset.get("scope"))} · {_safe(asset.get("status"))} · 原消息 '
                           f'{("#" + str(ids[0])) if ids else "编号不可用"}</p><pre>{_safe(asset.get("path") or asset.get("error") or "未保存本体")}</pre>'
                           f'{evidence(asset.get("scope"), ids)}</article>')
-    files_html = _frame("knowledge-files.html", "群文件", file_cards, groups, "")
+    files_html = _frame("knowledge-files.html", "群文件", file_cards, groups, "", background=background)
     return {"knowledge.html": knowledge_html, "glossary.html": glossary_html,
             "knowledge-summary.html": summary_html, "knowledge-files.html": files_html}
 

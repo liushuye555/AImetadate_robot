@@ -11,16 +11,22 @@ from qq_onebot_whitelist.view_theme import (
     THEME_INIT_JS,
     THEME_TOGGLE_HTML,
     THEME_TOGGLE_JS,
+    WALLPAPER_DEFER_JS,
+    background_css,
 )
 
 
-def _page(tmp_path, monkeypatch, *, item=None):
+def _views(tmp_path, monkeypatch, *, item=None):
     monkeypatch.setattr(knowledge_view, "render_evidence", lambda *_: "")
     monkeypatch.setattr("qq_onebot_whitelist.knowledge_feedback.feedback_token", lambda *_: "test-token")
     monkeypatch.setattr("qq_onebot_whitelist.knowledge_feedback.feedback_script", lambda _: "")
     return knowledge_view.render_views(
         tmp_path, items=[item] if item else [], runs=[], assets=[], glossary=[]
-    )["knowledge.html"]
+    )
+
+
+def _page(tmp_path, monkeypatch, *, item=None):
+    return _views(tmp_path, monkeypatch, item=item)["knowledge.html"]
 
 
 def test_knowledge_page_reuses_shared_theme_and_returns_to_library_index(tmp_path, monkeypatch):
@@ -43,6 +49,33 @@ def test_subject_directory_is_collapsible_and_has_its_own_search(tmp_path, monke
 
     assert re.search(r'<details\b[^>]*id="subject-directory"', page)
     assert re.search(r'<input\b[^>]*id="subject-search"', page)
+
+
+def test_existing_view_wallpaper_is_shared_by_all_report_pages(tmp_path, monkeypatch):
+    view_dir = tmp_path / "view"
+    view_dir.mkdir()
+    (view_dir / "wallpaper.jpg").write_bytes(b"fixture")
+
+    pages = _views(tmp_path, monkeypatch)
+    css = background_css("wallpaper.jpg")
+
+    assert set(pages) == {"knowledge.html", "glossary.html", "knowledge-summary.html", "knowledge-files.html"}
+    for page in pages.values():
+        assert css in page
+        assert WALLPAPER_DEFER_JS in page
+        assert 'url("wallpaper.jpg")' in page
+        assert 'id="knowledge-script"' in page
+
+
+def test_report_without_wallpaper_uses_fallback_and_has_no_defer_script(tmp_path, monkeypatch):
+    pages = _views(tmp_path, monkeypatch)
+
+    assert background_css(None) == ""
+    for page in pages.values():
+        assert WALLPAPER_DEFER_JS not in page
+        assert "wallpaper-ready" not in page
+        assert "wallpaper.jpg" not in page
+        assert 'id="knowledge-script"' in page
 
 
 def test_category_and_usage_evidence_stay_in_card_details_without_repeated_meta(tmp_path, monkeypatch):
