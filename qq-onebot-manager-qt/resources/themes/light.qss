@@ -47,7 +47,7 @@ QLabel#cardTitle { font-size: 12.5px; font-weight: 600; color: #a09aaa; }
 QLabel#cardValue { font-size: 16px; font-weight: 650; color: #23222a; }
 QLabel#cardValue[state="ok"] { color: #1f9e63; }
 QLabel#cardValue[state="bad"] { color: #e0506a; }
-QLabel#cardIcon { background: rgba(235,47,150,0.08); border-radius: 9px; }
+QLabel#cardIcon { background: #edf0fa; border: 1px solid #dce3f1; border-radius: 11px; }
 QLabel#statusDot { background: #d9d3de; border-radius: 4px; }
 QLabel#statusDot[state="ok"] { background: #2fbf77; }
 QLabel#statusDot[state="bad"] { background: #e85a74; }
@@ -121,9 +121,17 @@ QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 
 /* 概览统计卡与提示条 */
-QLabel#statValue { font-size: 24px; font-weight: 700; color: #23222a; }
-QLabel#statCaption { font-size: 12px; color: #a09aaa; }
-QLabel#infoLine { color: #8d8798; font-size: 12px; }
+QLabel#statValue { font-size: 28px; font-weight: 700; color: #4c3a68; }
+QLabel#statDetail { font-size: 16px; font-weight: 600; color: #574663; }
+QLabel#statDetail[state="bad"] { color: #c13a45; }
+QLabel#statCaption { font-size: 12px; font-weight: 500; color: #776c85; }
+QLabel#cardDetail { font-size: 11px; color: #776c85; }
+QLabel#infoLine { color: #776c85; font-size: 12px; }
+OverviewPage QPushButton { padding: 8px 12px; min-height: 18px; }
+OverviewPage QPushButton[class="primary"] { background: #e7f5ec; border-color: #b9dbc8; color: #247548; }
+OverviewPage QPushButton[class="primary"]:hover { background: #d9f0e3; }
+OverviewPage QPushButton[class="danger"] { background: #fff0f2; border-color: #edc3ca; color: #b9475b; }
+OverviewPage QPushButton[class="danger"]:hover { background: #ffe4e9; }
 QLabel#hintBar { background: rgba(229,72,77,0.10); border: 1px solid rgba(229,72,77,0.35); border-radius: 10px; padding: 10px 14px; color: #c13a45; }
 
 /* 设置页表单限宽，避免输入框拉满整行 */

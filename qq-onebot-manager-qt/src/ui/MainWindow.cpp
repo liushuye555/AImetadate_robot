@@ -12,20 +12,21 @@
 #include <QMenu>
 #include <QPixmap>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace {
 const char *kNavIconFor(const QString &id) {
-    if (id == "overview") return ":/icons/nav-overview.svg";
-    if (id == "collection") return ":/icons/nav-collection.svg";
-    if (id == "relay") return ":/icons/nav-relay.svg";
-    if (id == "chat") return ":/icons/nav-chat.svg";
-    if (id == "settings") return ":/icons/nav-settings.svg";
-    if (id == "logs") return ":/icons/nav-logs.svg";
-    if (id == "reports") return ":/icons/nav-reports.svg";
-    return ":/icons/app.svg";
+    if (id == "overview") return "nav-overview.png";
+    if (id == "collection") return "nav-collection.png";
+    if (id == "relay") return "nav-relay.png";
+    if (id == "chat") return "nav-chat.png";
+    if (id == "settings") return "nav-settings.png";
+    if (id == "logs") return "nav-logs.png";
+    if (id == "reports") return "nav-reports.png";
+    return "app.png";
 }
 }  // namespace
 
@@ -34,17 +35,18 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     m_nav = new QListWidget(this);
     m_nav->setObjectName("nav");
     m_nav->setFixedWidth(200);
-    m_nav->setIconSize(QSize(20, 20));
+    m_nav->setIconSize(QSize(32, 32));
     m_nav->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);  // 7 个导航项无需滚动
 
-    // 侧边栏品牌区：logo 占位 + 名称（替换 resources/icons/app.svg 即可换标）
+    // 侧边栏品牌区：随主题切换的 Q 版头像 + 名称。
     auto *brand = new QFrame(m_nav);
     brand->setObjectName("brand");
     auto *brandLayout = new QHBoxLayout(brand);
     brandLayout->setContentsMargins(14, 12, 10, 12);
     brandLayout->setSpacing(10);
     auto *logo = new QLabel(brand);
-    logo->setPixmap(QIcon(":/icons/app.svg").pixmap(30, 30));
+    m_logo = logo;
+    logo->setObjectName("brandLogo");
     logo->setFixedSize(30, 30);
     auto *brandText = new QVBoxLayout;
     brandText->setContentsMargins(0, 0, 0, 0);
@@ -80,7 +82,10 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     rightColumn->addWidget(m_stack, 1);
 
     for (const PageDef &page : m_pages) {
-        auto *item = new QListWidgetItem(QIcon(kNavIconFor(page.id)), Strings::zh(page.titleKey));
+        QIcon pageIcon(ThemeManager::assetPath(kNavIconFor(page.id)));
+        // Keep the full-resolution portrait in both modes, including fractional DPI.
+        pageIcon.addPixmap(QPixmap(ThemeManager::assetPath(kNavIconFor(page.id))), QIcon::Selected);
+        auto *item = new QListWidgetItem(pageIcon, Strings::zh(page.titleKey));
         item->setSizeHint(QSize(0, 42));
         m_nav->addItem(item);
         m_stack->addWidget(page.factory(this));
@@ -109,9 +114,13 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     actionsLayout->setSpacing(8);
     m_themeButton = new QPushButton(Strings::zh("toggleTheme"), actions);
     m_themeButton->setObjectName("themeButton");
-    m_themeButton->setIcon(QIcon(":/icons/card-napcat.svg"));
+    m_themeButton->setIcon(QIcon(ThemeManager::assetPath("action-theme.png")));
+    m_themeButton->setIconSize(QSize(28, 28));
     auto *quitButton = new QPushButton(Strings::zh("quitApp"), actions);
+    m_quitButton = quitButton;
     quitButton->setObjectName("quitButton");
+    quitButton->setIcon(QIcon(ThemeManager::assetPath("action-quit.png")));
+    quitButton->setIconSize(QSize(28, 28));
     actionsLayout->addWidget(m_themeButton);
     actionsLayout->addWidget(quitButton);
     connect(m_themeButton, &QPushButton::clicked, this, [this] {
@@ -130,21 +139,21 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
     navColumn->setSpacing(0);
     navColumn->addWidget(brand);
     navColumn->addWidget(m_nav, 1);
-    // 侧栏左下看板娘（替换 resources/icons/mascot.png 即可换立绘；旧占位为 mascot.svg）
-    auto *mascot = new QLabel(this);
-    mascot->setObjectName("mascot");
-    QPixmap mascotPm(":/icons/mascot.png");
-    if (mascotPm.isNull()) mascotPm = QPixmap(":/icons/mascot.svg");
-    mascot->setPixmap(mascotPm.scaledToWidth(140, Qt::SmoothTransformation));
-    mascot->setAlignment(Qt::AlignBottom | Qt::AlignHCenter);
-    mascot->setContentsMargins(0, 0, 0, 4);
-    navColumn->addWidget(mascot);
+    // 透明底 Q 版角色；SVG 在图片不可用时提供同风格后备图。
+    m_mascot = new QLabel(this);
+    m_mascot->setObjectName("mascot");
+    m_mascotSource = QPixmap(ThemeManager::assetPath("mascot.png"));
+    if (m_mascotSource.isNull()) m_mascotSource = QPixmap(":/icons/mascot.svg");
+    m_mascot->setPixmap(m_mascotSource.scaled(140, 176, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_mascot->setAlignment(Qt::AlignBottom | Qt::AlignHCenter);
+    m_mascot->setContentsMargins(0, 0, 0, 4);
+    navColumn->addWidget(m_mascot);
     navColumn->addWidget(actions);
     layout->addLayout(navColumn);
     layout->addLayout(rightColumn, 1);
     setCentralWidget(content);
     setWindowTitle("QQ OneBot 管理器");
-    setWindowIcon(QIcon(":/icons/app.svg"));
+    setWindowIcon(QIcon(ThemeManager::assetPath("app.png")));
 
     const QSettings settings("qq-onebot-manager", "panel");
     const QByteArray geometry = settings.value("window/geometry").toByteArray();
@@ -154,6 +163,26 @@ MainWindow::MainWindow(const QVector<PageDef> &pages, QWidget *parent)
         resize(1060, 700);
     setMinimumSize(900, 600);
     setupTray();
+    connect(ThemeManager::instance(), &ThemeManager::appearanceChanged,
+            this, &MainWindow::refreshThemeAssets);
+    refreshThemeAssets();
+}
+
+void MainWindow::refreshThemeAssets() {
+    const QIcon appIcon(ThemeManager::assetPath("app.png"));
+    setWindowIcon(appIcon);
+    m_logo->setPixmap(appIcon.pixmap(QSize(30, 30), devicePixelRatioF()));
+    for (int i = 0; i < m_pages.size(); ++i) {
+        QIcon icon(ThemeManager::assetPath(kNavIconFor(m_pages[i].id)));
+        icon.addPixmap(QPixmap(ThemeManager::assetPath(kNavIconFor(m_pages[i].id))), QIcon::Selected);
+        m_nav->item(i)->setIcon(icon);
+    }
+    m_themeButton->setIcon(QIcon(ThemeManager::assetPath("action-theme.png")));
+    m_quitButton->setIcon(QIcon(ThemeManager::assetPath("action-quit.png")));
+    m_mascotSource = QPixmap(ThemeManager::assetPath("mascot.png"));
+    if (m_mascotSource.isNull()) m_mascotSource = QPixmap(":/icons/mascot.svg");
+    resizeMascot();
+    if (m_tray) m_tray->setIcon(QIcon(ThemeManager::assetPath("app.ico")));
 }
 
 void MainWindow::setLanguage(const QString &lang) {
@@ -171,9 +200,10 @@ QWidget *MainWindow::pageWidget(const QString &id) const {
 }
 
 void MainWindow::setupTray() {
-    m_tray = new QSystemTrayIcon(QIcon(":/icons/app.svg"), this);
+    m_tray = new QSystemTrayIcon(QIcon(ThemeManager::assetPath("app.ico")), this);
+    m_tray->setToolTip(windowTitle());
     auto *menu = new QMenu(this);
-    menu->addAction(Strings::zh("overview"), this, [this] { showAndActivateWindow(this); });
+    menu->addAction(Strings::zh("overview"), this, &MainWindow::showAndActivate);
     menu->addSeparator();
     menu->addAction(Strings::zh("start"), this, [this] { emit trayAction("start"); });
     menu->addAction(Strings::zh("stop"), this, [this] { emit trayAction("stop"); });
@@ -186,10 +216,32 @@ void MainWindow::setupTray() {
     m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
-            showAndActivateWindow(this);
+            showAndActivate();
         }
     });
     m_tray->show();
+}
+
+void MainWindow::showAndActivate() {
+    showAndActivateWindow(this);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    resizeMascot();
+}
+
+void MainWindow::resizeMascot() {
+    if (!m_mascot || m_mascotSource.isNull()) return;
+    const auto *brand = findChild<QFrame *>("brand");
+    const auto *actions = findChild<QFrame *>("sidebarActions");
+    if (!brand || !actions) return;
+    // Reserve all seven navigation rows; shrink the decorative character first.
+    const int reserved = m_nav->count() * 42 + brand->sizeHint().height()
+        + actions->sizeHint().height() + 24;
+    const int mascotHeight = qBound(80, height() - reserved, 176);
+    m_mascot->setPixmap(m_mascotSource.scaled(140, mascotHeight, Qt::KeepAspectRatio,
+                                           Qt::SmoothTransformation));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {

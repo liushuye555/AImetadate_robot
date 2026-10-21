@@ -1,0 +1,9 @@
+Use case: style-transfer.
+Asset type: transparent sidebar mascot for a desktop QQ OneBot manager, displayed about 140 px wide.
+Input images: image 1 is ONLY a visual style reference (blue-haired chibi maid close-up); image 2 is the existing mascot and is the character design reference.
+Primary request: Redraw the character from image 2 as an adorable polished chibi in the flat soft pastel anime illustration style of image 1. Do NOT use the blue-haired maid character from image 1.
+Subject: a distinct original ivory-white-haired girl, long flowing hair with subtle lavender shadow blocks, purple-blue eyes, powder-blue beret with a small sky-blue bow, powder-blue long-sleeved sailor dress, ivory collar, indigo ribbon. Friendly happy open smile, large sparkling eyes, soft pink blush.
+Style: big rounded head, compact two-and-a-half-head-tall body; flat clean color shapes, restrained cel shading, very thin muted indigo outlines, broad simple hair highlights, gentle warm cream skin. Match image 1's cuteness and matte pastel color language. No glossy 3D rendering.
+Composition: one complete standing full-body character, small friendly wave, front-facing with slight head tilt, feet and beret fully within frame, compact flowing silhouette. Tight sensible transparent margins, portrait composition.
+Palette: muted periwinkle #7189be, powder blue #9fcbe0, cream #fff7ef, lavender #e0ddec, blush pink #f6ced4, dark desaturated indigo #596080.
+Constraints: genuinely transparent background; no scenery, no typography, no logos, no watermark, no decorative border, no other character, no blue hair, no maid headdress, no cropped feet. Keep existing white-haired blue-dressed identity.

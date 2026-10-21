@@ -1,10 +1,13 @@
 #pragma once
 #include <QWidget>
+#include <QVector>
 #include "core/StatusMonitor.h"
 
 class StatusCard;
 class QPushButton;
 class QLabel;
+class QGridLayout;
+class QResizeEvent;
 
 class OverviewPage : public QWidget {
     Q_OBJECT
@@ -18,7 +21,22 @@ public:
     bool collectionChecked() const;
 signals:
     void actionRequested(const QString &action); // start/stop/restart/refresh/logs/reports/config/history
+protected:
+    void resizeEvent(QResizeEvent *event) override;
 private:
+    void updateResponsiveLayout();
+    QWidget *m_body = nullptr;
+    QGridLayout *m_servicesLayout = nullptr;
+    QGridLayout *m_countsLayout = nullptr;
+    QGridLayout *m_serviceActionsLayout = nullptr;
+    QGridLayout *m_dataActionsLayout = nullptr;
+    QVector<QWidget *> m_serviceCards;
+    QVector<QWidget *> m_countCards;
+    QVector<QWidget *> m_serviceButtons;
+    QVector<QWidget *> m_dataButtons;
+    int m_serviceColumns = 0;
+    int m_countColumns = 0;
+    int m_actionColumns = 0;
     StatusCard *m_napcat = nullptr;
     StatusCard *m_onebot = nullptr;
     StatusCard *m_bot = nullptr;

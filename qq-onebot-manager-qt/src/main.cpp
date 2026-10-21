@@ -6,9 +6,10 @@
 #include <QJsonObject>
 #include <QFileInfo>
 #include <QLabel>
-#include <QMessageBox>
 #include <QTimer>
+#include <QStyleHints>
 #include <QUrl>
+#include <QMessageBox>
 #include "app/SingleInstance.h"
 #include "core/ManagedRuntime.h"
 #include <functional>
@@ -74,6 +75,10 @@ int main(int argc, char *argv[]) {
     });
 
     ThemeManager::apply(&app, ThemeManager::loadStored());
+    QObject::connect(app.styleHints(), &QStyleHints::colorSchemeChanged, &app, [&app] {
+        if (ThemeManager::current() == ThemeManager::Theme::System)
+            ThemeManager::apply(&app, ThemeManager::Theme::System);
+    });
 
     const QVector<PageDef> pages = {
         {"overview", "overview", makeOverview},
@@ -213,7 +218,9 @@ int main(int argc, char *argv[]) {
         settings->setSavedMessage(ok ? Strings::zh("saved") : (msg.isEmpty() ? Strings::zh("error") : msg));
     });
     QObject::connect(settings, &SettingsPage::themeChanged, [](const QString &theme) {
-        ThemeManager::apply(qApp, ThemeManager::fromName(theme));
+        const auto selected = ThemeManager::fromName(theme);
+        ThemeManager::apply(qApp, selected);
+        ThemeManager::store(selected);
     });
     // 侧栏「切换主题」：广播给设置页同步下拉框
     QObject::connect(&window, &MainWindow::themeToggled, settings, &SettingsPage::setTheme);

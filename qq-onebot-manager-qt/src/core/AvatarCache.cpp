@@ -13,7 +13,7 @@
 
 namespace {
 // 柔和底色盘：按 id 哈希取色，占位头像不会千篇一律
-const char *kPalette[] = {"#eb2f96", "#7a5af8", "#2f6bdb", "#12a19a", "#e8890c", "#d64550"};
+const char *kPalette[] = {"#a8c7e2", "#c1c9e7", "#b7d9e5", "#d8cfea", "#ecd4d9", "#e8dcca"};
 constexpr int kAvatarSize = 100;
 }
 
@@ -45,9 +45,9 @@ QPixmap AvatarCache::placeholder(const QString &seed, int size) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(kPalette[hash % (sizeof(kPalette) / sizeof(kPalette[0]))]));
     painter.drawEllipse(0, 0, size, size);
-    painter.setPen(Qt::white);
+    painter.setPen(QColor("#596080"));
     QFont font = painter.font();
-    font.setPixelSize(size * 52 / 100);
+    font.setPixelSize(size * 46 / 100);
     font.setBold(true);
     painter.setFont(font);
     painter.drawText(pm.rect(), Qt::AlignCenter, text);

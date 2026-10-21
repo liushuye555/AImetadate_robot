@@ -1,6 +1,37 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/app.svg</file>
+        <file>icons/action-quit.png</file>
+        <file>icons/action-theme.png</file>
+        <file>icons/app.png</file>
+        <file>icons/app.ico</file>
+        <file>icons/dark/app.png</file>
+        <file>icons/dark/app.ico</file>
+        <file>icons/dark/mascot.png</file>
+        <file>icons/dark/action-quit.png</file>
+        <file>icons/dark/action-theme.png</file>
+        <file>icons/dark/card-bot.png</file>
+        <file>icons/dark/card-napcat.png</file>
+        <file>icons/dark/card-onebot.png</file>
+        <file>icons/dark/card-qq.png</file>
+        <file>icons/dark/nav-chat.png</file>
+        <file>icons/dark/nav-collection.png</file>
+        <file>icons/dark/nav-logs.png</file>
+        <file>icons/dark/nav-overview.png</file>
+        <file>icons/dark/nav-relay.png</file>
+        <file>icons/dark/nav-reports.png</file>
+        <file>icons/dark/nav-settings.png</file>
+        <file>icons/card-bot.png</file>
+        <file>icons/card-napcat.png</file>
+        <file>icons/card-onebot.png</file>
+        <file>icons/card-qq.png</file>
+        <file>icons/nav-chat.png</file>
+        <file>icons/nav-collection.png</file>
+        <file>icons/nav-logs.png</file>
+        <file>icons/nav-overview.png</file>
+        <file>icons/nav-relay.png</file>
+        <file>icons/nav-reports.png</file>
+        <file>icons/nav-settings.png</file>
         <file>icons/nav-overview.svg</file>
         <file>icons/nav-collection.svg</file>
         <file>icons/nav-relay.svg</file>
@@ -13,7 +44,10 @@
         <file>icons/card-bot.svg</file>
         <file>icons/card-qq.svg</file>
         <file>icons/check-white.svg</file>
+        <file>icons/action-theme.svg</file>
+        <file>icons/action-quit.svg</file>
         <file>icons/mascot.png</file>
+        <file>icons/mascot.svg</file>
         <file>themes/light.qss</file>
         <file>themes/dark.qss</file>
     </qresource>

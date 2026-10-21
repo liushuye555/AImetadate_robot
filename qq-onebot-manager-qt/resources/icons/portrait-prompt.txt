@@ -1,0 +1,10 @@
+Use case: style-transfer.
+Asset type: primary square desktop application icon and master illustration for in-app navigation icons.
+Input image 1: ONLY STYLE reference, blue-haired chibi maid. Do NOT draw that character.
+Input image 2: CHARACTER DESIGN reference, white-haired girl in a sky-blue sailor dress and periwinkle beret.
+Primary request: Create a NEW close-up chibi HEAD PORTRAIT of the WHITE-HAIRED girl, in EXACTLY the flat, simple, matte anime icon visual language of image 1. NOT a full body, NOT a generic symbolic icon, NOT a cat, NOT a robot.
+Design: giant adorable face with simple big blue-violet eyes and white oval eye highlights, warm cream skin, round pink blush with two tiny blush strokes, happy open smile. Ivory-white flowing bangs with a few large pale lavender shadow shapes. Periwinkle-blue beret with a small sky-blue side bow. Tiny hint of sailor collar and blue ribbon below face.
+Style: Very clean flat color blocks, extremely restrained shading, NO glossy gradients, NO painterly texture, NO 3D. Soft desaturated blues, creams and lavenders. Big head fills nearly all square. Face slightly tilted 8 degrees for cheerful expression. Hair outline softly rounded, little or no heavy dark outer stroke. Mimic the visual language and face proportions of style reference closely while clearly keeping the DIFFERENT white-haired identity.
+Composition: complete compact head silhouette including beret and hair, face centered, loose hair not sprawling, neck and shoulder collar only in lower 15%; square icon, exactly one head, no frame or tile. 4% transparent padding all edges, no clipping. Intelligible at desktop 48px and sidebar32px.
+Background: genuinely transparent alpha, NO background glow or shadow or checkerboard illustration.
+Avoid: blue hair, maid headdress, full body, extra props, cats, logos, lettering, watermarks, symbols.

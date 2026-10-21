@@ -12,6 +12,11 @@ add_library(manager_runtime STATIC src/core/ManagedRuntime.cpp)
 target_include_directories(manager_runtime PUBLIC src)
 target_link_libraries(manager_runtime PUBLIC Qt6::Core)
 
+# Explicit asset tool: compose SVG sources into smooth raster icons for Qt's
+# pixmap icon engine, which preserves illustration detail at small UI sizes.
+add_executable(icon-assets-generator EXCLUDE_FROM_ALL tools/export_character_icons.cpp)
+target_link_libraries(icon-assets-generator PRIVATE Qt6::Core Qt6::Gui Qt6::Svg)
+
 add_executable(qq-onebot-manager-qt WIN32
     src/main.cpp
     src/app/SingleInstance.cpp
@@ -38,6 +43,10 @@ add_executable(qq-onebot-manager-qt WIN32
     resources/resources.qrc
 )
 target_include_directories(qq-onebot-manager-qt PRIVATE src)
+if(WIN32)
+    enable_language(RC)
+    target_sources(qq-onebot-manager-qt PRIVATE resources/app.rc)
+endif()
 target_link_libraries(qq-onebot-manager-qt PRIVATE manager_runtime Qt6::Widgets Qt6::Network Qt6::Svg ole32 shell32)
 
 enable_testing()

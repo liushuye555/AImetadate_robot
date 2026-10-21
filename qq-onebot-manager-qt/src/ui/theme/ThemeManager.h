@@ -1,9 +1,11 @@
 #pragma once
+#include <QObject>
 #include <QString>
 
 class QApplication;
 
-class ThemeManager {
+class ThemeManager : public QObject {
+    Q_OBJECT
 public:
     enum class Theme { Light, Dark, System };
     static void apply(QApplication *app, Theme theme);
@@ -17,7 +19,12 @@ public:
     static Theme loadStored();
     static void store(Theme theme);
     static void toggle(QApplication *app);
+    static ThemeManager *instance();
+    static QString assetPath(const QString &fileName);
+signals:
+    void appearanceChanged();
 private:
+    ThemeManager() = default;
     static Theme s_current;
     static Theme s_resolved;
 };

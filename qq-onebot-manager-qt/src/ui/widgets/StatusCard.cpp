@@ -1,12 +1,17 @@
 #include "StatusCard.h"
+#include "../theme/ThemeManager.h"
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QPixmap>
 #include <QStyle>
 #include <QVBoxLayout>
 
-StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *parent) : QFrame(parent) {
+StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *parent)
+    : QFrame(parent), m_iconPath(iconPath) {
     setObjectName("card");
+    setMinimumHeight(72);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(16, 14, 16, 14);
     layout->setSpacing(12);
@@ -14,11 +19,13 @@ StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *p
     if (!iconPath.isEmpty()) {
         m_icon = new QLabel(this);
         m_icon->setObjectName("cardIcon");
-        m_icon->setPixmap(QPixmap(iconPath));
-        m_icon->setFixedSize(34, 34);
+        m_icon->setFixedSize(42, 42);
         m_icon->setScaledContents(false);
         m_icon->setAlignment(Qt::AlignCenter);
         layout->addWidget(m_icon);
+        refreshThemeIcon();
+        connect(ThemeManager::instance(), &ThemeManager::appearanceChanged,
+                this, &StatusCard::refreshThemeIcon);
     }
 
     auto *text = new QVBoxLayout;
@@ -38,17 +45,39 @@ StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *p
     text->addLayout(titleRow);
     m_value = new QLabel("—", this);
     m_value->setObjectName("cardValue");
+    m_value->setTextFormat(Qt::PlainText);
+    m_value->setWordWrap(true);
+    m_value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     text->addWidget(m_value);
+    m_detail = new QLabel(this);
+    m_detail->setObjectName("cardDetail");
+    m_detail->setTextFormat(Qt::PlainText);
+    m_detail->setWordWrap(true);
+    m_detail->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_detail->hide();
+    text->addWidget(m_detail);
     layout->addLayout(text, 1);
 }
 
 void StatusCard::setIconPixmap(const QPixmap &pixmap) {
     if (!m_icon || pixmap.isNull()) return;
+    m_customIcon = true;
     m_icon->setPixmap(pixmap.scaled(30, 30, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
 }
 
-void StatusCard::setValue(const QString &value, bool ok) {
+void StatusCard::refreshThemeIcon() {
+    if (!m_icon || m_customIcon) return;
+    const QString prefix = QStringLiteral(":/icons/");
+    const QString path = m_iconPath.startsWith(prefix)
+        ? ThemeManager::assetPath(m_iconPath.mid(prefix.size())) : m_iconPath;
+    m_icon->setPixmap(QIcon(path).pixmap(QSize(36, 36), devicePixelRatioF()));
+}
+
+void StatusCard::setValue(const QString &value, bool ok, const QString &detail) {
     m_value->setText(value);
+    m_value->setToolTip(detail.isEmpty() ? value : value + "\n" + detail);
+    m_detail->setText(detail);
+    m_detail->setVisible(!detail.isEmpty());
     m_value->setProperty("state", ok ? "ok" : "bad");
     m_dot->setProperty("state", ok ? "ok" : "bad");
     // 动态属性改变后需要重新 polish 让 QSS 选择器生效

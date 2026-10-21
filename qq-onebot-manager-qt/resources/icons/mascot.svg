@@ -1,32 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="176" height="196" viewBox="0 0 176 196">
-  <!-- 占位看板娘：用同名文件替换成你的二次元立绘（建议透明底 PNG/SVG，宽约 176） -->
-  <g>
-    <!-- 双马尾 -->
-    <path d="M40 58 C20 92 22 144 34 174 L56 152 C46 120 48 88 56 66 Z" fill="#f0a3c2"/>
-    <path d="M136 58 C156 92 154 144 142 174 L120 152 C130 120 128 88 120 66 Z" fill="#f0a3c2"/>
-    <!-- 身体 -->
-    <path d="M50 122 C50 100 63 92 88 92 C113 92 126 100 126 122 L131 176 C104 186 72 186 45 176 Z" fill="#43385c"/>
-    <!-- 领结 -->
-    <path d="M80 100 L88 106 L96 100 L96 112 L88 118 L80 112 Z" fill="#eb2f96"/>
-    <!-- 后发 -->
-    <path d="M54 58 C52 30 70 16 88 16 C106 16 124 30 122 58 L114 96 C104 100 72 100 62 96 Z" fill="#5a4a78"/>
-    <!-- 猫耳 -->
-    <path d="M58 28 L48 6 L74 18 Z" fill="#5a4a78"/>
-    <path d="M118 28 L128 6 L102 18 Z" fill="#5a4a78"/>
-    <path d="M61 24 L56 12 L69 19 Z" fill="#f0a3c2"/>
-    <path d="M115 24 L120 12 L107 19 Z" fill="#f0a3c2"/>
-    <!-- 脸 -->
-    <circle cx="88" cy="54" r="33" fill="#ffeae1"/>
-    <!-- 刘海 -->
-    <path d="M55 52 C54 30 68 22 88 22 C108 22 122 30 121 52 C112 42 104 40 96 44 C90 47 78 47 72 44 C64 41 58 44 55 52 Z" fill="#5a4a78"/>
-    <!-- 眼睛 -->
-    <ellipse cx="76" cy="58" rx="5" ry="6" fill="#3b3550"/>
-    <ellipse cx="100" cy="58" rx="5" ry="6" fill="#3b3550"/>
-    <circle cx="77.5" cy="56" r="1.6" fill="#ffffff"/>
-    <circle cx="101.5" cy="56" r="1.6" fill="#ffffff"/>
-    <!-- 腮红与嘴 -->
-    <ellipse cx="68" cy="67" rx="5.5" ry="3" fill="#f8bfcf" opacity="0.85"/>
-    <ellipse cx="108" cy="67" rx="5.5" ry="3" fill="#f8bfcf" opacity="0.85"/>
-    <path d="M83 70 q5 5 10 0" stroke="#c46a8a" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="176" height="196" viewBox="0 0 176 196" fill="none" stroke="#66739a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M45 65C16 91 22 159 38 170l21-19h58l21 19c19-24 22-77-8-105Z" fill="#e0ddec"/>
+<path d="M60 116h56l18 54q-46 19-92 0Z" fill="#a8c7e2"/>
+<path d="m68 170-2 13 15 2 2-12m14 0 1 12 15-2-3-13" fill="#fff7ef"/>
+<path d="M66 182q-7 5-4 10h20v-8m15 0v8h20q3-5-4-10" fill="#7189be"/>
+<path d="M39 62C35 21 138 19 137 66l-8 34H47Z" fill="#fff7ef"/>
+<path d="M43 48C39 8 131 7 138 48q-44-17-95 0Z" fill="#7189be"/>
+<ellipse cx="88" cy="75" rx="43" ry="39" fill="#fff7ef"/>
+<path d="M45 72q-1-33 28-39l-7 28 25-24-2 29 15-21 28 24-9-25q22 13 14 42l-11 11q7-17-5-22l-7-10-10 6-19-16-13 23-8-9-11 12Z" fill="#fff7ef"/>
+<ellipse cx="72" cy="80" rx="7" ry="9" fill="#7189be" stroke="none"/>
+  <ellipse cx="106" cy="80" rx="7" ry="9" fill="#7189be" stroke="none"/>
+<circle cx="74" cy="77" r="2.5" fill="#fff" stroke="none"/>
+  <circle cx="108" cy="77" r="2.5" fill="#fff" stroke="none"/>
+<ellipse cx="60" cy="94" rx="7" ry="4" fill="#f6ced4" stroke="none"/>
+  <ellipse cx="118" cy="94" rx="7" ry="4" fill="#f6ced4" stroke="none"/>
+<path d="M81 97q7 10 14 0Z" fill="#f6ced4" stroke="#d798ab"/>
+<path d="m127 38 12-8v20l-12-8-11 8V30Z" fill="#a8c7e2"/>
+  <circle cx="127" cy="40" r="3" fill="#fff7ef"/>
+<path d="m65 112 23 12 23-12-13 23H78Z" fill="#fff7ef"/>
+<path d="m77 122 11 6-11 6Zm22 0-11 6 11 6Z" fill="#7189be"/>
+<path d="M59 130 44 122l-9 13 19 14m63-19 14 12-9 12-17-16" fill="#a8c7e2"/>
+<path d="m39 128-11-7q-9-8-5-12l9 7-5-13q0-6 4-3l8 13 2-9q4-5 5 0v17Z" fill="#fff7ef"/>
+<path d="M51 163q37 12 74 0" stroke="#fff7ef" stroke-width="4"/>
 </svg>

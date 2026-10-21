@@ -1,5 +1,6 @@
 #pragma once
 #include <QMainWindow>
+#include <QPixmap>
 #include <QSystemTrayIcon>
 #include <QVector>
 
@@ -8,6 +9,7 @@ class QStackedWidget;
 class QLabel;
 class QWidget;
 class QCloseEvent;
+class QResizeEvent;
 
 struct PageDef {
     QString id;
@@ -22,18 +24,27 @@ public:
     void setLanguage(const QString &lang);
     QWidget *pageWidget(const QString &id) const;
     QSystemTrayIcon *trayIcon() const { return m_tray; }
+public slots:
+    void showAndActivate();
 signals:
     void trayAction(const QString &action); // open/start/stop/restart/logs/reports/quit
     void themeToggled(const QString &theme); // 侧栏切换主题后广播（设置页下拉同步）
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 private:
     void setupTray();
+    void refreshThemeAssets();
+    void resizeMascot();
     QListWidget *m_nav = nullptr;
     QStackedWidget *m_stack = nullptr;
     QLabel *m_header = nullptr;
     QLabel *m_subtitle = nullptr;
+    QLabel *m_mascot = nullptr;
+    QLabel *m_logo = nullptr;
+    QPixmap m_mascotSource;
     class QPushButton *m_themeButton = nullptr;
+    class QPushButton *m_quitButton = nullptr;
     QVector<PageDef> m_pages;
     QSystemTrayIcon *m_tray = nullptr;
     QString m_lang = "zh-CN";

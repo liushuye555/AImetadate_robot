@@ -1,8 +1,20 @@
+param(
+    [string]$PanelExePath = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $BotDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $ManagerLauncher = Join-Path $PSScriptRoot 'start-qq-onebot-manager.ps1'
 $PanelExe = Join-Path $BotDir 'qq-onebot-manager-qt\build\qq-onebot-manager-qt.exe'
+if ($PanelExePath) {
+    $PanelExe = (Resolve-Path -LiteralPath $PanelExePath).Path
+}
+$ProjectIcon = Join-Path $BotDir 'qq-onebot-manager-qt\resources\icons\app.ico'
+$CharacterIcon = Join-Path $BotDir 'qq-onebot-manager-qt\resources\icons\app-character.ico'
+if (Test-Path -LiteralPath $CharacterIcon) {
+    $ProjectIcon = $CharacterIcon
+}
 $LegacyExe = Join-Path $BotDir 'manager\target\release\qq-onebot-manager.exe'
 $PowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $Shell = New-Object -ComObject WScript.Shell
@@ -13,11 +25,15 @@ $Targets = @(
 
 foreach ($Target in $Targets) {
     $Shortcut = $Shell.CreateShortcut($Target)
-    if (Test-Path -LiteralPath $PanelExe) {
+    if ((Test-Path -LiteralPath $PanelExe) -and -not $PanelExePath) {
         $Shortcut.TargetPath = $PowerShell
         $Shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ManagerLauncher`""
         $Shortcut.IconLocation = "$PanelExe,0"
         $Shortcut.WindowStyle = 7
+    } elseif (Test-Path -LiteralPath $PanelExe) {
+        $Shortcut.TargetPath = $PanelExe
+        $Shortcut.Arguments = ''
+        $Shortcut.IconLocation = "$PanelExe,0"
     } elseif (Test-Path -LiteralPath $LegacyExe) {
         $Shortcut.TargetPath = $LegacyExe
         $Shortcut.Arguments = ''
@@ -28,6 +44,9 @@ foreach ($Target in $Targets) {
         $Shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,13"
     }
     $Shortcut.WorkingDirectory = $BotDir
+    if (Test-Path -LiteralPath $ProjectIcon) {
+        $Shortcut.IconLocation = "$ProjectIcon,0"
+    }
     $Shortcut.Description = 'Start QQ OneBot native manager'
     $Shortcut.Save()
     Write-Host "Created: $Target"

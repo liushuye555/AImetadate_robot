@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QSettings>
+#include <QIcon>
 
 ThemeManager::Theme ThemeManager::s_current = ThemeManager::Theme::System;
 ThemeManager::Theme ThemeManager::s_resolved = ThemeManager::Theme::Dark;
@@ -10,7 +11,7 @@ ThemeManager::Theme ThemeManager::resolveSystem() {
 #ifdef Q_OS_WIN
     // Windows 深浅色个性化设置（与 HTML 报告页的 prefers-color-scheme 对齐）
     QSettings personalize(
-        "HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
         QSettings::NativeFormat);
     return personalize.value("AppsUseLightTheme", 1).toInt() == 1 ? Theme::Light : Theme::Dark;
 #else
@@ -26,6 +27,18 @@ void ThemeManager::apply(QApplication *app, Theme theme) {
     QFile file(path);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text))
         app->setStyleSheet(QString::fromUtf8(file.readAll()));
+    app->setWindowIcon(QIcon(assetPath("app.png")));
+    emit instance()->appearanceChanged();
+}
+
+ThemeManager *ThemeManager::instance() {
+    static ThemeManager manager;
+    return &manager;
+}
+
+QString ThemeManager::assetPath(const QString &fileName) {
+    return (s_resolved == Theme::Dark ? QStringLiteral(":/icons/dark/")
+                                     : QStringLiteral(":/icons/")) + fileName;
 }
 
 ThemeManager::Theme ThemeManager::current() { return s_current; }

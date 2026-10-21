@@ -46,6 +46,30 @@ target_include_directories(tst_pages PRIVATE ../src)
 target_link_libraries(tst_pages PRIVATE manager_runtime Qt6::Test Qt6::Widgets Qt6::Network ole32 shell32)
 add_test(NAME tst_pages COMMAND tst_pages)
 
+add_executable(tst_themeappearance
+    tst_themeappearance.cpp
+    ../src/app/SingleInstance.cpp
+    ../src/ui/MainWindow.cpp
+    ../src/ui/theme/ThemeManager.cpp
+    ../src/ui/widgets/StatusCard.cpp
+    ../src/ui/pages/OverviewPage.cpp
+    ../src/ui/pages/SettingsPage.cpp
+    ../src/core/AvatarCache.cpp
+    ../src/core/AutoStart.cpp
+    ../src/ui/Strings.cpp
+    ../resources/resources.qrc
+)
+target_include_directories(tst_themeappearance PRIVATE ../src)
+target_link_libraries(tst_themeappearance PRIVATE Qt6::Test Qt6::Widgets Qt6::Network Qt6::Svg ole32 shell32)
+add_test(NAME tst_themeappearance COMMAND tst_themeappearance)
+if(WIN32)
+    # Fresh build directories also need the ICO plugin and real Windows fonts
+    # when these appearance checks run with the offscreen platform.
+    set_tests_properties(tst_themeappearance PROPERTIES
+        ENVIRONMENT "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_QPA_FONTDIR=$ENV{SystemRoot}/Fonts"
+        TIMEOUT 90)
+endif()
+
 # Keep standalone test executables runnable from Qt Creator/File Explorer.
 # Qt Creator does not always add the Qt bin directory to the launched process PATH.
 if (WIN32)
@@ -71,7 +95,7 @@ if (WIN32)
         endforeach()
     endfunction()
 
-    foreach(test_target tst_statusmonitor tst_configbridge tst_settingspage tst_configfetch tst_pages)
+    foreach(test_target tst_statusmonitor tst_configbridge tst_settingspage tst_configfetch tst_pages tst_themeappearance)
         copy_qt_runtime(${test_target})
     endforeach()
 endif()
