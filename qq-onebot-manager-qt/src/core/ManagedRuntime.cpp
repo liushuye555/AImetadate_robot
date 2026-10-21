@@ -1,4 +1,5 @@
 #include "ManagedRuntime.h"
+#include "HiddenCommand.h"
 
 #include <QDateTime>
 #include <QCoreApplication>
@@ -237,6 +238,14 @@ bool ManagedRuntime::initialize(QString *error)
     if (!QCoreApplication::arguments().contains(QStringLiteral("--recover-session"))) {
         QFile::remove(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-user-stop")));
         QFile::remove(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-state.json")));
+        const QString resume = QDir(m_repoRoot).filePath(QStringLiteral("scripts/windows/set-manager-recovery-active.ps1"));
+        if (QFile::exists(resume)
+            && QFile::exists(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-policy.json")))) {
+            const int code = HiddenCommand::run(QStringLiteral("powershell.exe"),
+                {"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resume, "-Action", "resume"},
+                m_repoRoot, 15000);
+            record(QStringLiteral("recovery_task_resumed"), {{"ok", code == 0}});
+        }
     }
     record(QStringLiteral("session_started"), {{"pid", qint64(GetCurrentProcessId())},
            {"created", m_created}});
@@ -360,9 +369,17 @@ bool ManagedRuntime::markUserStopped()
     const bool saved = marker.open(QIODevice::WriteOnly) && marker.write(time) == time.size()
                        && marker.commit();
     record(QStringLiteral("user_stop_requested"), {{"persisted", saved}});
+    bool paused = true;
+    const QString pause = QDir(m_repoRoot).filePath(QStringLiteral("scripts/windows/set-manager-recovery-active.ps1"));
+    if (saved && QFile::exists(pause)) {
+        paused = HiddenCommand::run(QStringLiteral("powershell.exe"),
+            {"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", pause, "-Action", "pause"},
+            m_repoRoot, 15000) == 0;
+        record(QStringLiteral("recovery_task_paused"), {{"ok", paused}});
+    }
     // If recovery is installed, do not report a successful stop without its
-    // durable intent marker: the next scheduler tick would otherwise restart.
-    return saved || !QFile::exists(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-policy.json")));
+    // durable intent marker and paused task: it must not keep ticking after stop.
+    return (saved && paused) || !QFile::exists(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-policy.json")));
 }
 
 void ManagedRuntime::record(const QString &event, QJsonObject fields)

@@ -12,6 +12,7 @@
 #include <QMessageBox>
 #include "app/SingleInstance.h"
 #include "core/ManagedRuntime.h"
+#include "core/HiddenCommand.h"
 #include <functional>
 #include "core/ConfigBridge.h"
 #include "core/Notifier.h"
@@ -45,6 +46,15 @@ static QWidget *makeLogs(QWidget *parent) { return new LogsPage(parent); }
 static QWidget *makeReports(QWidget *parent) { return new ReportsPage(parent); }
 
 int main(int argc, char *argv[]) {
+    if (argc == 2 && QByteArray(argv[1]) == "--check-recovery") {
+        // The GUI-subsystem executable is also the scheduler's silent entry.
+        // This path never creates a window, takes the GUI singleton, or opens
+        // a managed backend session.
+        QCoreApplication app(argc, argv);
+        if (QFileInfo::exists(Paths::repoRoot() + "/run/manager-user-stop")) return 0;
+        return HiddenCommand::run(Paths::pythonExe(),
+            {"-m", "qq_onebot_whitelist.manager_recovery"}, Paths::repoRoot());
+    }
     QApplication app(argc, argv);
     app.setApplicationName("QQ OneBot 管理器");
     app.setWindowIcon(QIcon(":/icons/app.png"));

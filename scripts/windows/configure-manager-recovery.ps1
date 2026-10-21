@@ -24,9 +24,11 @@ if ($existing -and $existing.State -eq 'Running') {
 }
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $principal = New-ScheduledTaskPrincipal -UserId $userSid -LogonType Interactive -RunLevel Limited
-$Python = Join-Path $BotDir '.venv\Scripts\pythonw.exe'
+$Python = Join-Path $BotDir '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $Python)) { throw 'Project Python was not found.' }
-$action = New-ScheduledTaskAction -Execute $Python -Argument '-m qq_onebot_whitelist.manager_recovery' -WorkingDirectory $BotDir
+# Invoke the GUI executable's headless mode. A pythonw filename does not prove
+# GUI subsystem: uv venv redirectors may still create a console window.
+$action = New-ScheduledTaskAction -Execute $PanelExe -Argument '--check-recovery' -WorkingDirectory $BotDir
 $trigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1)
 $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 45) -MultipleInstances IgnoreNew `
@@ -39,5 +41,8 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Se
 New-Item -ItemType Directory -Path (Split-Path -Parent $Policy) -Force | Out-Null
 [IO.File]::WriteAllText($Policy, '{"enabled":true}', [Text.UTF8Encoding]::new($false))
 & (Join-Path $BotDir '.venv\Scripts\python.exe') -m qq_onebot_whitelist.manager_recovery --arm
-if ($LASTEXITCODE -ne 0) { Write-Warning 'Recovery will arm after the next explicit manager start.' }
+if (($LASTEXITCODE -ne 0) -or (Test-Path -LiteralPath (Join-Path $BotDir 'run\manager-user-stop'))) {
+    Disable-ScheduledTask -TaskName $TaskName | Out-Null
+    Write-Warning 'Recovery is installed but paused until the next explicit manager start.'
+}
 Write-Host 'Manager recovery configured: check each minute, at most 3 recoveries per 10 minutes; user stop stays stopped.'

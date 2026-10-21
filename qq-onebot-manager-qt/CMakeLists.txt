@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Svg Test)
 
-add_library(manager_runtime STATIC src/core/ManagedRuntime.cpp)
+add_library(manager_runtime STATIC src/core/ManagedRuntime.cpp src/core/HiddenCommand.cpp)
 target_include_directories(manager_runtime PUBLIC src)
 target_link_libraries(manager_runtime PUBLIC Qt6::Core)
 

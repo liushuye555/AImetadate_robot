@@ -16,6 +16,8 @@ $StopMarker = Join-Path $BotDir 'run\manager-user-stop'
 New-Item -ItemType Directory -Path (Split-Path -Parent $StopMarker) -Force | Out-Null
 if ($Action -eq 'stop-services') {
     [IO.File]::WriteAllText($StopMarker, [DateTimeOffset]::Now.ToString('o'))
+    & (Join-Path $PSScriptRoot 'set-manager-recovery-active.ps1') -Action pause
+    if ($LASTEXITCODE -ne 0) { throw 'Could not pause manager recovery.' }
 } else {
     if (Test-Path -LiteralPath $StopMarker) { Remove-Item -LiteralPath $StopMarker }
     $State = Join-Path $BotDir 'run\manager-recovery-state.json'
