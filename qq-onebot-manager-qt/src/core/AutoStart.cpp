@@ -31,6 +31,17 @@ bool AutoStart::setEnabled(bool enabled) {
         return false;
     }
     shellLink->SetPath(reinterpret_cast<LPCWSTR>(target.utf16()));
+    const QString launcher = Paths::repoRoot() + "/scripts/windows/start-qq-onebot-manager.ps1";
+    if (QFileInfo::exists(launcher)) {
+        const QString powershell = qEnvironmentVariable("SystemRoot")
+            + "/System32/WindowsPowerShell/v1.0/powershell.exe";
+        const QString arguments = QString("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%1\"")
+                                      .arg(QDir::toNativeSeparators(launcher));
+        shellLink->SetPath(reinterpret_cast<LPCWSTR>(powershell.utf16()));
+        shellLink->SetArguments(reinterpret_cast<LPCWSTR>(arguments.utf16()));
+        shellLink->SetIconLocation(reinterpret_cast<LPCWSTR>(target.utf16()), 0);
+        shellLink->SetShowCmd(SW_SHOWMINNOACTIVE);
+    }
     shellLink->SetWorkingDirectory(reinterpret_cast<LPCWSTR>(Paths::repoRoot().utf16()));
     IPersistFile *persist = nullptr;
     hr = shellLink->QueryInterface(IID_IPersistFile, reinterpret_cast<void **>(&persist));

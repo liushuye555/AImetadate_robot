@@ -14,9 +14,10 @@ $Targets = @(
 foreach ($Target in $Targets) {
     $Shortcut = $Shell.CreateShortcut($Target)
     if (Test-Path -LiteralPath $PanelExe) {
-        $Shortcut.TargetPath = $PanelExe
-        $Shortcut.Arguments = ''
+        $Shortcut.TargetPath = $PowerShell
+        $Shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ManagerLauncher`""
         $Shortcut.IconLocation = "$PanelExe,0"
+        $Shortcut.WindowStyle = 7
     } elseif (Test-Path -LiteralPath $LegacyExe) {
         $Shortcut.TargetPath = $LegacyExe
         $Shortcut.Arguments = ''

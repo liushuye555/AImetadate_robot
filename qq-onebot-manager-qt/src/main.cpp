@@ -51,10 +51,13 @@ int main(int argc, char *argv[]) {
     SingleInstance single("qq-onebot-manager-qt");
     const QString action = app.arguments().contains("--stop-services") ? "stop-services"
         : app.arguments().contains("--restart-services") ? "restart-services" : "show";
+    ManagedRuntime runtime(Paths::repoRoot());
+    if (action == "stop-services" && !runtime.markUserStopped()) return 1;
     if (!single.tryLock(action)) return 0;
     if (action == "stop-services") return 0;
+    const bool recovering = app.arguments().contains("--recover-session");
+    if (recovering && QFileInfo::exists(Paths::repoRoot() + "/run/manager-user-stop")) return 0;
 
-    ManagedRuntime runtime(Paths::repoRoot());
     QString runtimeError;
     if (!runtime.initialize(&runtimeError)) {
         QMessageBox::critical(nullptr, QStringLiteral("无法启动托管服务"), runtimeError);
@@ -82,6 +85,11 @@ int main(int argc, char *argv[]) {
         {"reports", "reports", makeReports},
     };
     MainWindow window(pages);
+    const auto stopByUser = [&] {
+        if (runtime.markUserStopped()) app.quit();
+        else QMessageBox::critical(&window, QStringLiteral("暂时无法停止"),
+            QStringLiteral("无法保存停止状态，请检查项目目录的写入权限后重试。"));
+    };
     QObject::connect(&single, &SingleInstance::anotherInstanceRequested, &window, [&window] {
         showAndActivateWindow(&window);
     });
@@ -96,13 +104,25 @@ int main(int argc, char *argv[]) {
     statusMonitor->setLiveProbe(Paths::pythonExe(),
                                 {"-m", "qq_onebot_whitelist.control", "live-status"});
     auto *serviceControl = new ServiceControl(&window);
+    QObject::connect(serviceControl, &ServiceControl::commandStarted,
+                     &runtime, &ManagedRuntime::startupCommandStarted);
+    QObject::connect(&runtime, &ManagedRuntime::startupDeadline,
+                     serviceControl, &ServiceControl::reconcileFinished);
+    QObject::connect(serviceControl, &ServiceControl::commandCompleted,
+                     &runtime, &ManagedRuntime::startupCommandCompleted);
     auto *collectionControl = new ServiceControl(&window);
     auto *statsControl = new ServiceControl(&window);
-    overview->setAutoRestartText(QStringLiteral("后台随管理器启停"));
+    overview->setAutoRestartText(QFileInfo::exists(Paths::repoRoot() + "/run/manager-recovery-policy.json")
+        ? QStringLiteral("后台随管理器启停 · 已启用异常恢复")
+        : QStringLiteral("后台随管理器启停"));
     bool pendingRestart = false;
     std::function<void(bool)> runBackend;
     runBackend = [&](bool restart) {
         if (shuttingDown) return;
+        if (recovering && QFileInfo::exists(Paths::repoRoot() + "/run/manager-user-stop")) {
+            app.quit();
+            return;
+        }
         if (serviceControl->isRunning()) {
             pendingRestart = pendingRestart || restart;
             return;
@@ -115,8 +135,7 @@ int main(int argc, char *argv[]) {
         if (shuttingDown) return;
         if (!ok) {
             overview->setHint("托管启动失败：" + out.trimmed());
-            runtime.shutdown();
-            app.exit(1);
+            runtime.startupFailed();
             return;
         }
         if (pendingRestart) {
@@ -144,7 +163,7 @@ int main(int argc, char *argv[]) {
                                  obj.value("links").toInt(),
                                  lastReport.isEmpty() ? QStringLiteral("无") : lastReport);
     });
-    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, &runBackend, fetchStats, overview, collectionControl](const QString &action) {
+    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, &runBackend, &stopByUser, fetchStats, overview, collectionControl](const QString &action) {
         if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -160,7 +179,7 @@ int main(int argc, char *argv[]) {
             overview->setHint(QString());
             runBackend(action == "restart");
         } else if (action == "stop") {
-            QApplication::quit();
+            stopByUser();
         } else if (action == "history") {
             runBackend(false);
         } else if (action == "collection-toggle") {
@@ -264,14 +283,14 @@ int main(int argc, char *argv[]) {
     auto *notifier = new Notifier(window.trayIcon(), &window);
     QObject::connect(settings, &SettingsPage::notificationsToggled, notifier, &Notifier::setEnabled);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, notifier, &Notifier::onStatusChanged);
-    QObject::connect(&window, &MainWindow::trayAction, [&window, &runBackend, overview](const QString &action) {
+    QObject::connect(&window, &MainWindow::trayAction, [&window, &runBackend, &stopByUser, overview](const QString &action) {
         if (action == "quit") {
-            QApplication::quit();
+            stopByUser();
         } else if (action == "start" || action == "restart") {
             overview->setHint(QString());
             runBackend(action == "restart");
         } else if (action == "stop") {
-            QApplication::quit();
+            stopByUser();
         } else if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -282,7 +301,7 @@ int main(int argc, char *argv[]) {
     });
 
     QObject::connect(&single, &SingleInstance::commandRequested, &window, [&](const QString &command) {
-        if (command == "stop-services") app.quit();
+        if (command == "stop-services") stopByUser();
         else if (command == "restart-services") runBackend(true);
     });
     configBridge->fetch();

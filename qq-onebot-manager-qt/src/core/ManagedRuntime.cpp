@@ -1,6 +1,7 @@
 #include "ManagedRuntime.h"
 
 #include <QDateTime>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -123,17 +124,19 @@ ManagedRuntime::ManagedRuntime(QString repoRoot, QObject *parent)
 {
     m_deadline.setSingleShot(true);
     m_poll.setInterval(300);
-    connect(&m_deadline, &QTimer::timeout, this, [this] {
-        fail(QStringLiteral("后端未在限定时间内启动，已停止本次管理会话。"));
-    });
+    connect(&m_deadline, &QTimer::timeout, this, &ManagedRuntime::checkStartupDeadline);
     connect(&m_poll, &QTimer::timeout, this, [this] {
 #ifdef Q_OS_WIN
         if (!m_native->bot || m_stopping)
             return;
         const DWORD state = WaitForSingleObject(m_native->bot, 0);
-        if (state == WAIT_OBJECT_0)
+        if (state == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            const bool known = GetExitCodeProcess(m_native->bot, &code);
+            record(QStringLiteral("backend_exited"), {{"pid", m_botPid},
+                   {"exitCode", known ? QJsonValue(qint64(code)) : QJsonValue()}});
             fail(QStringLiteral("后端进程已退出，已停止本次管理会话。"));
-        else if (state == WAIT_FAILED)
+        } else if (state == WAIT_FAILED)
             fail(windowsError(QStringLiteral("Cannot monitor backend process")));
 #endif
     });
@@ -142,6 +145,19 @@ ManagedRuntime::ManagedRuntime(QString repoRoot, QObject *parent)
 ManagedRuntime::~ManagedRuntime()
 {
     shutdown();
+}
+
+void ManagedRuntime::checkStartupDeadline()
+{
+    if (!m_initialized || m_stopping || m_failed)
+        return;
+    const quint64 transition = m_transition;
+    emit startupDeadline();
+    // Qt may dispatch this timer before a queued QProcess completion after
+    // a busy GUI thread resumes. Completion can also start a new restart.
+    if (m_stopping || m_failed || m_botPid || m_transition != transition)
+        return;
+    fail(QStringLiteral("后端未在限定时间内启动，已停止本次管理会话。"));
 }
 
 bool ManagedRuntime::initialize(QString *error)
@@ -218,6 +234,12 @@ bool ManagedRuntime::initialize(QString *error)
     qputenv("QQ_ONEBOT_MANAGER_JOB", m_jobName.toUtf8());
     m_initialized = true;
     activeRuntime = this;
+    if (!QCoreApplication::arguments().contains(QStringLiteral("--recover-session"))) {
+        QFile::remove(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-user-stop")));
+        QFile::remove(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-state.json")));
+    }
+    record(QStringLiteral("session_started"), {{"pid", qint64(GetCurrentProcessId())},
+           {"created", m_created}});
     return true;
 #else
     if (error) *error = QStringLiteral("Managed backend runtime requires Windows");
@@ -272,6 +294,8 @@ void ManagedRuntime::beginTransition(int timeoutMs)
     if (!m_initialized || m_stopping || m_failed)
         return;
     clearBot();
+    ++m_transition;
+    record(QStringLiteral("transition_started"), {{"timeoutMs", qMax(1, timeoutMs)}});
     m_deadline.start(qMax(1, timeoutMs));
 }
 
@@ -308,7 +332,53 @@ void ManagedRuntime::expectBot(qint64 pid)
         return;
     }
     m_poll.start();
+    record(QStringLiteral("backend_accepted"), {{"pid", pid}});
 #endif
+}
+
+void ManagedRuntime::startupCommandStarted(qint64 pid)
+{
+    record(QStringLiteral("startup_command_started"), {{"pid", pid}});
+}
+
+void ManagedRuntime::startupCommandCompleted(int exitCode, int exitStatus, qint64 elapsedMs)
+{
+    record(QStringLiteral("startup_command_finished"), {{"exitCode", exitCode},
+           {"exitStatus", exitStatus}, {"elapsedMs", elapsedMs}});
+}
+
+void ManagedRuntime::startupFailed()
+{
+    fail(QStringLiteral("后端启动命令失败，已停止本次管理会话。"));
+}
+
+bool ManagedRuntime::markUserStopped()
+{
+    QDir(m_repoRoot).mkpath(QStringLiteral("run"));
+    QSaveFile marker(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-user-stop")));
+    const QByteArray time = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toUtf8();
+    const bool saved = marker.open(QIODevice::WriteOnly) && marker.write(time) == time.size()
+                       && marker.commit();
+    record(QStringLiteral("user_stop_requested"), {{"persisted", saved}});
+    // If recovery is installed, do not report a successful stop without its
+    // durable intent marker: the next scheduler tick would otherwise restart.
+    return saved || !QFile::exists(QDir(m_repoRoot).filePath(QStringLiteral("run/manager-recovery-policy.json")));
+}
+
+void ManagedRuntime::record(const QString &event, QJsonObject fields)
+{
+    if (m_session.isEmpty())
+        return;
+    fields.insert(QStringLiteral("time"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    fields.insert(QStringLiteral("session"), m_session);
+    fields.insert(QStringLiteral("event"), event);
+    fields.insert(QStringLiteral("transition"), qint64(m_transition));
+    QDir(m_repoRoot).mkpath(QStringLiteral("logs"));
+    QFile log(QDir(m_repoRoot).filePath(QStringLiteral("logs/manager-lifecycle.jsonl")));
+    if (log.open(QIODevice::WriteOnly | QIODevice::Append)) {
+        log.write(QJsonDocument(fields).toJson(QJsonDocument::Compact) + '\n');
+        log.flush();
+    }
 }
 
 void ManagedRuntime::clearBot()
@@ -340,6 +410,7 @@ void ManagedRuntime::shutdown()
 {
     if (m_stopping)
         return;
+    record(QStringLiteral("session_stopped"), {{"failed", m_failed}});
     m_stopping = true;
     m_deadline.stop();
     clearBot();
@@ -369,6 +440,7 @@ void ManagedRuntime::fail(const QString &reason)
     if (m_failed || m_stopping)
         return;
     m_failed = true;
+    record(QStringLiteral("session_failed"), {{"reason", reason}});
     QDir(m_repoRoot).mkpath(QStringLiteral("logs"));
     QFile log(QDir(m_repoRoot).filePath(QStringLiteral("logs/manager-runtime.log")));
     if (log.open(QIODevice::WriteOnly | QIODevice::Append)) {

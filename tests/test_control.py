@@ -1,7 +1,27 @@
 import json
+import pytest
 
 from qq_onebot_whitelist import control
 from qq_onebot_whitelist.manager_owner import ManagerRequiredError
+
+
+@pytest.mark.parametrize('action', ['show', 'stop-services', 'restart-services'])
+def test_manager_entry_uses_recovery_launcher_for_external_actions(tmp_path, monkeypatch, action):
+    executable = tmp_path / 'qq-onebot-manager-qt/build/qq-onebot-manager-qt.exe'
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    launcher = tmp_path / 'scripts/windows/start-qq-onebot-manager.ps1'
+    launcher.parent.mkdir(parents=True)
+    launcher.touch()
+    monkeypatch.setattr(control, 'REPO_ROOT', tmp_path)
+    calls = []
+    monkeypatch.setattr(control.subprocess, 'Popen', lambda args, **kwargs: calls.append((args, kwargs)))
+    assert control.request_manager(action) == 0
+    args, options = calls[0]
+    assert args[0] == 'powershell.exe'
+    assert args[args.index('-File') + 1] == str(launcher)
+    assert args[args.index('-Action') + 1] == action
+    assert options['cwd'] == str(tmp_path)
 
 
 def test_write_status_is_atomic_and_contains_timestamp(tmp_path, monkeypatch):

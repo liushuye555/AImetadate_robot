@@ -159,7 +159,11 @@ def request_manager(action: str = 'show') -> int:
     if not executable.is_file():
         raise RuntimeError('管理器尚未构建，请先构建并启动 Qt 管理器。')
     arguments = [str(executable)]
-    if action != 'show':
+    launcher = REPO_ROOT / 'scripts' / 'windows' / 'start-qq-onebot-manager.ps1'
+    if launcher.is_file():
+        arguments = ['powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden',
+                     '-ExecutionPolicy', 'Bypass', '-File', str(launcher), '-Action', action]
+    elif action != 'show':
         arguments.append('--' + action)
     subprocess.Popen(arguments, cwd=str(REPO_ROOT), close_fds=True,
                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -236,6 +240,13 @@ def start_services(*, clear_manual_stop: bool = False) -> int:
             cwd=str(REPO_ROOT), stdout=output, stderr=subprocess.STDOUT, close_fds=True,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     save_bot_owner(REPO_ROOT, process.pid, session['session'])
+    try:
+        from .manager_recovery import arm_current_logon
+        arm_current_logon(REPO_ROOT)
+    except (OSError, ValueError, UnicodeError):
+        # Recovery instrumentation must not turn a successful launch into a
+        # malformed control response or leave its already-running child orphaned.
+        pass
     (RUN_DIR / 'bot.pid').write_text(str(process.pid), encoding='ascii')
     if clear_manual_stop:
         manual_stop_path().unlink(missing_ok=True)

@@ -9,6 +9,8 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QThread>
+#include <QEventLoop>
 #include <cstdio>
 
 #include "core/ManagedRuntime.h"
@@ -225,6 +227,24 @@ int ownerFixture(QCoreApplication &app, const QStringList &args)
     QTimer::singleShot(30000, &app, &QCoreApplication::quit);
     return app.exec();
 }
+
+int startupReply()
+{
+    QThread::msleep(100);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    std::wstring command = QString("\"%1\" --dummy-leaf")
+                               .arg(QCoreApplication::applicationFilePath()).toStdWString();
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &child))
+        return 40;
+    std::printf("{\"pid\":%lu}\n", child.dwProcessId);
+    std::fflush(stdout);
+    CloseHandle(child.hThread);
+    CloseHandle(child.hProcess);
+    return 0; // Child remains in the fixture manager's Job.
+}
 }
 #endif
 
@@ -238,6 +258,10 @@ private slots:
     void unexpectedBotExitIsFatal();
     void controlledTransitionAllowsReplacement();
     void transitionTimeoutFailsClosed();
+    void delayedStartupCompletionDoesNotTimeout();
+    void deadlineReconciliationAllowsNewTransition();
+    void runningStartupStillTimesOut();
+    void explicitStopIsDurableAcrossShutdown();
 };
 
 void TestManagedRuntime::boundPipesAndSpecificJob()
@@ -353,6 +377,12 @@ void TestManagedRuntime::unexpectedBotExitIsFatal()
     bot.kill();
     QVERIFY(bot.waitForFinished(5000));
     QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
+    QFile lifecycle(QDir(root.path()).filePath("logs/manager-lifecycle.jsonl"));
+    QVERIFY(lifecycle.open(QIODevice::ReadOnly));
+    const QByteArray events = lifecycle.readAll();
+    QVERIFY(events.contains("backend_exited"));
+    QVERIFY(events.contains("exitCode"));
+    QVERIFY(events.contains("session_stopped"));
     QTRY_VERIFY_WITH_TIMEOUT(siblingIdentity.dead(), 5000);
     QVERIFY(!QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
     QVERIFY(sibling.waitForFinished(5000) || sibling.state() == QProcess::NotRunning);
@@ -425,11 +455,131 @@ void TestManagedRuntime::transitionTimeoutFailsClosed()
 #endif
 }
 
+void TestManagedRuntime::delayedStartupCompletionDoesNotTimeout()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY2(runtime.initialize(&error), qPrintable(error));
+    QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QProcess command;
+    qint64 backendPid = 0;
+    connect(&runtime, &ManagedRuntime::startupDeadline, &command, [&] {
+        command.waitForFinished(0);
+    });
+    connect(&command, &QProcess::finished, &runtime, [&](int code, QProcess::ExitStatus status) {
+        if (code == 0 && status == QProcess::NormalExit) {
+            backendPid = QJsonDocument::fromJson(command.readAllStandardOutput())
+                             .object().value("pid").toInteger();
+            runtime.expectBot(backendPid);
+        }
+    });
+    runtime.beginTransition(30);
+    startBound(command, {"--startup-reply"});
+    QVERIFY(command.waitForStarted(5000));
+    ExactProcess commandIdentity;
+    QVERIFY(commandIdentity.open(command.processId()));
+    // Native wait proves the command exited successfully before Qt can handle
+    // either its completion or the expired startup timer.
+    QCOMPARE(WaitForSingleObject(commandIdentity.handle, 5000), DWORD(WAIT_OBJECT_0));
+    DWORD code = 99;
+    QVERIFY(GetExitCodeProcess(commandIdentity.handle, &code));
+    QCOMPARE(code, DWORD(0));
+    QThread::msleep(100);
+    // Deliver the expired timer before Qt's pending native-completion event.
+    // The OS event dispatcher can choose either order; cover the failing order
+    // deterministically rather than depending on its scheduling policy.
+    QVERIFY(QMetaObject::invokeMethod(&runtime, "checkStartupDeadline", Qt::DirectConnection));
+    QEventLoop dispatch;
+    QTimer::singleShot(100, &dispatch, &QEventLoop::quit);
+    dispatch.exec();
+    QCOMPARE(fatal.count(), 0);
+    QVERIFY(backendPid > 0);
+    ExactProcess backend;
+    QVERIFY(backend.open(backendPid));
+    QVERIFY(backend.alive());
+    QVERIFY(belongsToJob(backend.handle, jobName(root.path())));
+    runtime.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(backend.dead(), 5000);
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
+void TestManagedRuntime::deadlineReconciliationAllowsNewTransition()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY(runtime.initialize(&error));
+    QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    bool reconciled = false;
+    connect(&runtime, &ManagedRuntime::startupDeadline, &runtime, [&] {
+        reconciled = true;
+        runtime.beginTransition(10000); // A serialized pending restart.
+    });
+    runtime.beginTransition(20);
+    QTRY_VERIFY_WITH_TIMEOUT(reconciled, 1000);
+    QCOMPARE(fatal.count(), 0);
+    QVERIFY(QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
+    runtime.shutdown();
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
+void TestManagedRuntime::runningStartupStillTimesOut()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY(runtime.initialize(&error));
+    QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QProcess command;
+    startBound(command);
+    QVERIFY(command.waitForStarted(5000));
+    ExactProcess identity;
+    QVERIFY(identity.open(command.processId()));
+    connect(&runtime, &ManagedRuntime::startupDeadline, &command, [&] {
+        command.waitForFinished(0);
+    });
+    runtime.beginTransition(30);
+    QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(identity.dead(), 5000);
+    QVERIFY(command.waitForFinished(5000) || command.state() == QProcess::NotRunning);
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
+void TestManagedRuntime::explicitStopIsDurableAcrossShutdown()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY(runtime.initialize(&error));
+    QVERIFY(runtime.markUserStopped());
+    runtime.shutdown();
+    QVERIFY(QFile::exists(QDir(root.path()).filePath("run/manager-user-stop")));
+    ManagedRuntime manualRestart(root.path());
+    QVERIFY(manualRestart.initialize(&error));
+    QVERIFY(!QFile::exists(QDir(root.path()).filePath("run/manager-user-stop")));
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 #ifdef Q_OS_WIN
     const QStringList args = app.arguments();
+    if (args.size() >= 2 && args.at(1) == "--startup-reply")
+        return startupReply();
     if (args.size() >= 2 && args.at(1) == "--dummy-leaf")
         return dummyLeaf(app);
     if (args.size() >= 2 && args.at(1) == "--dummy-tree")

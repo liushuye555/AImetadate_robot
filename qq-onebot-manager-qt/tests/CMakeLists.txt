@@ -149,3 +149,15 @@ set_tests_properties(tst_windowactivation PROPERTIES TIMEOUT 30)
 if(WIN32)
     copy_qt_runtime(tst_windowactivation)
 endif()
+
+add_executable(tst_servicecontrol
+    tst_servicecontrol.cpp
+    ../src/core/ServiceControl.cpp
+)
+target_include_directories(tst_servicecontrol PRIVATE ../src)
+target_link_libraries(tst_servicecontrol PRIVATE manager_runtime Qt6::Test Qt6::Core)
+add_test(NAME tst_servicecontrol COMMAND tst_servicecontrol)
+set_tests_properties(tst_servicecontrol PROPERTIES TIMEOUT 60)
+if(WIN32)
+    copy_qt_runtime(tst_servicecontrol)
+endif()

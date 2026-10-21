@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
 #include <QTimer>
 #include <memory>
@@ -19,16 +20,26 @@ public:
     static void bind(QProcess *process);
     void beginTransition(int timeoutMs = 45000);
     void expectBot(qint64 pid);
+    void startupCommandStarted(qint64 pid);
+    void startupCommandCompleted(int exitCode, int exitStatus, qint64 elapsedMs);
+    void startupFailed();
+    bool markUserStopped();
     void shutdown();
 
 signals:
     void fatal(QString reason);
+    // Reconcile an already-finished launch command before declaring a timeout.
+    void startupDeadline();
+
+private slots:
+    void checkStartupDeadline();
 
 private:
     struct Native;
     void fail(const QString &reason);
     void clearBot();
     void removeSessionFile();
+    void record(const QString &event, QJsonObject fields = {});
 
     QString m_repoRoot;
     QString m_session;
@@ -38,6 +49,7 @@ private:
     QTimer m_poll;
     std::unique_ptr<Native> m_native;
     qint64 m_botPid = 0;
+    quint64 m_transition = 0;
     bool m_initialized = false;
     bool m_stopping = false;
     bool m_failed = false;
