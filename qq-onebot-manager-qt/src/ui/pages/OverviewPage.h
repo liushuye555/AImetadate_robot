@@ -16,6 +16,8 @@ public:
     void setStatus(const StatusSnapshot &s);
     void setStatNumbers(int images, int links, const QString &lastReport);
     void setHint(const QString &text);
+    void setBackendFault(const QString &reason);
+    void clearBackendFault();
     void setAutoRestartText(const QString &text);
     void setCollectionPaused(bool paused);
     bool collectionChecked() const;
@@ -53,4 +55,6 @@ private:
     QPushButton *m_collection = nullptr;
     QString m_avatarQQ;  // 已拉取过头像的 QQ 号，避免状态刷新重复请求
     bool m_collectionPaused = false;
+    QString m_backendFault;
+    StatusSnapshot m_lastStatus;
 };

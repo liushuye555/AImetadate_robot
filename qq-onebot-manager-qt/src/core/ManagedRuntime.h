@@ -5,6 +5,7 @@
 #include <QString>
 #include <QTimer>
 #include <memory>
+#include <functional>
 
 class QProcess;
 
@@ -17,7 +18,7 @@ public:
     ~ManagedRuntime() override;
 
     bool initialize(QString *error = nullptr);
-    static void bind(QProcess *process);
+    static void bind(QProcess *process, std::function<quintptr()> commandJob = {});
     void beginTransition(int timeoutMs = 45000);
     void expectBot(qint64 pid);
     void startupCommandStarted(qint64 pid);
@@ -28,6 +29,8 @@ public:
 
 signals:
     void fatal(QString reason);
+    void backendFault(QString reason);
+    void backendReady();
     // Reconcile an already-finished launch command before declaring a timeout.
     void startupDeadline();
 
@@ -37,6 +40,7 @@ private slots:
 private:
     struct Native;
     void fail(const QString &reason);
+    void reportBackendFault(const QString &reason);
     void clearBot();
     void removeSessionFile();
     void record(const QString &event, QJsonObject fields = {});

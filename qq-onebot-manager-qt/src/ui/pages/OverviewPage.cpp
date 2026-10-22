@@ -210,19 +210,22 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
 }
 
 void OverviewPage::setStatus(const StatusSnapshot &s) {
+    m_lastStatus = s;
     if (!s.valid) {
-        m_hint->setText(Strings::zh("staleHint"));
+        m_hint->setText(m_backendFault.isEmpty() ? Strings::zh("staleHint") : m_backendFault);
         m_hint->show();
         m_napcat->setValue("未知", false);
         m_onebot->setValue("未知", false);
-        m_bot->setValue("未知", false);
+        m_bot->setValue(m_backendFault.isEmpty() ? "未知" : "已停止", false);
         m_qq->setValue("未知", false);
         return;
     }
-    m_hint->hide();
+    if (m_backendFault.isEmpty()) m_hint->hide();
+    else setHint(m_backendFault);
     m_napcat->setValue(s.napcat ? Strings::zh("running") : Strings::zh("stopped"), s.napcat);
     m_onebot->setValue(s.onebot ? Strings::zh("running") : Strings::zh("stopped"), s.onebot);
-    m_bot->setValue(s.bot ? Strings::zh("running") : Strings::zh("stopped"), s.bot);
+    const bool botRunning = s.bot && m_backendFault.isEmpty();
+    m_bot->setValue(botRunning ? Strings::zh("running") : Strings::zh("stopped"), botRunning);
     const QString account = s.qqNumber.isEmpty()
         ? (s.qqLoggedIn ? Strings::zh("running") : "未登录")
         : (s.qqNickname.isEmpty() ? "QQ 账号" : s.qqNickname);
@@ -241,6 +244,17 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
             m_qq->setIconPixmap(pm);
         });
     }
+}
+
+void OverviewPage::setBackendFault(const QString &reason) {
+    m_backendFault = reason;
+    setStatus(m_lastStatus);
+}
+
+void OverviewPage::clearBackendFault() {
+    m_backendFault.clear();
+    m_lastStatus.bot = true; // The runtime has accepted an exact live backend.
+    setStatus(m_lastStatus);
 }
 
 void OverviewPage::setStatNumbers(int images, int links, const QString &lastReport) {

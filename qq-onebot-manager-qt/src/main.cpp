@@ -110,6 +110,8 @@ int main(int argc, char *argv[]) {
     });
 
     auto *overview = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
+    QObject::connect(&runtime, &ManagedRuntime::backendFault, overview, &OverviewPage::setBackendFault);
+    QObject::connect(&runtime, &ManagedRuntime::backendReady, overview, &OverviewPage::clearBackendFault);
     // 采集按钮初始状态来自暂停标记文件（不依赖滞后的状态刷新）
     overview->setCollectionPaused(QFileInfo::exists(Paths::repoRoot() + "/run/collection-paused"));
     auto *statusMonitor = new StatusMonitor(Paths::statusFile(), 4000, &window);
@@ -131,6 +133,11 @@ int main(int argc, char *argv[]) {
         ? QStringLiteral("后台随管理器启停 · 已启用异常恢复")
         : QStringLiteral("后台随管理器启停"));
     bool pendingRestart = false;
+    bool launchFaulted = false;
+    QObject::connect(&runtime, &ManagedRuntime::backendFault, serviceControl, [&] {
+        launchFaulted = true;
+        serviceControl->cancel();
+    });
     std::function<void(bool)> runBackend;
     runBackend = [&](bool restart) {
         if (shuttingDown) return;
@@ -142,20 +149,22 @@ int main(int argc, char *argv[]) {
             pendingRestart = pendingRestart || restart;
             return;
         }
+        launchFaulted = false;
         runtime.beginTransition();
         serviceControl->run({"-m", "qq_onebot_whitelist.control", restart ? "bot-restart" : "start"});
     };
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
     QObject::connect(serviceControl, &ServiceControl::finished, overview, [&](bool ok, const QString &out) {
         if (shuttingDown) return;
-        if (!ok) {
-            overview->setHint("托管启动失败：" + out.trimmed());
-            runtime.startupFailed();
-            return;
-        }
         if (pendingRestart) {
             pendingRestart = false;
             runBackend(true);
+            return;
+        }
+        if (launchFaulted) return; // Preserve the timeout reason after cancellation.
+        if (!ok) {
+            overview->setHint("托管启动失败：" + out.trimmed());
+            runtime.startupFailed();
             return;
         }
         const qint64 pid = QJsonDocument::fromJson(out.toUtf8()).object().value("pid").toInteger();

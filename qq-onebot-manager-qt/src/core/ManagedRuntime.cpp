@@ -37,6 +37,7 @@ struct StartupAttributes {
     std::vector<unsigned char> storage;
     std::vector<HANDLE> inheritedHandles;
     HANDLE job = nullptr;
+    std::vector<HANDLE> jobs;
     bool initialized = false;
 
     ~StartupAttributes() { reset(); }
@@ -49,14 +50,17 @@ struct StartupAttributes {
         storage.clear();
         inheritedHandles.clear();
         job = nullptr;
+        jobs.clear();
     }
 
-    bool prepare(const STARTUPINFOW &original, HANDLE ownedJob, QString *error)
+    bool prepare(const STARTUPINFOW &original, HANDLE ownedJob, HANDLE commandJob, QString *error)
     {
         reset();
         info.StartupInfo = original;
         info.StartupInfo.cb = sizeof(info);
         job = ownedJob;
+        jobs.push_back(ownedJob);
+        if (commandJob) jobs.push_back(commandJob);
 
         // Qt's own extended startup attributes may contain its pipe handle list.
         // Reconstruct that list because the opaque attribute list cannot be
@@ -94,7 +98,7 @@ struct StartupAttributes {
         }
         initialized = true;
         if (!UpdateProcThreadAttribute(info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
-                                       &job, sizeof(job), nullptr, nullptr)) {
+                                       jobs.data(), jobs.size() * sizeof(HANDLE), nullptr, nullptr)) {
             *error = windowsError(QStringLiteral("Cannot bind child to manager Job at creation"));
             return false;
         }
@@ -136,9 +140,9 @@ ManagedRuntime::ManagedRuntime(QString repoRoot, QObject *parent)
             const bool known = GetExitCodeProcess(m_native->bot, &code);
             record(QStringLiteral("backend_exited"), {{"pid", m_botPid},
                    {"exitCode", known ? QJsonValue(qint64(code)) : QJsonValue()}});
-            fail(QStringLiteral("后端进程已退出，已停止本次管理会话。"));
+            reportBackendFault(QStringLiteral("采集后端已退出；管理器继续运行，可点击“重启”恢复。"));
         } else if (state == WAIT_FAILED)
-            fail(windowsError(QStringLiteral("Cannot monitor backend process")));
+            reportBackendFault(windowsError(QStringLiteral("Cannot monitor backend process")));
 #endif
     });
 }
@@ -158,7 +162,7 @@ void ManagedRuntime::checkStartupDeadline()
     // a busy GUI thread resumes. Completion can also start a new restart.
     if (m_stopping || m_failed || m_botPid || m_transition != transition)
         return;
-    fail(QStringLiteral("后端未在限定时间内启动，已停止本次管理会话。"));
+    reportBackendFault(QStringLiteral("采集后端启动超时；管理器继续运行，请查看日志后重试。"));
 }
 
 bool ManagedRuntime::initialize(QString *error)
@@ -256,7 +260,7 @@ bool ManagedRuntime::initialize(QString *error)
 #endif
 }
 
-void ManagedRuntime::bind(QProcess *process)
+void ManagedRuntime::bind(QProcess *process, std::function<quintptr()> commandJob)
 {
     if (!process || !activeRuntime || !activeRuntime->m_initialized)
         return;
@@ -268,14 +272,15 @@ void ManagedRuntime::bind(QProcess *process)
     const auto priorModifier = process->createProcessArgumentsModifier();
     auto attributes = std::make_shared<StartupAttributes>();
     process->setCreateProcessArgumentsModifier(
-        [owner, priorModifier, attributes](QProcess::CreateProcessArguments *args) {
+        [owner, priorModifier, attributes, commandJob](QProcess::CreateProcessArguments *args) {
             if (priorModifier)
                 priorModifier(args);
             QString reason;
             bool prepared = owner && owner->m_initialized && !owner->m_stopping
                             && owner->m_native->job && args->startupInfo;
             if (prepared)
-                prepared = attributes->prepare(*args->startupInfo, owner->m_native->job, &reason);
+                prepared = attributes->prepare(*args->startupInfo, owner->m_native->job,
+                    commandJob ? reinterpret_cast<HANDLE>(commandJob()) : nullptr, &reason);
             if (!prepared) {
                 if (reason.isEmpty())
                     reason = QStringLiteral("Manager runtime is unavailable; backend launch refused");
@@ -313,7 +318,7 @@ void ManagedRuntime::expectBot(qint64 pid)
     if (!m_initialized || m_stopping || m_failed)
         return;
     if (pid <= 0 || quint64(pid) > 0xffffffffULL) {
-        fail(QStringLiteral("后端进程标识无效，已停止本次管理会话。"));
+        reportBackendFault(QStringLiteral("采集后端进程标识无效；管理器继续运行，请重试。"));
         return;
     }
     if (m_botPid == pid)
@@ -322,14 +327,14 @@ void ManagedRuntime::expectBot(qint64 pid)
     HANDLE bot = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
                              FALSE, DWORD(pid));
     if (!bot) {
-        fail(windowsError(QStringLiteral("Cannot open backend process")));
+        reportBackendFault(windowsError(QStringLiteral("Cannot open backend process")));
         return;
     }
     BOOL inJob = FALSE;
     if (!IsProcessInJob(bot, m_native->job, &inJob) || !inJob) {
         const QString reason = QStringLiteral("Backend process is not owned by this manager session");
         CloseHandle(bot);
-        fail(reason);
+        reportBackendFault(reason);
         return;
     }
     clearBot();
@@ -337,11 +342,12 @@ void ManagedRuntime::expectBot(qint64 pid)
     m_botPid = pid;
     m_deadline.stop();
     if (WaitForSingleObject(bot, 0) != WAIT_TIMEOUT) {
-        fail(QStringLiteral("后端进程已退出，已停止本次管理会话。"));
+        reportBackendFault(QStringLiteral("采集后端已退出；管理器继续运行，可点击“重启”恢复。"));
         return;
     }
     m_poll.start();
     record(QStringLiteral("backend_accepted"), {{"pid", pid}});
+    emit backendReady();
 #endif
 }
 
@@ -358,7 +364,20 @@ void ManagedRuntime::startupCommandCompleted(int exitCode, int exitStatus, qint6
 
 void ManagedRuntime::startupFailed()
 {
-    fail(QStringLiteral("后端启动命令失败，已停止本次管理会话。"));
+    reportBackendFault(QStringLiteral("采集后端启动失败；管理器继续运行，请查看日志后重试。"));
+}
+
+void ManagedRuntime::reportBackendFault(const QString &reason)
+{
+    if (!m_initialized || m_stopping || m_failed)
+        return;
+    // Keep the owner Job and session alive. Only manager shutdown closes them;
+    // a failed backend must not terminate the manager or unrelated children.
+    ++m_transition;
+    m_deadline.stop();
+    clearBot();
+    record(QStringLiteral("backend_failed"), {{"reason", reason}});
+    emit backendFault(reason);
 }
 
 bool ManagedRuntime::markUserStopped()

@@ -137,6 +137,29 @@ private slots:
         ThemeManager::apply(qApp, ThemeManager::Theme::Dark);
         QCOMPARE(card.findChild<QLabel *>("cardIcon")->pixmap().toImage(), before);
     }
+    void backendFailureSurvivesStaleStatusRefresh() {
+        OverviewPage page;
+        StatusSnapshot cached;
+        cached.valid = true;
+        cached.bot = true;
+        page.setStatus(cached);
+        auto cards = page.findChildren<StatusCard *>();
+        QCOMPARE(cards.size(), 4);
+        auto *botValue = cards.at(2)->findChild<QLabel *>("cardValue");
+        QVERIFY(botValue);
+        const QString healthy = botValue->text();
+        const QString failure = QStringLiteral("采集后端已退出；管理器继续运行，可重启。");
+        page.setBackendFault(failure);
+        QVERIFY(botValue->text() != healthy);
+        page.setStatus(cached); // Old heartbeat must not resurrect the failed backend.
+        QVERIFY(botValue->text() != healthy);
+        bool found = false;
+        for (auto *label : page.findChildren<QLabel *>())
+            if (label->text() == failure) found = true;
+        QVERIFY(found);
+        page.clearBackendFault();
+        QCOMPARE(botValue->text(), healthy);
+    }
     void repeatedLaunchRestoresHiddenAndMinimizedWindow() {
         const QString endpoint = "qq-manager-test-" + QUuid::createUuid().toString(QUuid::Id128);
         SingleInstance primary(endpoint);

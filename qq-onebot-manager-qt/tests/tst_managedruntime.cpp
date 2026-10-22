@@ -255,9 +255,10 @@ private slots:
     void shutdownTerminatesTree();
     void forcedOwnerExitTerminatesTree();
     void explicitBreakawaySurvivesOwnerExit();
-    void unexpectedBotExitIsFatal();
+    void unexpectedBotExitKeepsOwnerAndSiblings();
     void controlledTransitionAllowsReplacement();
-    void transitionTimeoutFailsClosed();
+    void transitionTimeoutAllowsRetry();
+    void startupFailureAllowsRetry();
     void delayedStartupCompletionDoesNotTimeout();
     void deadlineReconciliationAllowsNewTransition();
     void runningStartupStillTimesOut();
@@ -356,7 +357,7 @@ void TestManagedRuntime::explicitBreakawaySurvivesOwnerExit()
 #endif
 }
 
-void TestManagedRuntime::unexpectedBotExitIsFatal()
+void TestManagedRuntime::unexpectedBotExitKeepsOwnerAndSiblings()
 {
 #ifdef Q_OS_WIN
     QTemporaryDir root;
@@ -365,6 +366,7 @@ void TestManagedRuntime::unexpectedBotExitIsFatal()
     QString error;
     QVERIFY2(runtime.initialize(&error), qPrintable(error));
     QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
     QProcess bot, sibling;
     startBound(bot);
     startBound(sibling);
@@ -376,16 +378,26 @@ void TestManagedRuntime::unexpectedBotExitIsFatal()
     QCOMPARE(fatal.count(), 0);
     bot.kill();
     QVERIFY(bot.waitForFinished(5000));
-    QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(fault.count(), 1, 5000);
+    QCOMPARE(fatal.count(), 0);
     QFile lifecycle(QDir(root.path()).filePath("logs/manager-lifecycle.jsonl"));
     QVERIFY(lifecycle.open(QIODevice::ReadOnly));
     const QByteArray events = lifecycle.readAll();
     QVERIFY(events.contains("backend_exited"));
     QVERIFY(events.contains("exitCode"));
-    QVERIFY(events.contains("session_stopped"));
+    QVERIFY(!events.contains("session_stopped"));
+    QVERIFY(siblingIdentity.alive());
+    QVERIFY(QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
+    QProcess replacement;
+    runtime.beginTransition();
+    startBound(replacement);
+    QVERIFY(replacement.waitForStarted(5000));
+    runtime.expectBot(replacement.processId());
+    QCOMPARE(fatal.count(), 0);
+    runtime.shutdown();
     QTRY_VERIFY_WITH_TIMEOUT(siblingIdentity.dead(), 5000);
-    QVERIFY(!QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
     QVERIFY(sibling.waitForFinished(5000) || sibling.state() == QProcess::NotRunning);
+    QVERIFY(replacement.waitForFinished(5000) || replacement.state() == QProcess::NotRunning);
 #else
     QSKIP("Windows Job test");
 #endif
@@ -425,7 +437,7 @@ void TestManagedRuntime::controlledTransitionAllowsReplacement()
 #endif
 }
 
-void TestManagedRuntime::transitionTimeoutFailsClosed()
+void TestManagedRuntime::transitionTimeoutAllowsRetry()
 {
 #ifdef Q_OS_WIN
     QTemporaryDir root;
@@ -434,22 +446,60 @@ void TestManagedRuntime::transitionTimeoutFailsClosed()
     QString error;
     QVERIFY2(runtime.initialize(&error), qPrintable(error));
     QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
     QProcess child, queuedLaunch;
     startBound(child);
-    ManagedRuntime::bind(&queuedLaunch); // Modifier must refuse use after timeout.
+    ManagedRuntime::bind(&queuedLaunch);
     QVERIFY(child.waitForStarted(5000));
     ExactProcess childIdentity;
     QVERIFY(childIdentity.open(child.processId()));
     runtime.beginTransition(30);
-    QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(childIdentity.dead(), 5000);
-    QVERIFY(child.waitForFinished(5000) || child.state() == QProcess::NotRunning);
+    QTRY_COMPARE_WITH_TIMEOUT(fault.count(), 1, 5000);
+    QCOMPARE(fatal.count(), 0);
+    QVERIFY(childIdentity.alive());
     queuedLaunch.start(QCoreApplication::applicationFilePath(), {"--dummy-leaf"});
-    QVERIFY(!queuedLaunch.waitForStarted(3000));
-    QCOMPARE(queuedLaunch.state(), QProcess::NotRunning);
-    QVERIFY(!runtime.initialize(&error));
+    QVERIFY(queuedLaunch.waitForStarted(3000));
+    ExactProcess retry;
+    QVERIFY(retry.open(queuedLaunch.processId()));
+    QVERIFY(belongsToJob(retry.handle, jobName(root.path())));
+    runtime.beginTransition();
+    runtime.expectBot(queuedLaunch.processId());
+    runtime.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(childIdentity.dead() && retry.dead(), 5000);
+    QVERIFY(child.waitForFinished(5000) || child.state() == QProcess::NotRunning);
+    QVERIFY(queuedLaunch.waitForFinished(5000) || queuedLaunch.state() == QProcess::NotRunning);
     QVERIFY(!QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
-    QCOMPARE(fatal.count(), 1);
+    QCOMPARE(fatal.count(), 0);
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
+void TestManagedRuntime::startupFailureAllowsRetry()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY(runtime.initialize(&error));
+    QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
+    runtime.beginTransition();
+    runtime.startupFailed();
+    QCOMPARE(fault.count(), 1);
+    QCOMPARE(fatal.count(), 0);
+    QVERIFY(QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
+    runtime.expectBot(qint64(GetCurrentProcessId())); // Foreign PID is still refused.
+    QCOMPARE(fault.count(), 2);
+    QCOMPARE(fatal.count(), 0);
+    QProcess replacement;
+    runtime.beginTransition();
+    startBound(replacement);
+    QVERIFY(replacement.waitForStarted(5000));
+    runtime.expectBot(replacement.processId());
+    QCOMPARE(fatal.count(), 0);
+    runtime.shutdown();
+    QVERIFY(replacement.waitForFinished(5000) || replacement.state() == QProcess::NotRunning);
 #else
     QSKIP("Windows Job test");
 #endif
@@ -538,6 +588,7 @@ void TestManagedRuntime::runningStartupStillTimesOut()
     QString error;
     QVERIFY(runtime.initialize(&error));
     QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
     QProcess command;
     startBound(command);
     QVERIFY(command.waitForStarted(5000));
@@ -547,7 +598,10 @@ void TestManagedRuntime::runningStartupStillTimesOut()
         command.waitForFinished(0);
     });
     runtime.beginTransition(30);
-    QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(fault.count(), 1, 5000);
+    QCOMPARE(fatal.count(), 0);
+    QVERIFY(identity.alive());
+    runtime.shutdown();
     QTRY_VERIFY_WITH_TIMEOUT(identity.dead(), 5000);
     QVERIFY(command.waitForFinished(5000) || command.state() == QProcess::NotRunning);
 #else

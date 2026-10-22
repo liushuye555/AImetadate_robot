@@ -21,6 +21,7 @@ private slots:
     void runningCommandTimesOutAndIsCleanedUp();
     void nonzeroExitIsFailure();
     void failedToStartIsFailure();
+    void breakawaySurvivesCommandAndManagerShutdown();
 };
 
 void TestServiceControl::completionBeforeDeadlineDispatchIsReconciled()
@@ -72,7 +73,18 @@ void TestServiceControl::completionBeforeDeadlineDispatchIsReconciled()
     QFile lifecycle(QDir(root.path()).filePath(QStringLiteral("logs/manager-lifecycle.jsonl")));
     QVERIFY(lifecycle.open(QIODevice::ReadOnly));
     QVERIFY(lifecycle.readAll().contains("backend_accepted"));
+    const qint64 botPid = QJsonDocument::fromJson(finished.at(0).at(1).toString().toUtf8())
+        .object().value("pid").toInteger();
+    HANDLE bot = OpenProcess(SYNCHRONIZE, FALSE, DWORD(botPid));
+    QVERIFY(bot);
+    const auto closeBot = qScopeGuard([&] { CloseHandle(bot); });
+    // Reusing the control channel closes its old command Job handle. A healthy
+    // backend must remain alive under the manager's root Job.
+    command.run({QStringLiteral("-c"), QStringLiteral("pass")});
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+    QCOMPARE(WaitForSingleObject(bot, 0), DWORD(WAIT_TIMEOUT));
     runtime.shutdown();
+    QCOMPARE(WaitForSingleObject(bot, 5000), DWORD(WAIT_OBJECT_0));
 #else
     QSKIP("Managed Job regression coverage requires Windows");
 #endif
@@ -89,12 +101,38 @@ void TestServiceControl::runningCommandTimesOutAndIsCleanedUp()
     connect(&runtime, &ManagedRuntime::startupDeadline,
             &command, &ServiceControl::reconcileFinished);
     QSignalSpy fatal(&runtime, &ManagedRuntime::fatal);
-    runtime.beginTransition(30);
-    command.run({QStringLiteral("-c"), QStringLiteral("import time; time.sleep(30)")});
+    connect(&runtime, &ManagedRuntime::backendFault, &command, &ServiceControl::cancel);
+    ServiceControl sibling;
+    sibling.run({QStringLiteral("-c"), QStringLiteral("import time; time.sleep(30)")});
+    QTRY_VERIFY_WITH_TIMEOUT(sibling.isRunning(), 5000);
+    runtime.beginTransition(700);
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
+    QSignalSpy finished(&command, &ServiceControl::finished);
+    QTemporaryDir evidence;
+    const QString childFile = QDir(evidence.path()).filePath("child.pid");
+    command.run({QStringLiteral("-c"), QStringLiteral(
+        "import subprocess,sys,time,pathlib; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']); pathlib.Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(30)"), childFile});
     QTRY_VERIFY_WITH_TIMEOUT(command.isRunning(), 5000);
-    QTRY_COMPARE_WITH_TIMEOUT(fatal.count(), 1, 5000);
-    runtime.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(childFile), 5000);
+    QFile childPid(childFile);
+    QVERIFY(childPid.open(QIODevice::ReadOnly));
+    HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, childPid.readAll().trimmed().toUInt());
+    QVERIFY(child);
+    const auto cleanup = qScopeGuard([&] { CloseHandle(child); });
+    QTRY_COMPARE_WITH_TIMEOUT(fault.count(), 1, 5000);
+    QCOMPARE(fatal.count(), 0);
     QTRY_VERIFY_WITH_TIMEOUT(!command.isRunning(), 5000);
+    QCOMPARE(WaitForSingleObject(child, 5000), DWORD(WAIT_OBJECT_0));
+    QVERIFY(sibling.isRunning());
+    QCOMPARE(finished.count(), 1);
+    runtime.beginTransition(5000);
+    command.run({QStringLiteral("-c"), QStringLiteral("print('retry-ok')")});
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+    QVERIFY(finished.at(1).at(0).toBool());
+    QVERIFY(finished.at(1).at(1).toString().contains("retry-ok"));
+    QVERIFY(sibling.isRunning());
+    runtime.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(!sibling.isRunning(), 5000);
 #else
     QSKIP("Managed Job regression coverage requires Windows");
 #endif
@@ -107,6 +145,38 @@ void TestServiceControl::nonzeroExitIsFailure()
     command.run({QStringLiteral("-c"), QStringLiteral("raise SystemExit(17)")});
     QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
     QCOMPARE(finished.at(0).at(0).toBool(), false);
+}
+
+void TestServiceControl::breakawaySurvivesCommandAndManagerShutdown()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY2(runtime.initialize(&error), qPrintable(error));
+    ServiceControl command;
+    const QString pidFile = QDir(root.path()).filePath("escaped.pid");
+    command.run({QStringLiteral("-c"), QStringLiteral(
+        "import subprocess,sys,time,pathlib; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],creationflags=0x01000000|0x08000000,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); pathlib.Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(30)"), pidFile});
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(pidFile), 5000);
+    QFile file(pidFile);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    HANDLE escaped = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE,
+                                 file.readAll().trimmed().toUInt());
+    QVERIFY(escaped);
+    const auto cleanup = qScopeGuard([&] {
+        TerminateProcess(escaped, 0);
+        WaitForSingleObject(escaped, 5000);
+        CloseHandle(escaped);
+    });
+    command.cancel();
+    QTRY_VERIFY_WITH_TIMEOUT(!command.isRunning(), 5000);
+    QCOMPARE(WaitForSingleObject(escaped, 0), DWORD(WAIT_TIMEOUT));
+    runtime.shutdown();
+    QCOMPARE(WaitForSingleObject(escaped, 0), DWORD(WAIT_TIMEOUT));
+#else
+    QSKIP("Nested Job breakaway requires Windows");
+#endif
 }
 
 void TestServiceControl::failedToStartIsFailure()
