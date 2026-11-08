@@ -1082,7 +1082,8 @@ def test_all_gallery_masks_restored_images_from_obfuscation_category(tmp_path):
     for path in groups:
         body = path.read_text(encoding='utf-8')
         members = json.loads(body[body.index('{'):body.rindex('}') + 1])['members']
-        assert {item['id']: item['masked'] for item in members} == {'1': True, '2': False}
+        # The representative image is a member too; its mask must not be lost.
+        assert {item['id']: item['masked'] for item in members} == {'1': True, '2': False, '3': True}
 
 
 def test_saved_collection_masks_restored_images(tmp_path):

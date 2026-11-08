@@ -617,6 +617,7 @@ def _assign_dup_groups(entries: list[tuple[str, int, tuple[int, int], str]]) -> 
         group_id = f'dup{group_seq:05d}'
         group_seq += 1
         bucket.append((digest, md5, group_id))
+        assign[key] = group_id
     counts: dict[str, int] = {}
     for group_id in assign.values():
         counts[group_id] = counts.get(group_id, 0) + 1

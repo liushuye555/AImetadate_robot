@@ -279,11 +279,15 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
                 try:
                     if path == '/api/gallery/meta':
                         self._json(200, {**facets(project_dir), 'token': session_token})
-                    elif path == '/api/gallery/images':
+                    elif path in ('/api/gallery/images', '/api/gallery/browse', '/api/gallery/group'):
                         params = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                         if any(len(v) != 1 for v in params.values()):
                             raise ValueError('筛选条件不能重复')
-                        self._json(200, query_images(project_dir, {k: v[0] for k,v in params.items()}))
+                        from .gallery_browse import browse_images, image_group
+                        reader = {'/api/gallery/images': query_images,
+                                  '/api/gallery/browse': browse_images,
+                                  '/api/gallery/group': image_group}[path]
+                        self._json(200, reader(project_dir, {k: v[0] for k,v in params.items()}))
                     elif match := re.fullmatch(r'/api/gallery/images/([1-9][0-9]{0,17})', path):
                         self._json(200, image_details(project_dir, int(match[1])))
                     elif match := re.fullmatch(r'/media/images/([1-9][0-9]{0,17})(/thumbnail)?', path):

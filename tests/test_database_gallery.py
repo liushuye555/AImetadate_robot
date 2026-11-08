@@ -238,7 +238,7 @@ def test_lightbox_reads_original_prompt_and_merged_file_without_exposing_paths(p
     with server(project) as base:
         for selected in (image, merged):
             detail = get(base, f'/api/gallery/images/{selected}')
-            assert detail == {'filename': '100.png', 'prompt': prompt.strip()}
+            assert detail == {'filename': '100.png', 'prompt': prompt.strip(), 'nickname': ''}
             assert 'truncated' not in detail['prompt']
         for selected in (outside, 999999):
             with pytest.raises(HTTPError) as exc:

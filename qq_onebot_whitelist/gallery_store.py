@@ -191,9 +191,11 @@ def image_details(project_dir: Path, image_id: int) -> dict:
     """Read the original prompt lazily, as the former static lightbox did."""
     from .export_dataset import extract_caption
     with closing(connect(project_dir)) as conn:
-        row = conn.execute(_base(conn) + 'SELECT file_id FROM available WHERE id=?',
+        from .build_image_view import member_name_map_from_conn
+        row = conn.execute(_base(conn) + 'SELECT file_id,user_id FROM available WHERE id=?',
                            (image_id,)).fetchone()
+        nickname = member_name_map_from_conn(conn).get(str(row['user_id']), '') if row else ''
     if not row or not row['file_id']:
         raise FileNotFoundError('图片未归档')
     path = image_path(project_dir, row['file_id'])
-    return {'filename': path.name, 'prompt': extract_caption(path)}
+    return {'filename': path.name, 'prompt': extract_caption(path), 'nickname': nickname}
