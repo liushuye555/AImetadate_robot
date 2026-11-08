@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QGroupBox>
@@ -56,7 +57,16 @@ SettingsPage::SettingsPage(QWidget *parent) : QWidget(parent) {
             m_message->setText(Strings::zh("error") + ": " + error);
             return;
         }
-        emit saveRequested(buildPatch());
+        if (hasGatewayDraftChanges()) {
+            if (!hasUnsavedNonGatewayChanges()) {
+                emit gatewaySwitchRequested(gatewayDraftPatch());
+                return;
+            }
+            m_pendingGatewayPatch = gatewayDraftPatch();
+            emit saveRequested(buildBusinessPatch());
+            return;
+        }
+        emit saveRequested(buildBusinessPatch());
     });
 }
 
@@ -114,12 +124,103 @@ QWidget *SettingsPage::buildGeneralTab() {
     m_notifications = new QCheckBox(general);
     m_notifications->setChecked(true);
     auto *webui = new QPushButton(Strings::zh("openNapcat"), general);
+    auto *officialBind = new QPushButton("连接 QQ 官方机器人（扫码）", general);
+    officialBind->setObjectName("officialBind");
     generalForm->addRow(Strings::zh("language"), m_language);
     generalForm->addRow(Strings::zh("theme"), m_theme);
     generalForm->addRow(Strings::zh("autoStart"), m_autoStart);
     generalForm->addRow(Strings::zh("notifications"), m_notifications);
     generalForm->addRow(Strings::zh("webui"), webui);
+    generalForm->addRow("QQ 官方接入", officialBind);
     layout->addWidget(general);
+
+    auto *gatewayGroup = new QGroupBox("接入框架", container);
+    auto *gatewayLayout = new QVBoxLayout(gatewayGroup);
+    auto *gatewayHelp = new QLabel(
+        "选择运行配置中的接入方式后，可在这里检查连接并切换。操作只更新接入框架设置，其他未保存设置不会带入。",
+        gatewayGroup);
+    gatewayHelp->setWordWrap(true);
+    gatewayLayout->addWidget(gatewayHelp);
+    auto *gatewayButtons = new QHBoxLayout;
+    auto *switchGateway = new QPushButton("检查并切换框架", gatewayGroup);
+    auto *restoreGateway = new QPushButton("恢复上次框架", gatewayGroup);
+    switchGateway->setObjectName("gatewaySwitch");
+    restoreGateway->setObjectName("gatewayRestore");
+    m_gatewaySwitchButtons = {switchGateway, restoreGateway};
+    for (QPushButton *button : m_gatewaySwitchButtons) {
+        button->setEnabled(!m_gatewaySwitchBusy);
+        gatewayButtons->addWidget(button);
+    }
+    gatewayButtons->addStretch();
+    gatewayLayout->addLayout(gatewayButtons);
+    m_gatewaySwitchMessage = new QLabel(gatewayGroup);
+    m_gatewaySwitchMessage->setObjectName("gatewaySwitchMessage");
+    m_gatewaySwitchMessage->setWordWrap(true);
+    m_gatewaySwitchMessage->setText(m_gatewaySwitchResultText);
+    m_gatewaySwitchMessage->setProperty("class", m_gatewaySwitchResultOk ? "success" : "error");
+    gatewayLayout->addWidget(m_gatewaySwitchMessage);
+    layout->addWidget(gatewayGroup);
+    connect(switchGateway, &QPushButton::clicked, this, [this] {
+        if (!validationError().isEmpty()) {
+            setGatewaySwitchResult(QStringLiteral("请先修正设置中的无效数值。"), false);
+            return;
+        }
+        if (hasUnsavedNonGatewayChanges()) {
+            setGatewaySwitchResult(QStringLiteral("请先保存接入框架以外的设置，再进行切换。"), false);
+            return;
+        }
+        const QJsonObject patch = gatewayDraftPatch();
+        if (patch.isEmpty()) {
+            setGatewaySwitchResult(QStringLiteral("当前没有可用的接入框架设置，请先加载运行配置。"), false);
+            return;
+        }
+        emit gatewaySwitchRequested(patch);
+    });
+    connect(restoreGateway, &QPushButton::clicked, this, [this] {
+        if (hasUnsavedNonGatewayChanges()) {
+            setGatewaySwitchResult(QStringLiteral("请先保存接入框架以外的设置，再恢复上次框架。"), false);
+            return;
+        }
+        emit gatewayRestoreRequested();
+    });
+
+    auto *snowLuma = new QGroupBox("SnowLuma", container);
+    auto *snowLayout = new QVBoxLayout(snowLuma);
+    auto *snowHelp = new QLabel(
+        "安装会下载并准备 SnowLuma 运行环境。安装后请打开管理页，按页面提示完成服务条款确认和 QQ 登录。\n"
+        "切换会先停止机器人，验证连接并保存原配置备份。完成后请在概览页启动机器人；管理器会保持打开。",
+        snowLuma);
+    snowHelp->setWordWrap(true);
+    snowLayout->addWidget(snowHelp);
+    auto *snowButtons = new QGridLayout;
+    const QList<QPair<QString, QString>> actions = {
+        {"安装 SnowLuma", "install"}, {"启动 SnowLuma", "start"},
+        {"停止 SnowLuma", "stop"}, {"切换到 SnowLuma", "switch"},
+        {"恢复上次接入", "restore"},
+        {"打开管理页", "webui"}, {"查看运行日志", "logs"}
+    };
+    int actionIndex = 0;
+    for (const auto &action : actions) {
+        auto *button = new QPushButton(action.first, snowLuma);
+        button->setObjectName("snowLuma_" + action.second);
+        snowButtons->addWidget(button, actionIndex / 4, actionIndex % 4);
+        ++actionIndex;
+        if (action.second != "webui") {
+            m_snowLumaButtons.append(button);
+            button->setEnabled(!m_snowLumaBusy && !m_gatewaySwitchBusy);
+        }
+        connect(button, &QPushButton::clicked, this, [this, key = action.second] {
+            emit snowLumaActionRequested(key);
+        });
+    }
+    snowLayout->addLayout(snowButtons);
+    m_snowLumaMessage = new QLabel(snowLuma);
+    m_snowLumaMessage->setObjectName("snowLumaMessage");
+    m_snowLumaMessage->setWordWrap(true);
+    m_snowLumaMessage->setText(m_snowLumaResultText);
+    m_snowLumaMessage->setProperty("class", m_snowLumaResultOk ? "success" : "error");
+    snowLayout->addWidget(m_snowLumaMessage);
+    layout->addWidget(snowLuma);
     layout->addStretch();
 
     installWheelGuard(m_language);
@@ -137,6 +238,7 @@ QWidget *SettingsPage::buildGeneralTab() {
     });
     connect(m_notifications, &QCheckBox::toggled, this, &SettingsPage::notificationsToggled);
     connect(webui, &QPushButton::clicked, this, [this] { emit webuiRequested(); });
+    connect(officialBind, &QPushButton::clicked, this, &SettingsPage::officialBindRequested);
     return scroll;
 }
 
@@ -193,6 +295,10 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
     m_tabLayouts.clear();
     m_fields.clear();
     m_providerMap.clear();
+    m_snowLumaButtons.clear();
+    m_snowLumaMessage = nullptr;
+    m_gatewaySwitchButtons.clear();
+    m_gatewaySwitchMessage = nullptr;
 
     buildGeneralTab();
     buildProviderEditor();
@@ -234,8 +340,17 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
             field = box;
         } else if (kind == "select") {
             auto *combo = new QComboBox(this);
-            for (const QJsonValue &opt : obj.value("options").toArray()) combo->addItem(opt.toString());
-            combo->setCurrentText(obj.value("default").toString());
+            for (const QJsonValue &opt : obj.value("options").toArray()) {
+                const QString value = opt.toString();
+                if (key == "onebot.provider") {
+                    const QMap<QString, QString> names = {{"external", "通用 OneBot v11"}, {"napcat", "NapCat"},
+                        {"llbot", "LLBot"}, {"snowluma", "SnowLuma"}, {"lagrange", "Lagrange.OneBot（旧版）"},
+                        {"qqofficial", "QQ 官方机器人"}};
+                    combo->addItem(names.value(value, value), value);
+                } else combo->addItem(value);
+            }
+            if (key == "onebot.provider") combo->setCurrentIndex(combo->findData(obj.value("default").toString()));
+            else combo->setCurrentText(obj.value("default").toString());
             connect(combo, &QComboBox::currentTextChanged, this, [this] { markDirty(); });
             installWheelGuard(combo);
             field = combo;
@@ -291,11 +406,38 @@ void SettingsPage::setSchema(const QVariant &schemaVariant) {
         m_message->setText(Strings::zh("error") + ": schema 为空");
     m_dirty = false;
     m_save->setEnabled(false);
+    m_baselinePatch = buildPatch();
+    if (!m_pendingGatewayPatch.isEmpty()) {
+        for (auto it = m_pendingGatewayPatch.constBegin(); it != m_pendingGatewayPatch.constEnd(); ++it) {
+            QWidget *field = m_fields.value(it.key(), nullptr);
+            if (!field) continue;
+            const QJsonValue value = it.value();
+            if (auto *box = qobject_cast<QCheckBox *>(field)) {
+                box->setChecked(value.toBool());
+            } else if (auto *combo = qobject_cast<QComboBox *>(field)) {
+                int index = combo->findData(value.toVariant());
+                if (index < 0) index = combo->findText(value.toVariant().toString());
+                if (index >= 0) combo->setCurrentIndex(index);
+            } else if (auto *edit = qobject_cast<QLineEdit *>(field)) {
+                edit->setText(value.isNull() ? QString() : value.toVariant().toString());
+            } else if (auto *list = qobject_cast<QPlainTextEdit *>(field)) {
+                QStringList lines;
+                for (const QJsonValue &entry : value.toArray()) lines << entry.toString();
+                list->setPlainText(lines.join('\n'));
+            }
+        }
+        m_pendingGatewayPatch = {};
+        if (hasGatewayDraftChanges()) {
+            m_dirty = true;
+            m_save->setEnabled(!m_snowLumaBusy && !m_gatewaySwitchBusy);
+            setGatewaySwitchResult(QStringLiteral("其他设置已保存，接入参数请点击检查并切换框架。"), true);
+        }
+    }
 }
 
 void SettingsPage::markDirty() {
     m_dirty = true;
-    m_save->setEnabled(true);
+    m_save->setEnabled(!m_snowLumaBusy && !m_gatewaySwitchBusy);
 }
 
 QString SettingsPage::validationError() const {
@@ -323,7 +465,7 @@ QJsonObject SettingsPage::buildPatch() const {
         const QString key = it.key();
         QWidget *w = it.value();
         if (auto *box = qobject_cast<QCheckBox *>(w)) patch.insert(key, box->isChecked());
-        else if (auto *combo = qobject_cast<QComboBox *>(w)) patch.insert(key, combo->currentText());
+        else if (auto *combo = qobject_cast<QComboBox *>(w)) patch.insert(key, combo->currentData().isValid() ? combo->currentData().toString() : combo->currentText());
         else if (auto *list = qobject_cast<QPlainTextEdit *>(w)) {
             QJsonArray values;
             const QStringList lines = list->toPlainText().split('\n');
@@ -341,6 +483,46 @@ QJsonObject SettingsPage::buildPatch() const {
                 patch.insert(key, edit->text());
         }
     }
+    return patch;
+}
+
+QJsonObject SettingsPage::buildBusinessPatch() const {
+    QJsonObject patch;
+    const QJsonObject all = buildPatch();
+    for (auto it = all.constBegin(); it != all.constEnd(); ++it)
+        if (!it.key().startsWith(QStringLiteral("onebot."))) patch.insert(it.key(), it.value());
+    return patch;
+}
+
+bool SettingsPage::hasGatewayDraftChanges() const {
+    const QJsonObject current = gatewayDraftPatch();
+    for (auto it = current.constBegin(); it != current.constEnd(); ++it)
+        if (m_baselinePatch.value(it.key()) != it.value()) return true;
+    for (auto it = m_baselinePatch.constBegin(); it != m_baselinePatch.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("onebot.")) && current.value(it.key()) != it.value())
+            return true;
+    }
+    return false;
+}
+
+bool SettingsPage::hasUnsavedNonGatewayChanges() const {
+    const QJsonObject current = buildPatch();
+    for (auto it = current.constBegin(); it != current.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("onebot."))) continue;
+        if (m_baselinePatch.value(it.key()) != it.value()) return true;
+    }
+    for (auto it = m_baselinePatch.constBegin(); it != m_baselinePatch.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("onebot."))) continue;
+        if (current.value(it.key()) != it.value()) return true;
+    }
+    return false;
+}
+
+QJsonObject SettingsPage::gatewayDraftPatch() const {
+    QJsonObject patch;
+    const QJsonObject current = buildPatch();
+    for (auto it = current.constBegin(); it != current.constEnd(); ++it)
+        if (it.key().startsWith(QStringLiteral("onebot."))) patch.insert(it.key(), it.value());
     return patch;
 }
 
@@ -481,6 +663,56 @@ void SettingsPage::setSavedMessage(const QString &text) {
 
 void SettingsPage::showError(const QString &text) {
     m_message->setText(Strings::zh("error") + ": " + text);
+}
+
+void SettingsPage::setSnowLumaBusy(bool busy) {
+    m_snowLumaBusy = busy;
+    const bool frozen = busy || m_gatewaySwitchBusy;
+    m_save->setEnabled(!frozen && m_dirty);
+    // Freeze configuration editors while a deployment command owns the config.
+    // The general tab keeps its WebUI link available during lengthy downloads.
+    for (int i = 1; i < m_stack->count(); ++i) m_stack->widget(i)->setEnabled(!frozen);
+    if (auto *binding = findChild<QPushButton *>("officialBind")) binding->setEnabled(!frozen);
+    for (QPushButton *button : m_snowLumaButtons)
+        if (button) button->setEnabled(!frozen);
+    for (QPushButton *button : m_gatewaySwitchButtons)
+        if (button) button->setEnabled(!busy && !m_gatewaySwitchBusy);
+    if (m_snowLumaMessage)
+        m_snowLumaMessage->setText(busy ? QStringLiteral("正在处理，请稍候…") : m_snowLumaMessage->text());
+}
+
+void SettingsPage::setSnowLumaResult(const QString &text, bool ok) {
+    m_snowLumaResultText = text;
+    m_snowLumaResultOk = ok;
+    if (!m_snowLumaMessage) return;
+    m_snowLumaMessage->setText(text);
+    m_snowLumaMessage->setProperty("class", ok ? "success" : "error");
+    m_snowLumaMessage->style()->unpolish(m_snowLumaMessage);
+    m_snowLumaMessage->style()->polish(m_snowLumaMessage);
+}
+
+void SettingsPage::setGatewaySwitchBusy(bool busy) {
+    m_gatewaySwitchBusy = busy;
+    const bool frozen = busy || m_snowLumaBusy;
+    m_save->setEnabled(!frozen && m_dirty);
+    for (int i = 1; i < m_stack->count(); ++i) m_stack->widget(i)->setEnabled(!frozen);
+    if (auto *binding = findChild<QPushButton *>("officialBind")) binding->setEnabled(!frozen);
+    for (QPushButton *button : m_gatewaySwitchButtons)
+        if (button) button->setEnabled(!frozen);
+    for (QPushButton *button : m_snowLumaButtons)
+        if (button) button->setEnabled(!busy && !m_snowLumaBusy);
+    if (m_gatewaySwitchMessage && busy)
+        m_gatewaySwitchMessage->setText(QStringLiteral("正在检查并切换接入框架，请稍候…"));
+}
+
+void SettingsPage::setGatewaySwitchResult(const QString &text, bool ok) {
+    m_gatewaySwitchResultText = text;
+    m_gatewaySwitchResultOk = ok;
+    if (!m_gatewaySwitchMessage) return;
+    m_gatewaySwitchMessage->setText(text);
+    m_gatewaySwitchMessage->setProperty("class", ok ? "success" : "error");
+    m_gatewaySwitchMessage->style()->unpolish(m_gatewaySwitchMessage);
+    m_gatewaySwitchMessage->style()->polish(m_gatewaySwitchMessage);
 }
 
 void SettingsPage::setTheme(const QString &theme) {

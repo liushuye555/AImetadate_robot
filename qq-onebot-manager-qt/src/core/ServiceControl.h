@@ -9,7 +9,7 @@ class ServiceControl : public QObject {
 public:
     explicit ServiceControl(QObject *parent = nullptr);
     ~ServiceControl() override;
-    void run(const QStringList &args); // 如 {"-m","qq_onebot_whitelist.control","start"}
+    void run(const QStringList &args, const QByteArray &input = {});
     bool isRunning() const { return m_proc.state() != QProcess::NotRunning; }
     void reconcileFinished();
     void cancel(); // Cancel only this command and its descendants, never siblings.
@@ -22,4 +22,5 @@ private:
     std::unique_ptr<Native> m_native;
     QProcess m_proc;
     QElapsedTimer m_elapsed;
+    QByteArray m_input;
 };

@@ -257,6 +257,7 @@ private slots:
     void explicitBreakawaySurvivesOwnerExit();
     void unexpectedBotExitKeepsOwnerAndSiblings();
     void controlledTransitionAllowsReplacement();
+    void gatewayPauseKeepsSessionAndAllowsExplicitStart();
     void transitionTimeoutAllowsRetry();
     void startupFailureAllowsRetry();
     void delayedStartupCompletionDoesNotTimeout();
@@ -398,6 +399,48 @@ void TestManagedRuntime::unexpectedBotExitKeepsOwnerAndSiblings()
     QTRY_VERIFY_WITH_TIMEOUT(siblingIdentity.dead(), 5000);
     QVERIFY(sibling.waitForFinished(5000) || sibling.state() == QProcess::NotRunning);
     QVERIFY(replacement.waitForFinished(5000) || replacement.state() == QProcess::NotRunning);
+#else
+    QSKIP("Windows Job test");
+#endif
+}
+
+void TestManagedRuntime::gatewayPauseKeepsSessionAndAllowsExplicitStart()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY2(runtime.initialize(&error), qPrintable(error));
+    QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
+    QProcess oldBot, sibling, replacement;
+    startBound(oldBot);
+    startBound(sibling);
+    QVERIFY(oldBot.waitForStarted(5000));
+    QVERIFY(sibling.waitForStarted(5000));
+    ExactProcess siblingIdentity;
+    QVERIFY(siblingIdentity.open(sibling.processId()));
+    runtime.expectBot(oldBot.processId());
+    runtime.beginTransition(100);
+    runtime.pauseBackendObservation();
+    oldBot.kill();
+    QVERIFY(oldBot.waitForFinished(5000));
+    QTest::qWait(650); // Exceeds the cancelled deadline and bot polling interval.
+    QCOMPARE(fault.count(), 0);
+    QVERIFY(siblingIdentity.alive());
+    QVERIFY(QFile::exists(QDir(root.path()).filePath("run/manager-session.json")));
+    runtime.beginTransition(5000);
+    startBound(replacement);
+    QVERIFY(replacement.waitForStarted(5000));
+    ExactProcess replacementIdentity;
+    QVERIFY(replacementIdentity.open(replacement.processId()));
+    runtime.expectBot(replacement.processId());
+    QCOMPARE(fault.count(), 0);
+    runtime.shutdown();
+    QTRY_VERIFY_WITH_TIMEOUT(replacementIdentity.dead(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(siblingIdentity.dead(), 5000);
+    QVERIFY(replacement.waitForFinished(5000) || replacement.state() == QProcess::NotRunning);
+    QVERIFY(sibling.waitForFinished(5000) || sibling.state() == QProcess::NotRunning);
 #else
     QSKIP("Windows Job test");
 #endif

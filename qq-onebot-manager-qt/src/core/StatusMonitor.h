@@ -9,6 +9,13 @@
 struct StatusSnapshot {
     bool valid = false;
     bool napcat = false;
+    bool gatewayRunning = false;
+    bool gatewayManaged = false;
+    bool qqStatusKnown = true;
+    QString gatewayProvider = "napcat";
+    QString gatewayName = "NapCat";
+    QString gatewayWebuiUrl;
+    QString gatewayError;
     bool onebot = false;
     bool bot = false;
     bool qqLoggedIn = false;

@@ -52,7 +52,20 @@ def config_schema(data: dict[str, Any], *, env_path: Path | None = None) -> list
                                           'missing_key' if key_name else 'missing_reference')
 
     return [
+        field('onebot.provider', 'select', data.get('onebot', {}).get('provider', 'napcat'), 'Gateway framework', '接入框架', section='runtime', options=['external', 'napcat', 'llbot', 'snowluma', 'lagrange', 'qqofficial']),
+        field('qq_official.app_id', 'text', (data.get('qq_official') or {}).get('app_id', ''), 'Official QQ AppID', 'QQ 官方机器人 AppID', section='runtime'),
+        field('qq_official.app_secret', 'secret', '', 'Official QQ AppSecret (blank keeps saved value)', 'QQ 官方 AppSecret（留空保留，保存到 .env）', section='runtime'),
+        field('qq_official.allowed_users', 'list', (data.get('qq_official') or {}).get('allowed_users', []), 'Official user OpenID allowlist', '官方用户 OpenID 白名单（与旧 QQ 号独立）', section='runtime'),
+        field('qq_official.allowed_groups', 'list', (data.get('qq_official') or {}).get('allowed_groups', []), 'Official group OpenID allowlist', '官方群 OpenID 回复白名单', section='runtime'),
+        field('qq_official.report_users', 'list', (data.get('qq_official') or {}).get('report_users', []), 'Official report user OpenIDs', '官方日报接收用户 OpenID', section='runtime'),
+        field('qq_official.report_groups', 'list', (data.get('qq_official') or {}).get('report_groups', []), 'Official report group OpenIDs', '官方日报接收群 OpenID', section='runtime'),
         field('onebot.ws_url', 'text', data.get('onebot', {}).get('ws_url', 'ws://127.0.0.1:3001'), 'OneBot WebSocket', 'OneBot WebSocket', section='runtime'),
+        field('onebot.manage_process', 'bool', data.get('onebot', {}).get('manage_process', data.get('onebot', {}).get('provider', 'napcat') == 'napcat'), 'Manage built-in NapCat only', '自动启动和恢复内置 NapCat（仅 NapCat 生效）', section='runtime'),
+        field('onebot.start_installed_runtime', 'bool', data.get('onebot', {}).get('start_installed_runtime', False), 'Start installed SnowLuma', '随管理器启动已安装的 SnowLuma（仅 SnowLuma 生效）', section='runtime'),
+        field('onebot.webui_url', 'text', data.get('onebot', {}).get('webui_url', 'http://127.0.0.1:6099/' if data.get('onebot', {}).get('provider', 'napcat') == 'napcat' else ''), 'Gateway management URL', '接入框架管理地址（可留空）', section='runtime'),
+        field('onebot.access_token_env', 'text', data.get('onebot', {}).get('access_token_env', 'ONEBOT_ACCESS_TOKEN'), 'OneBot token environment variable', 'OneBot Token 环境变量名（密钥放 .env）', section='runtime'),
+        field('onebot.max_message_mb', 'number', data.get('onebot', {}).get('max_message_mb', 16), 'Maximum message size (MB)', '单条消息上限（MB）', section='runtime', min=1, max=64),
+        field('onebot.disabled_actions', 'list', data.get('onebot', {}).get('disabled_actions', []), 'Disabled extension actions', '禁用不兼容的扩展接口', section='runtime'),
         field('summary.default_limit', 'number', data.get('summary', {}).get('default_limit', 100), 'Default summary limit', '默认总结条数', section='bot'),
         field('summary.max_limit', 'number', data.get('summary', {}).get('max_limit', 500), 'Maximum summary limit', '最大总结条数', section='bot'),
         field('ai_context.enabled', 'bool', data.get('ai_context', {}).get('enabled', True), 'AI context enabled', '启用 AI 上下文', section='ai'),
@@ -236,8 +249,15 @@ def _env_providers(env_path: Path | None = None) -> dict[str, dict[str, str]]:
 
 
 def patch_config(path: Path, patch: dict[str, Any]) -> dict[str, Any]:
+    patch = json.loads(json.dumps(patch))
+    official_patch = patch.get('qq_official')
+    secret = official_patch.pop('app_secret', '') if isinstance(official_patch, dict) else ''
+    if secret and (not isinstance(secret, str) or '\n' in secret or '\r' in secret):
+        raise ValueError('Invalid official robot credential')
     data = _load(path)
     _merge(data, patch)
+    if secret:
+        patch_env(path.parent / '.env', {'QQBOT_APP_SECRET': secret})
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
     try:
@@ -277,7 +297,8 @@ def main() -> int:
     if args.action == 'get':
         print(json.dumps(_load(path), ensure_ascii=False))
         return 0
-    patch = json.loads(args.json)
+    import sys
+    patch = json.loads(sys.stdin.read() if args.json == '-' else args.json)
     if not isinstance(patch, dict):
         raise SystemExit('patch must be a JSON object')
     print(json.dumps(patch_config(path, patch), ensure_ascii=False))

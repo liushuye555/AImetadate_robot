@@ -67,7 +67,7 @@ def test_save_replied_forward_images_saves_all_and_deduplicates_by_category(tmp_
 
     store = Store(tmp_path / 'bot.db')
     config = AppConfig(data_dir=tmp_path / 'data')
-    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
+    monkeypatch.setattr(websockets, 'connect', lambda url, **kwargs: FakeWs())
     calls = []
 
     async def fake_call(ws, action, params):
@@ -137,7 +137,7 @@ def test_save_replied_forward_requires_private_reply_and_forward(tmp_path, monke
 
     store = Store(tmp_path / 'bot.db')
     config = AppConfig(data_dir=tmp_path / 'data')
-    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
+    monkeypatch.setattr(websockets, 'connect', lambda url, **kwargs: FakeWs())
 
     assert asyncio.run(favorites.save_replied_forward_images(
         store, _save_command_event(reply_id=''), config,
@@ -158,7 +158,7 @@ def test_save_replied_forward_requires_private_reply_and_forward(tmp_path, monke
 
 
 def test_saved_images_are_separate_view_categories(tmp_path):
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / 'data'
     store = Store(data / 'bot.db')
@@ -189,7 +189,7 @@ def test_save_replied_forward_images_recurses_nested_forwards_and_avoids_cycles(
 
     store = Store(tmp_path / 'bot.db')
     config = AppConfig(data_dir=tmp_path / 'data')
-    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
+    monkeypatch.setattr(websockets, 'connect', lambda url, **kwargs: FakeWs())
     fetched_ids = []
 
     async def fake_call(ws, action, params):

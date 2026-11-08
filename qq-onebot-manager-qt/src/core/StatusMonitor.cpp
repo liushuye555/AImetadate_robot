@@ -12,6 +12,13 @@ StatusSnapshot parseStatusJson(const QByteArray &json, const QDateTime &now, int
     if (!s.updatedAt.isValid()) return s;
     if (s.updatedAt.secsTo(now) > staleSeconds) return s;
     s.napcat = obj.value("napcat").toBool(false);
+    s.gatewayRunning = obj.value("gatewayRunning").toBool(s.napcat);
+    s.gatewayManaged = obj.value("gatewayManaged").toBool(false);
+    s.qqStatusKnown = obj.value("qqStatusKnown").toBool(true);
+    s.gatewayProvider = obj.value("gatewayProvider").toString("napcat");
+    s.gatewayName = obj.value("gatewayName").toString("NapCat");
+    s.gatewayWebuiUrl = obj.value("gatewayWebuiUrl").toString();
+    s.gatewayError = obj.value("gatewayError").toString();
     s.onebot = obj.value("onebot").toBool(false);
     s.bot = obj.value("bot").toBool(false);
     s.qqLoggedIn = obj.value("qqLoggedIn").toBool(false);
@@ -59,6 +66,13 @@ void StatusMonitor::publish(const StatusSnapshot &next) {
         next.valid != m_snapshot.valid ||
         next.qqLoggedIn != m_snapshot.qqLoggedIn ||
         next.napcat != m_snapshot.napcat ||
+        next.gatewayRunning != m_snapshot.gatewayRunning ||
+        next.gatewayManaged != m_snapshot.gatewayManaged ||
+        next.qqStatusKnown != m_snapshot.qqStatusKnown ||
+        next.gatewayName != m_snapshot.gatewayName ||
+        next.gatewayProvider != m_snapshot.gatewayProvider ||
+        next.gatewayWebuiUrl != m_snapshot.gatewayWebuiUrl ||
+        next.gatewayError != m_snapshot.gatewayError ||
         next.onebot != m_snapshot.onebot ||
         next.bot != m_snapshot.bot ||
         next.collectionPaused != m_snapshot.collectionPaused ||

@@ -68,6 +68,9 @@ void TestReportsNavigation::followupUsesAFragmentRatherThanAFileName() {
     const auto image = Paths::reportUrl(QStringLiteral("data/view/#42.png"));
     QVERIFY(image.fragment().isEmpty());
     QVERIFY(image.toLocalFile().endsWith(QStringLiteral("#42.png")));
+    const auto gallery = Paths::reportUrl(QStringLiteral("data/view/gallery.html?category=02_%E7%BE%A4%E5%8F%8B%E5%A5%BD%E8%AF%84"));
+    QVERIFY(gallery.toLocalFile().endsWith(QStringLiteral("data/view/gallery.html")));
+    QVERIFY(gallery.query().startsWith(QStringLiteral("category=02_")));
 }
 
 void TestReportsNavigation::narrowWindowKeepsMainActionsVisibleAndScrollable() {

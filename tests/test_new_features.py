@@ -68,12 +68,20 @@ def test_cmd_view_list_prints_categories(tmp_path, monkeypatch, capsys):
     (view / "04_候选待观察").mkdir()
     (view / "04_候选待观察" / "candidate.png").write_bytes(b"y")
     (view / "00_全部").mkdir()
+    from qq_onebot_whitelist.store import Store
+    store = Store(tmp_path / 'data' / 'bot.db')
+    for reason, path in (('ai_metadata', view / '01_AI元数据' / 'a.png'),
+                         ('candidate', view / '04_候选待观察' / 'candidate.png')):
+        store.record_image(scope='group:1', user_id='u', result={
+            'kept_path': str(path), 'retention_reason': reason,
+            'ai_source': 'ComfyUI' if reason == 'ai_metadata' else '',
+        }, raw={})
     monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
     assert control.cmd_view_list(None) == 0
     out = capsys.readouterr().out
     assert "01_AI元数据" in out and '"count": 1' in out
     counts = {item['name']: item['count'] for item in json.loads(out)['categories']}
-    assert counts == {'00_全部': 1, '01_AI元数据': 1, '04_候选待观察': 1}
+    assert counts == {'00_全部': 1, '01_AI元数据_ComfyUI': 1, '04_候选待观察': 1}
 
 
 def test_cleanup_expired_candidates(tmp_path):

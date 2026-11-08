@@ -81,11 +81,10 @@ def test_tray_shortcut_uses_absolute_windows_powershell_fallback():
 
 def test_status_probe_reports_services_and_qq_login():
     script = read_script("get-qq-onebot-status.ps1")
-    for field in ('napcat', 'onebot', 'bot', 'qqLoggedIn', 'qqNumber', 'qqNickname'):
-        assert field in script
-    assert 'ClientWebSocket' in script
-    assert 'get_login_info' in script
-    assert 'ConvertTo-Json' in script
+    assert 'qq_onebot_whitelist.control live-status' in script
+    assert '.venv\\Scripts\\python.exe' in script
+    assert 'ClientWebSocket' not in script
+    assert '6099' not in script and '3001' not in script
 
 
 def test_status_probe_forces_utf8_stdout_for_chinese_nicknames():

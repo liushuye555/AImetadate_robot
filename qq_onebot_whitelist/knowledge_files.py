@@ -16,7 +16,7 @@ _LOCK = threading.RLock()
 _TEMP_NAME = ".knowledge-tmp"
 _LOCK_NAME = ".knowledge-files.lock"
 _MIN_FREE_BYTES = 64 * 1024 * 1024
-_SCOPE_RE = re.compile(r"^group:\d+$")
+_SCOPE_RE = re.compile(r"^group:(?:\d+|qqofficial:[0-9]+:[A-Za-z0-9_.-]{1,256})$")
 _EXT_RE = re.compile(r"^\.[A-Za-z0-9]{1,16}$")
 _OPAQUE_ONEBOT_FILE_ID_RE = re.compile(
     r"^/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|"

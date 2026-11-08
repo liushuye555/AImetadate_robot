@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import gateway
+
 import asyncio
 from datetime import datetime, timedelta
 import json
@@ -95,16 +97,7 @@ def echo_reply_text(event: dict[str, Any], config: AppConfig) -> str | None:
 
 
 async def call_action(ws, action: str, params: dict[str, Any]) -> dict[str, Any]:
-    echo = f'startup-{action}-{datetime.now().timestamp()}'
-    await ws.send(json.dumps({'action': action, 'params': params, 'echo': echo}, ensure_ascii=False))
-    while True:
-        raw = await ws.recv()
-        try:
-            data = json.loads(raw)
-        except Exception:
-            continue
-        if data.get('echo') == echo:
-            return data
+    return await gateway.call(ws, action, params)
 
 
 async def startup_history_groups(ws, config: AppConfig) -> list[str]:
@@ -125,6 +118,8 @@ STARTUP_HISTORY_STALL_PAGES = 20
 
 
 async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
+    if config.onebot_provider == 'qqofficial':
+        return  # Official API has no implemented history backfill equivalent.
     if not config.startup_history_enabled or not config.feature_startup_history:
         return
     groups = await startup_history_groups(ws, config)
@@ -146,17 +141,12 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
         page_limit = config.startup_history_max_pages if (config.startup_history_all or dynamic) else config.startup_history_pages
         stall_pages = 0
         for page in range(max(1, page_limit)):
-            params = {
-                'group_id': int(group_id),
-                'count': config.startup_history_count,
-                'message_seq': seq,
-                'reverse_order': page > 0,
-            }
+            params = gateway.history_params(config, group_id, seq, config.startup_history_count, page > 0)
             resp = await call_action(ws, 'get_group_msg_history', params)
             messages = ((resp.get('data') or {}).get('messages') or [])
             if not messages:
                 break
-            next_seq = messages[0].get('message_seq') or seq
+            next_seq = gateway.history_anchor(config, messages)
             page_new = 0
             for msg in messages:
                 if msg.get('post_type') != 'message':
@@ -183,7 +173,7 @@ async def startup_history_catchup(ws, config: AppConfig, store: Store) -> None:
             stall_pages = stall_pages + 1 if page_new == 0 else 0
             if reached_known or not next_seq or next_seq == seq:
                 break
-            if stall_pages >= STARTUP_HISTORY_STALL_PAGES:
+            if not config.startup_history_all and stall_pages >= STARTUP_HISTORY_STALL_PAGES:
                 print(f'startup history catch-up: group {group_id} 连续 {stall_pages} 页无新入库，'
                       f'疑似游标消息已被清理，提前停止（中间可能有缺口）')
                 break
@@ -205,6 +195,8 @@ async def send_reply(ws, event: dict[str, Any], text: str) -> None:
         target = event.get('user_id')
         params = {'user_id': target, 'message': text}
     print(f'reply_send action={action} target={target} chars={len(text)} text={ascii(text[:40])}')
+    if event.get('source') == 'qq_official':
+        params['msg_id'] = event.get('message_id')
     await ws.send(json.dumps({'action': action, 'params': params}, ensure_ascii=False))
 
 
@@ -215,20 +207,10 @@ async def send_private(ws, user_id: str, text: str) -> None:
 async def _fetch_group_ids(ws, config: AppConfig) -> set[str]:
     """通过独立连接获取机器人所在群列表。"""
     try:
-        async with websockets.connect(config.onebot_ws_url) as action_ws:
-            echo = f"groups-{datetime.now().timestamp()}"
-            await action_ws.send(
-                json.dumps({"action": "get_group_list", "params": {}, "echo": echo}, ensure_ascii=False)
-            )
-            while True:
-                raw = await asyncio.wait_for(action_ws.recv(), timeout=8)
-                try:
-                    data = json.loads(raw)
-                except Exception:
-                    continue
-                if data.get("echo") == echo:
-                    rows = data.get("data") or []
-                    return {str(item.get("group_id")) for item in rows if item.get("group_id")}
+        async with gateway.connect(config) as action_ws:
+            data = await gateway.call(action_ws, "get_group_list", timeout=8)
+            rows = data.get("data") or []
+            return {str(item.get("group_id")) for item in rows if item.get("group_id")}
     except Exception as exc:
         print(f"fetch group list failed: {type(exc).__name__}: {exc}")
     return set()
@@ -246,7 +228,7 @@ async def keepalive_targets(ws, config: AppConfig) -> set[str]:
 
 async def _send_group_message(ws, group_id: str, message: str) -> None:
     await ws.send(json.dumps(
-        {'action': 'send_group_msg', 'params': {'group_id': int(group_id), 'message': message}},
+        {'action': 'send_group_msg', 'params': {'group_id': int(group_id) if str(group_id).isdigit() else group_id, 'message': message}},
         ensure_ascii=False,
     ))
 
@@ -313,12 +295,12 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
     login = login_info or {"qqLoggedIn": False, "qqNumber": "", "qqNickname": ""}
     while True:
         try:
+            observed = await probe_login_info(config)
+            login = observed or {'qqLoggedIn': False, 'qqStatusKnown': False, 'qqNumber': '', 'qqNickname': ''}
             control.write_status(
                 {
-                    "napcat": control.port_open(control.NAPCAT_PORT),
-                    # 主连接活着即 OneBot 在线、QQ 已登录（端口 3001 只在 QQ 登录后开放）
-                    "onebot": True,
-                    "bot": True,
+                    **gateway.info(config),
+                    "napcat": config.onebot_provider == 'napcat' and control.port_open(control.NAPCAT_PORT),
                     "collectionPaused": is_collection_paused(),
                     "manualStop": control.manual_stop_requested(),
                     # 采集健康度：面板总览卡展示
@@ -329,6 +311,9 @@ async def status_writer_loop(ws, config: AppConfig, login_info: dict[str, Any] |
                     "lastFileSync": _last_file_sync_at,
                     **_backup_status_fields(),
                     **login,
+                    'gatewayRunning': config.onebot_provider != 'qqofficial' or bool(login.get('gatewayRunning')),
+                    'onebot': config.onebot_provider != 'qqofficial' or bool(login.get('gatewayRunning')),
+                    'bot': True,
                 }
             )
         except Exception as exc:
@@ -590,10 +575,14 @@ async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
                 )
                 if content:
                     chunks = split_message(content, max_chars=1800)
-                    for user_id in sorted(config.bot.whitelist_users):
+                    targets = gateway.report_targets(config)
+                    if not targets:
+                        await asyncio.sleep(300)
+                        continue
+                    for action, target_key, target in targets:
                         for idx, chunk in enumerate(chunks, 1):
                             prefix = (f'{"资源日报" if config.language == "zh-CN" else "Daily resource report"} {idx}/{len(chunks)}\n' if len(chunks) > 1 else '')
-                            await send_private(ws, user_id, prefix + chunk)
+                            await ws.send(json.dumps({'action': action, 'params': {target_key: target, 'message': prefix + chunk}}, ensure_ascii=False))
                     print(f'daily_report sent to {sorted(config.bot.whitelist_users)} chunks={len(chunks)} chars={len(content)}')
                     store.mark_daily_report_sent(key, content)
         except Exception as exc:
@@ -603,7 +592,7 @@ async def daily_report_loop(ws, config: AppConfig, store: Store) -> None:
 
 def record_event(store: Store, event: dict[str, Any], config: AppConfig) -> bool:
     """采集委托：完整流水线在 collection.collect_event。返回消息行是否新插入。"""
-    return collect_event(store, event, config)
+    return collect_event(store, gateway.normalize_event(event), config)
 
 
 def forward_sub_event(event: dict[str, Any], forward_id: str, sub: dict[str, Any], index: int) -> dict[str, Any]:
@@ -634,23 +623,12 @@ async def collect_forward_contents(store: Store, event: dict[str, Any], config: 
     if not ids:
         return
     try:
-        async with websockets.connect(config.onebot_ws_url) as action_ws:
+        async with gateway.connect(config) as action_ws:
             for fid in ids:
-                echo = f"fwd-{fid}-{datetime.now().timestamp()}"
-                await action_ws.send(
-                    json.dumps({"action": "get_forward_msg", "params": {"id": fid}, "echo": echo}, ensure_ascii=False)
-                )
-                while True:
-                    raw = await asyncio.wait_for(action_ws.recv(), timeout=10)
-                    try:
-                        data = json.loads(raw)
-                    except Exception:
-                        continue
-                    if data.get("echo") == echo:
-                        messages = ((data.get("data") or {}).get("messages") or [])
-                        for index, sub in enumerate(messages):
-                            collect_event(store, forward_sub_event(event, fid, sub, index), config)
-                        break
+                data = await call_action(action_ws, 'get_forward_msg', {'id': fid})
+                messages = ((data.get('data') or {}).get('messages') or [])
+                for index, sub in enumerate(messages):
+                    record_event(store, forward_sub_event(event, fid, sub, index), config)
     except Exception as exc:
         print(f"expand forward failed: {type(exc).__name__}: {exc}")
 
@@ -660,6 +638,7 @@ def is_blocked_event(event: dict[str, Any], config: AppConfig) -> bool:
 
 
 async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Store, config_path: str | Path = 'config.yaml') -> bool:
+    event = gateway.normalize_event(event)
     if _is_self_message(event):
         return False
     if event.get('post_type') == 'notice' and event.get('notice_type') == 'group_upload':
@@ -812,7 +791,7 @@ async def handle_event(ws, event: dict[str, Any], config: AppConfig, store: Stor
 
 async def startup_history_catchup_worker(config: AppConfig, store: Store) -> None:
     try:
-        async with websockets.connect(config.onebot_ws_url) as action_ws:
+        async with gateway.connect(config) as action_ws:
             await startup_history_catchup(action_ws, config, store)
         request_image_sync()
         print('startup history catch-up done; image view sync scheduled (load-aware)')
@@ -828,15 +807,7 @@ async def probe_login_info(config: AppConfig) -> dict[str, object]:
     _fetch_group_ids 同一模式）。
     """
     try:
-        async with websockets.connect(config.onebot_ws_url) as probe_ws:
-            resp = await call_action(probe_ws, 'get_login_info', {})
-            data = resp.get('data') or {}
-            qq_number = str(data.get('user_id') or '')
-            return {
-                'qqLoggedIn': bool(qq_number),
-                'qqNumber': qq_number,
-                'qqNickname': str(data.get('nickname') or ''),
-            }
+        return await gateway.probe(config)
     except Exception as exc:
         print(f'get_login_info failed at startup: {type(exc).__name__}: {exc}')
         return {}
@@ -864,7 +835,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
         from .knowledge_capture import capture_loop
         capture_task = asyncio.create_task(capture_loop(config_path))
         try:
-            async with websockets.connect(config.onebot_ws_url) as ws:
+            async with gateway.connect(config, events=True) as ws:
                 login_info = await probe_login_info(config)
                 startup_task = asyncio.create_task(startup_history_catchup_worker(config, store))
                 report_task = asyncio.create_task(daily_report_loop(ws, config, store))
@@ -874,7 +845,7 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                 keepalive_task = asyncio.create_task(keepalive_loop(ws, config))
                 status_task = asyncio.create_task(status_writer_loop(ws, config, login_info, store))
                 file_sync_task = (asyncio.create_task(background_file_sync_loop(config, store, ws))
-                                  if config.file_sync_enabled else None)
+                                  if config.file_sync_enabled and config.onebot_provider != 'qqofficial' else None)
                 try:
                     async for raw in ws:
                         try:
@@ -883,7 +854,11 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
                             continue
                         try:
                             await handle_event(ws, event, config, store, config_path)
+                            if config.onebot_provider == 'qqofficial':
+                                await ws.acknowledge(event)
                         except Exception as exc:
+                            if config.onebot_provider == 'qqofficial':
+                                await ws.acknowledge(event, failed=True)
                             print(f'handle_event failed: {type(exc).__name__}: {exc}')
                 finally:
                     for task in (startup_task, report_task, ai_task, keepalive_task, status_task, file_sync_task):
@@ -906,7 +881,8 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             )
             try:
                 control.write_status(
-                    {"napcat": control.port_open(control.NAPCAT_PORT),
+                    {**gateway.info(config), 'gatewayRunning': False, 'qqStatusKnown': False,
+                     "napcat": config.onebot_provider == 'napcat' and control.port_open(control.NAPCAT_PORT),
                      "onebot": False, "bot": False,
                      "qqLoggedIn": False, "qqNumber": "", "qqNickname": "",
                      "manualStop": control.manual_stop_requested(),
@@ -915,6 +891,13 @@ async def run(config: AppConfig, config_path: str | Path = 'config.yaml') -> Non
             except Exception as exc:
                 # 断线兜底状态写失败（如 Windows rename 撞上面板只读句柄）不能炸掉重连循环
                 print(f'status write failed: {type(exc).__name__}: {exc}')
+        # A live bot previously retried forever when the independent NapCat host exited.
+        try:
+            if await asyncio.to_thread(control.ensure_gateway_running):
+                print('Managed gateway exited; recovery launch requested')
+                retry_delay = 5
+        except Exception as exc:
+            print(f'Gateway recovery failed: {type(exc).__name__}: {exc}')
         print(f'OneBot disconnected; reconnecting in {retry_delay}s')
         await asyncio.sleep(retry_delay)
         retry_delay = min(retry_delay * 2, 60)

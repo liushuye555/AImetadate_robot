@@ -313,6 +313,16 @@ void ManagedRuntime::beginTransition(int timeoutMs)
     m_deadline.start(qMax(1, timeoutMs));
 }
 
+void ManagedRuntime::pauseBackendObservation()
+{
+    if (!m_initialized || m_stopping || m_failed)
+        return;
+    ++m_transition;
+    m_deadline.stop();
+    clearBot();
+    record(QStringLiteral("backend_paused"));
+}
+
 void ManagedRuntime::expectBot(qint64 pid)
 {
     if (!m_initialized || m_stopping || m_failed)

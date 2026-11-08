@@ -90,12 +90,15 @@ def _asset_actions(data_dir, asset):
     if asset.get('status') != 'saved' or not asset.get('path'):
         return ''
     scope = str(asset.get('scope') or '')
-    if not scope.startswith('group:') or not scope.removeprefix('group:').isdigit():
+    from .knowledge_config import archive_scope_component
+    try:
+        component = archive_scope_component(scope)
+    except ValueError:
         return ''
     root = (Path(data_dir) / 'knowledge-files').resolve()
     try:
         path = Path(asset['path']).resolve()
-        path.relative_to(root / scope.removeprefix('group:'))
+        path.relative_to(root / component)
         if not path.is_file():
             return ''
         href = '../knowledge-files/' + quote(path.relative_to(root).as_posix(), safe='/')

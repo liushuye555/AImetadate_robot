@@ -1,12 +1,15 @@
 """Control bridge used by the Qt panel; keeps operational logic in Python."""
 from __future__ import annotations
 
+from . import gateway
+
 import argparse
 import json
 import os
 import socket
 import subprocess
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -110,32 +113,14 @@ def pid_running(pid_path: Path) -> bool:
 
 def live_status() -> dict:
     """Probe current service liveness without trusting the heartbeat file."""
-    try:
-        cached = load_status()
-    except (OSError, ValueError, json.JSONDecodeError):
-        cached = {}
-    onebot = port_open(ONEBOT_PORT)
-    cached_identity = {}
-    try:
-        updated_at = datetime.fromisoformat(str(cached.get("updatedAt") or "").replace("Z", "+00:00"))
-        if updated_at.tzinfo is None:
-            updated_at = updated_at.astimezone()
-        age = (datetime.now().astimezone() - updated_at.astimezone()).total_seconds()
-        if 0 <= age <= STATUS_STALE_SECONDS:
-            cached_identity = cached
-    except (TypeError, ValueError, OverflowError):
-        pass
+    config = load_gateway_config()
+    connection = gateway.probe_sync(config)
     return {
-        "napcat": port_open(NAPCAT_PORT),
-        "onebot": onebot,
+        **connection,
+        "napcat": config.onebot_provider == 'napcat' and port_open(NAPCAT_PORT),
         "bot": owned_bot_running(),
-        # NapCat exposes OneBot only after QQ login; this is the same liveness
-        # contract used by status_writer_loop.
-        "qqLoggedIn": onebot,
-        "qqNumber": str(cached_identity.get("qqNumber") or "") if onebot else "",
-        "qqNickname": str(cached_identity.get("qqNickname") or "") if onebot else "",
         "collectionPaused": collection_paused(),
-        "manualStop": manual_stop_requested(),
+        "manualStop": manual_stop_requested() or (RUN_DIR / 'manager-user-stop').exists(),
         "updatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
 
@@ -208,31 +193,135 @@ def _retire_legacy_bots() -> None:
             raise RuntimeError('旧机器人未能停止，未启动第二个实例。')
 
 
+@contextmanager
+def _napcat_launch_guard():
+    """Serialize launch attempts across the manager command and bot processes."""
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    with (RUN_DIR / 'napcat-launch.lock').open('a+b') as lock:
+        if os.fstat(lock.fileno()).st_size == 0:
+            lock.write(b'\0')
+            lock.flush()
+        lock.seek(0)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            lock.seek(0)
+            if os.name == 'nt':
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def load_gateway_config():
+    from .config import load_config
+    return load_config(REPO_ROOT / 'config.yaml')
+
+
+def ensure_gateway_running(*, ignore_manual_stop: bool = False) -> bool:
+    config = load_gateway_config()
+    if config.onebot_provider == 'snowluma' and config.onebot_start_installed_runtime:
+        from . import snowluma
+        if (RUN_DIR / 'manager-user-stop').exists() or (not ignore_manual_stop and (
+                manual_stop_requested() or (RUN_DIR / 'snowluma-user-stop').exists())):
+            return False
+        if snowluma.status(REPO_ROOT)['running']:
+            return False
+        snowluma.start(REPO_ROOT)
+        return True
+    if not gateway.managed(config):
+        return False
+    return ensure_napcat_running(ignore_manual_stop=ignore_manual_stop)
+
+
+def ensure_napcat_running(*, ignore_manual_stop: bool = False) -> bool:
+    """Recover an exited NapCat without killing a live login service or spawning duplicates."""
+    require_manager(REPO_ROOT)
+    if not gateway.managed(load_gateway_config()):
+        return False
+    def stopped():
+        return (RUN_DIR / 'manager-user-stop').exists() or (
+            not ignore_manual_stop and manual_stop_requested())
+    if stopped() or port_open(NAPCAT_PORT) or port_open(ONEBOT_PORT):
+        return False
+    with _napcat_launch_guard() as acquired:
+        if not acquired:
+            return False
+        require_manager(REPO_ROOT)
+        if stopped() or port_open(NAPCAT_PORT) or port_open(ONEBOT_PORT):
+            return False
+        state_path = RUN_DIR / 'napcat-recovery.json'
+        try:
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            if not isinstance(state, dict):
+                state = {}
+        except (OSError, ValueError):
+            state = {}
+        # Creation identity prevents a reused PID from suppressing recovery indefinitely.
+        if state.get('created') and is_process_alive(state.get('pid'), state['created']):
+            return False
+        now = time.time()
+        try:
+            elapsed = now - float(state.get('lastAttempt', 0))
+        except (TypeError, ValueError):
+            elapsed = 60
+        if 0 <= elapsed < 60:
+            return False
+        napcat_dir = REPO_ROOT / 'runtime' / 'NapCat.Shell.Windows.Node'
+        napcat_bat = napcat_dir / 'napcat.bat'
+        if not napcat_bat.is_file():
+            raise RuntimeError('NapCat 启动文件不存在。')
+        state = {'lastAttempt': now}
+        def save_state():
+            temporary = state_path.with_suffix(f'.json.tmp-{os.getpid()}')
+            temporary.write_text(json.dumps(state), encoding='utf-8')
+            temporary.replace(state_path)
+        # Persist the cooldown even when process creation fails.
+        save_state()
+        (REPO_ROOT / 'logs').mkdir(parents=True, exist_ok=True)
+        with (REPO_ROOT / 'logs' / 'napcat.log').open('a', encoding='utf-8', errors='replace') as output:
+            # cmd parses /c itself, so do not pass its quoted command through list2cmdline.
+            process = subprocess.Popen(f'cmd.exe /d /s /c ""{napcat_bat}""',
+                cwd=str(napcat_dir), stdout=output, stderr=subprocess.STDOUT, close_fds=True,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0x01000000))
+        state.update(pid=process.pid, created=process_identity(process.pid))
+        save_state()
+        (RUN_DIR / 'napcat.pid').write_text(str(process.pid), encoding='ascii')
+        return True
+
+
 def start_services(*, clear_manual_stop: bool = False) -> int:
     """Start the bot only inside the manager's Job; NapCat explicitly stays outside."""
     session = require_manager(REPO_ROOT)
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     (REPO_ROOT / 'logs').mkdir(parents=True, exist_ok=True)
     existing = read_owned_bot(REPO_ROOT, session['session'])
+    config = REPO_ROOT / 'config.yaml'
+    python = REPO_ROOT / '.venv' / 'Scripts' / 'python.exe'
+    if existing is None and (not config.is_file() or not python.is_file()):
+        raise RuntimeError('缺少项目配置或 Python 运行环境，无法启动托管后台。')
+    ensure_gateway_running(ignore_manual_stop=clear_manual_stop)
+    gateway_config = load_gateway_config()
+    if gateway_config.onebot_provider == 'qqofficial':
+        from .qq_official import read_state
+        if not gateway_config.official_app_id or not gateway_config.official_app_secret:
+            raise RuntimeError('尚未绑定 QQ 官方机器人，请在设置中填写 AppID 和 AppSecret。')
+        if read_state(gateway_config).get('blocked'):
+            raise RuntimeError('QQ 官方平台已停用或封禁，请检查后使用 official-reset 手动重连。')
     if existing is not None:
         if clear_manual_stop:
             manual_stop_path().unlink(missing_ok=True)
         return existing
     _retire_legacy_bots()
-    napcat_dir = REPO_ROOT / 'runtime' / 'NapCat.Shell.Windows.Node'
-    napcat_bat = napcat_dir / 'napcat.bat'
-    config = REPO_ROOT / 'config.yaml'
-    python = REPO_ROOT / '.venv' / 'Scripts' / 'python.exe'
-    if not config.is_file() or not python.is_file():
-        raise RuntimeError('缺少项目配置或 Python 运行环境，无法启动托管后台。')
-    if not port_open(NAPCAT_PORT):
-        if not napcat_bat.is_file():
-            raise RuntimeError('NapCat 启动文件不存在。')
-        with (REPO_ROOT / 'logs' / 'napcat.log').open('a', encoding='utf-8', errors='replace') as output:
-            process = subprocess.Popen(['cmd.exe', '/d', '/s', '/c', f'call {napcat_bat}'],
-                cwd=str(napcat_dir), stdout=output, stderr=subprocess.STDOUT, close_fds=True,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0x01000000))
-        (RUN_DIR / 'napcat.pid').write_text(str(process.pid), encoding='ascii')
     # The bot already retries OneBot connection; do not block manager startup on QQ login.
     require_manager(REPO_ROOT)
     with (REPO_ROOT / 'logs' / 'bot.log').open('a', encoding='utf-8', errors='replace') as output:
@@ -393,21 +482,25 @@ async def _send_report_once() -> int:
     if not content:
         print(json.dumps({"ok": False, "error": "empty report"}, ensure_ascii=False))
         return 1
-    async with websockets.connect(config.onebot_ws_url) as ws:
+    targets = gateway.report_targets(config)
+    if not targets:
+        print(json.dumps({'ok': False, 'error': '尚未设置日报接收者'}, ensure_ascii=False))
+        return 1
+    async with gateway.connect(config) as ws:
         for chunk in split_message(content, max_chars=1800):
-            for user_id in sorted(config.bot.whitelist_users):
-                await ws.send(json.dumps(
-                    {"action": "send_private_msg",
-                     "params": {"user_id": int(user_id), "message": chunk}},
-                    ensure_ascii=False,
-                ))
+            for action, target_key, target in targets:
+                await gateway.call(ws, action, {target_key: target, 'message': chunk})
     print(json.dumps({"ok": True, "chars": len(content)}, ensure_ascii=False))
     return 0
 
 
 def cmd_report_send(args: argparse.Namespace) -> int:
     import asyncio
-    return asyncio.run(_send_report_once())
+    try:
+        return asyncio.run(_send_report_once())
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": f"报告发送失败：{type(exc).__name__}"}, ensure_ascii=False))
+        return 1
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -418,6 +511,33 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_live_status(args: argparse.Namespace) -> int:
     print(json.dumps(live_status(), ensure_ascii=False))
     return 0
+
+
+def cmd_gateway_info(args: argparse.Namespace) -> int:
+    print(json.dumps(gateway.info(load_gateway_config()), ensure_ascii=False))
+    return 0
+
+
+def cmd_official_reset(args: argparse.Namespace) -> int:
+    from .qq_official import reset
+    reset(load_gateway_config())
+    print(json.dumps({'ok': True, 'message': '已清除官方通道停止标记；可在管理器中手动启动'}, ensure_ascii=False))
+    return 0
+
+
+def cmd_official_bind(args: argparse.Namespace) -> int:
+    from .official_binding import launch, worker
+    if args.worker:
+        return worker(REPO_ROOT)
+    print(json.dumps(launch(REPO_ROOT), ensure_ascii=False))
+    return 0
+
+
+def cmd_gateway_check(args: argparse.Namespace) -> int:
+    import asyncio
+    result = asyncio.run(gateway.diagnose(load_gateway_config(), group_id=args.group))
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result['connected'] else 1
 
 
 def collection_paused() -> bool:
@@ -437,21 +557,14 @@ async def _fetch_groups_once() -> list[dict[str, str]]:
     import websockets
     from .config import load_config
     config = load_config(REPO_ROOT / "config.yaml")
-    async with websockets.connect(config.onebot_ws_url) as ws:
-        echo = f"groups-{datetime.now().timestamp()}"
-        await ws.send(
-            json.dumps({"action": "get_group_list", "params": {}, "echo": echo}, ensure_ascii=False)
-        )
-        while True:
-            raw = await ws.recv()
-            data = json.loads(raw)
-            if data.get("echo") == echo:
-                rows = data.get("data") or []
-                return [
-                    {"id": str(item.get("group_id") or ""), "name": str(item.get("group_name") or "")}
-                    for item in rows
-                    if item.get("group_id")
-                ]
+    async with gateway.connect(config) as ws:
+        data = await gateway.call(ws, "get_group_list")
+        rows = data.get("data") or []
+        return [
+            {"id": str(item.get("group_id") or ""), "name": str(item.get("group_name") or "")}
+            for item in rows
+            if item.get("group_id")
+        ]
 
 
 def cmd_groups(args: argparse.Namespace) -> int:
@@ -494,6 +607,17 @@ def cmd_vision_recheck(args: argparse.Namespace) -> int:
         return 1
 
 
+def gallery_categories() -> list[dict]:
+    from .gallery_store import facets
+    from .build_image_view import ALL_GALLERY_DIR
+    from urllib.parse import urlencode
+    meta = facets(REPO_ROOT)
+    return [{'name': ALL_GALLERY_DIR, 'count': meta['total'], 'url': 'gallery.html'}] + [
+        {'name': c['name'], 'count': c['count'],
+         'url': 'gallery.html?' + urlencode({'category': c['name']})}
+        for c in meta['categories']]
+
+
 def cmd_view(args: argparse.Namespace) -> int:
     """重新生成报告视图（含资源/文件页），并输出分类列表。
 
@@ -505,22 +629,13 @@ def cmd_view(args: argparse.Namespace) -> int:
         from .load_aware import load_aware_ok
         config = load_config(REPO_ROOT / 'config.yaml')
         if not load_aware_ok(config):
-            from .build_image_view import stale_view_counts
-            counts = stale_view_counts(REPO_ROOT / 'data' / 'view')
-            print(json.dumps({"categories": [
-                {"name": name, "count": count, "url": name + "/index.html"}
-                for name, count in sorted(counts.items())
-            ], "deferred": True}, ensure_ascii=False))
+            print(json.dumps({"categories": gallery_categories(), "deferred": True}, ensure_ascii=False))
             return 0
         from .maintenance import sync_image_files
         counts = sync_image_files(REPO_ROOT)
         from .knowledge import write_view as write_knowledge_view
         write_knowledge_view(config.data_dir, config)
-        categories = []
-        for name, count in sorted(counts.items()):
-            if name.startswith(('image_', 'missing_', 'candidates_', 'obfuscation_', 'empty_', 'resource_', 'archive_')):
-                continue
-            categories.append({"name": name, "count": count, "url": name + "/index.html"})
+        categories = gallery_categories()
         print(json.dumps({"categories": categories, "deferred": False}, ensure_ascii=False))
         return 0
     except Exception as exc:
@@ -531,23 +646,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 def cmd_view_list(args: argparse.Namespace) -> int:
     """快速列出现有报告分类（不重建视图）。"""
     try:
-        from .build_image_view import ALL_GALLERY_DIR, CATEGORY_NAMES
-        from .resource_view import RESOURCE_CHUNKS_DIR
-        view = REPO_ROOT / "data" / "view"
-        categories = []
-        if view.exists():
-            exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-            for p in sorted(view.iterdir()):
-                if not p.is_dir() or p.name == RESOURCE_CHUNKS_DIR:
-                    continue
-                count = sum(1 for f in p.rglob("*") if f.is_file() and f.suffix.lower() in exts)
-                categories.append({"name": p.name, "count": count, "url": p.name + "/index.html"})
-        # 合并图库不含候选暂存区；快速列表与实际页面保持相同范围。
-        total = sum(c["count"] for c in categories
-                    if c["name"] not in (ALL_GALLERY_DIR, CATEGORY_NAMES['candidate']))
-        for c in categories:
-            if c["name"] == ALL_GALLERY_DIR:
-                c["count"] = total
+        categories = gallery_categories()
         print(json.dumps({"categories": categories}, ensure_ascii=False))
         return 0
     except Exception as exc:
@@ -599,23 +698,10 @@ async def _file_sync_scan(config) -> dict:
     store = Store(config.data_dir / "bot.db")
     enqueued = 0
     per_group: dict = {}
-    async with websockets.connect(config.onebot_ws_url) as ws:
+    async with gateway.connect(config) as ws:
 
         async def call_action(action: str, params: dict) -> dict:
-            echo = f"fs-{action}-{time.time()}"
-            await ws.send(json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False))
-            deadline = time.monotonic() + 30
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(f"{action} 超时")
-                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                data = json.loads(raw)
-                if data.get("echo") != echo:
-                    continue
-                if isinstance(data.get("status"), str) and data["status"].lower() in ("failed", "false"):
-                    raise RuntimeError(f"{action} 失败: {data.get('message') or data.get('wording')}")
-                return data
+            return await gateway.call(ws, action, params, timeout=30)
 
         group_ids = set(config.file_sync_groups)
         if not group_ids:
@@ -676,6 +762,9 @@ def cmd_file_sync(args: argparse.Namespace) -> int:
                     return asyncio.to_thread(
                         file_sync.fetch_download_url_once, group_id, file_id, busid,
                         ws_url=config.onebot_ws_url,
+                        access_token=config.onebot_access_token,
+                        max_message_mb=config.onebot_max_message_mb,
+                        disabled_actions=config.onebot_disabled_actions,
                     )
                 return await file_sync.process_pending(store, config, fetch_url, limit=int(args.run))
 
@@ -696,11 +785,61 @@ def cmd_file_sync(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_snowluma(args: argparse.Namespace) -> int:
+    from . import snowluma
+    try:
+        action = args.command.removeprefix('snowluma-')
+        if action == 'switch':
+            result = snowluma.switch(REPO_ROOT, account=getattr(args, 'account', None))
+        else:
+            result = getattr(snowluma, action)(REPO_ROOT)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    except snowluma.DeploymentError as exc:
+        print(json.dumps({'ok': False, 'message': str(exc)}, ensure_ascii=False))
+    except Exception:
+        # Download/WS errors may include credential-bearing upstream URLs or headers.
+        print(json.dumps({'ok': False, 'message': 'SnowLuma 操作未完成，请检查网络、安装目录或运行日志后重试。'}, ensure_ascii=False))
+    return 1
+
+
+def cmd_gateway_switch(args: argparse.Namespace) -> int:
+    import sys
+    from . import gateway_switch
+    try:
+        if args.command == 'gateway-restore':
+            result = gateway_switch.restore(REPO_ROOT)
+        else:
+            payload = json.loads(sys.stdin.read() if args.json == '-' else args.json)
+            result = gateway_switch.switch(REPO_ROOT, payload)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    except gateway_switch.DeploymentError as exc:
+        message = str(exc)
+    except Exception:
+        message = '框架切换未完成，请检查配置和运行状态后重试。'
+    print(json.dumps({'ok': False, 'message': message}, ensure_ascii=False))
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QQ OneBot control bridge")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="print run/status.json")
     sub.add_parser("live-status", help="probe current service liveness")
+    sub.add_parser('gateway-info', help='configured gateway without connecting')
+    switch_parser = sub.add_parser('gateway-switch', help='verify and apply gateway settings')
+    switch_parser.add_argument('--json', default='-', help='gateway patch JSON, or - for stdin')
+    sub.add_parser('gateway-restore', help='restore the gateway settings before the last switch')
+    sub.add_parser('official-reset', help='clear official platform terminal block for an explicit retry')
+    bind = sub.add_parser('official-bind', help='open official QR credential binding, without starting the bot')
+    bind.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    check = sub.add_parser('gateway-check', help='read-only OneBot compatibility probe')
+    check.add_argument('--group', type=int, help='optional group for history/file API checks')
+    for action in ('install', 'start', 'stop', 'switch', 'restore', 'status'):
+        deploy = sub.add_parser('snowluma-' + action, help='SnowLuma deployment and migration')
+        if action == 'switch':
+            deploy.add_argument('--account', help='select a local SnowLuma QQ account')
     collection_parser = sub.add_parser("collection", help="pause/resume collection")
     collection_parser.add_argument("state", choices=("on", "off"))
     custom_parser = sub.add_parser("custom", help="inspect custom collection records")
@@ -717,7 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
                                help="force snapshot kind instead of weekday-based")
     file_sync_parser = sub.add_parser("file-sync", help="group file cloud sync status/scan/run")
     file_sync_parser.add_argument("--scan", action="store_true",
-                                  help="list all group files via NapCat and enqueue (backfill)")
+                                  help="list all group files via OneBot and enqueue (backfill)")
     file_sync_parser.add_argument("--run", nargs="?", const=3, default=None, metavar="N",
                                   help="process up to N pending files now")
     file_sync_parser.add_argument("--retry-failed", action="store_true",
@@ -743,6 +882,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
+        'gateway-switch': cmd_gateway_switch,
+        'gateway-restore': cmd_gateway_switch,
+        **{'snowluma-' + action: cmd_snowluma for action in ('install', 'start', 'stop', 'switch', 'restore', 'status')},
+        'official-bind': cmd_official_bind,
+        'official-reset': cmd_official_reset,
+        'gateway-info': cmd_gateway_info,
+        'gateway-check': cmd_gateway_check,
         "status": cmd_status,
         "live-status": cmd_live_status,
         "collection": cmd_collection,

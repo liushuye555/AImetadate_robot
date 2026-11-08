@@ -214,6 +214,7 @@ def export_dataset(
     dry_run: bool = False,
     dup_only: bool = False,
     out_dir_abs: str | None = None,
+    gallery_query: dict | None = None,
 ) -> dict:
     project_dir = Path(project_dir)
     db = project_dir / 'data' / 'bot.db'
@@ -232,6 +233,10 @@ def export_dataset(
         'WHERE kept_path IS NOT NULL ' + merged_filter + 'ORDER BY id DESC'
     ).fetchall()
     conn.close()
+
+    if gallery_query is not None:
+        from .gallery_store import query_images
+        rows = query_images(project_dir, gallery_query, export=True)['items']
 
     user_set = {str(u).strip() for u in (users or []) if str(u).strip()}
     exclude_set = {str(u).strip() for u in (exclude_users or []) if str(u).strip()}
@@ -371,6 +376,7 @@ def export_dataset(
             'orientation': orientation, 'keyword': keyword,
             'since': since, 'until': until, 'limit': limit,
             'captions': captions, 'link': link, 'dup_only': dup_only,
+            'gallery_query': gallery_query,
         },
         'counts': {
             'scanned': stats['scanned'], 'deduped': stats['deduped'],
@@ -451,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dry-run', action='store_true', help='只统计不写文件')
     parser.add_argument('--dup-only', action='store_true', help='只导出重复内容(同sha256)或同批(同工作流签名)的图')
     parser.add_argument('--json', action='store_true', help='末尾输出一行 EXPORT_JSON 摘要（供本地服务解析）')
+    parser.add_argument('--gallery-query', help='数据库图库筛选条件 JSON')
     args = parser.parse_args(argv)
 
     orientation = _ORIENT_ALIASES.get((args.orientation or '').strip().lower()) if args.orientation else None
@@ -465,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         since=args.since, until=args.until, limit=args.limit,
         captions=not args.no_captions, link=args.link, out=args.out, dry_run=args.dry_run,
         dup_only=args.dup_only, out_dir_abs=args.out_dir,
+        gallery_query=json.loads(args.gallery_query) if args.gallery_query is not None else None,
     )
     manifest = stats['manifest']
     if args.json:

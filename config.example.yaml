@@ -1,6 +1,22 @@
 onebot:
-  # NapCat/Lagrange 的 OneBot v11 正向 WebSocket 地址。
+  # 通用 OneBot v11 正向 WebSocket；框架进程在外部运行。
+  provider: external  # external / napcat / llbot / snowluma / lagrange
+  protocol: onebot11
+  manage_process: false  # 仅本机 NapCat 可交给项目自动启动和恢复
+  start_installed_runtime: false  # 内置 SnowLuma 由切换按钮开启，随管理器启停
   ws_url: "ws://127.0.0.1:3001"
+  webui_url: ""  # 可选的 http(s) 管理页地址
+  access_token_env: ONEBOT_ACCESS_TOKEN  # Token 填入 .env 或环境变量
+  max_message_mb: 16
+  disabled_actions: []  # 不支持的可选接口，例如 get_group_msg_history
+
+# 切换官方通道：onebot.provider 改为 qqofficial；AppSecret 只填 .env 或管理器密钥栏。
+qq_official:
+  app_id: ''
+  allowed_users: []   # 用户 OpenID，旧 QQ 号不适用
+  allowed_groups: []  # 群 OpenID，控制命令回复；采集仍受各群采集开关控制
+  report_users: []
+  report_groups: []
 
 ui:
   # auto follows the Windows user language; supported explicit values: en-US, zh-CN.

@@ -78,3 +78,31 @@ def test_import_group_history_once_dedupes_seen_boundary(tmp_path):
         assert ws.sent[0]['params']['reverse_order'] is True
 
     asyncio.run(scenario())
+
+
+def test_full_import_continues_past_an_already_archived_page(monkeypatch, tmp_path):
+    from qq_onebot_whitelist.history_import import import_group_history
+    from qq_onebot_whitelist import gateway
+    cfg = AppConfig(data_dir=tmp_path, bot=BotConfig())
+    old = {'post_type': 'message', 'message_type': 'group', 'group_id': 1,
+           'user_id': 2, 'message_id': 100, 'message_seq': 100, 'message': 'known'}
+    store = Store(tmp_path / 'bot.db')
+    store.record_message(scope='group:1', user_id='2', text='known', raw=old)
+    ws = FakeWS([
+        {'status': 'ok', 'echo': 'history', 'data': {'messages': [old]}},
+        {'status': 'ok', 'echo': 'history', 'data': {'messages': [
+            {**old, 'message_id': 99, 'message_seq': 99, 'message': 'older'}]}},
+        {'status': 'ok', 'echo': 'history', 'data': {'messages': []}},
+    ])
+
+    class Connection:
+        async def __aenter__(self):
+            return ws
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(gateway, 'connect', lambda *a, **kw: Connection())
+    assert asyncio.run(import_group_history(cfg, group_id=1, pages=5, stop_at_known_newest=False)) == 1
+    assert len(ws.sent) == 3
+    assert all(request['action'] == 'get_group_msg_history' for request in ws.sent)

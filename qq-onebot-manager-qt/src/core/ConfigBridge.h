@@ -12,10 +12,12 @@ QJsonObject nestDottedPatch(const QJsonObject &flat);
 class ConfigBridge : public QObject {
     Q_OBJECT
 public:
-    explicit ConfigBridge(QObject *parent = nullptr);
+    explicit ConfigBridge(QObject *parent = nullptr, const QString &configPath = {});
     void fetch();                  // config_bridge get
     void save(const QJsonObject &patch); // config_bridge patch <json>
     void saveEnv(const QJsonObject &values); // config_bridge env-patch <json>
+    bool isBusy() const { return m_proc.state() != QProcess::NotRunning || !m_queue.isEmpty(); }
+    void setWritesBlocked(bool blocked) { m_writesBlocked = blocked; }
 signals:
     void schemaLoaded(bool ok, QVariant schema);
     void saved(bool ok, QString message);
@@ -32,4 +34,6 @@ private:
     Mode m_mode = Mode::Fetch;
     QQueue<Pending> m_queue;
     QByteArray m_input;
+    QString m_configPath;
+    bool m_writesBlocked = false;
 };

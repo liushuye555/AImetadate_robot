@@ -8,6 +8,7 @@ private slots:
     void missingFileIsInvalid();
     void staleFileIsInvalid();
     void parsesManualStop();
+    void externalGatewayDoesNotRequireNapcatOrImplyQqLogin();
 };
 
 void TestStatusMonitor::parsesValidJson() {
@@ -27,6 +28,18 @@ void TestStatusMonitor::parsesValidJson() {
 
 void TestStatusMonitor::missingFileIsInvalid() {
     QVERIFY(!parseStatusJson(QByteArray(), QDateTime::currentDateTime()).valid);
+}
+
+void TestStatusMonitor::externalGatewayDoesNotRequireNapcatOrImplyQqLogin() {
+    const auto now = QDateTime::currentDateTime();
+    const QByteArray json = R"({"gatewayProvider":"snowluma","gatewayName":"SnowLuma","gatewayRunning":true,"gatewayManaged":false,"qqStatusKnown":false,"onebot":true,"qqLoggedIn":false,"updatedAt":")"
+        + now.toString(Qt::ISODate).toUtf8() + R"("})";
+    const auto s = parseStatusJson(json, now);
+    QVERIFY(s.valid);
+    QVERIFY(s.gatewayRunning);
+    QVERIFY(s.onebot);
+    QVERIFY(!s.napcat && !s.gatewayManaged && !s.qqLoggedIn && !s.qqStatusKnown);
+    QCOMPARE(s.gatewayName, "SnowLuma");
 }
 
 void TestStatusMonitor::parsesManualStop() {

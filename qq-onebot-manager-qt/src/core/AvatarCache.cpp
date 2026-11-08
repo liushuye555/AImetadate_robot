@@ -76,6 +76,7 @@ void AvatarCache::decorateGroup(QListWidget *list, const QString &groupId, const
 
 void AvatarCache::fetch(const QString &kind, const QString &id, std::function<void(const QPixmap &)> cb) {
     if (id.isEmpty()) return;
+    if (id.startsWith("qqofficial:")) { cb(placeholder(id, kAvatarSize)); return; }
     const QString path = cachePath(kind, id);
     const QFileInfo info(path);
     if (info.exists() && info.size() > 0) {

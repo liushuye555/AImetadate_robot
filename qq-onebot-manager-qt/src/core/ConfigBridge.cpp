@@ -4,10 +4,11 @@
 #include <QJsonDocument>
 #include <QProcessEnvironment>
 
-ConfigBridge::ConfigBridge(QObject *parent) : QObject(parent) {
+ConfigBridge::ConfigBridge(QObject *parent, const QString &configPath) : QObject(parent),
+    m_configPath(configPath.isEmpty() ? Paths::repoRoot() + "/config.yaml" : configPath) {
     ManagedRuntime::bind(&m_proc);
     connect(&m_proc, &QProcess::started, this, [this] {
-        if (m_mode == Mode::EnvSave) {
+        if (m_mode == Mode::EnvSave || m_mode == Mode::Save) {
             m_proc.write(m_input);
             m_proc.closeWriteChannel();
             m_input.clear();
@@ -29,20 +30,27 @@ ConfigBridge::ConfigBridge(QObject *parent) : QObject(parent) {
 
 void ConfigBridge::fetch() {
     runArgs({"-m", "qq_onebot_whitelist.config_bridge", "schema", "--config",
-             Paths::repoRoot() + "/config.yaml"}, Mode::Fetch);
+             m_configPath}, Mode::Fetch);
 }
 
 void ConfigBridge::save(const QJsonObject &patch) {
+    if (m_writesBlocked) {
+        emit saved(false, QStringLiteral("接入方式正在切换，请稍后再保存配置。"));
+        return;
+    }
     runArgs({"-m", "qq_onebot_whitelist.config_bridge", "patch", "--config",
-             Paths::repoRoot() + "/config.yaml",
+             m_configPath,
              "--json",
-             QString::fromUtf8(QJsonDocument(nestDottedPatch(patch)).toJson(QJsonDocument::Compact))},
-            Mode::Save);
+             "-"}, Mode::Save, QJsonDocument(nestDottedPatch(patch)).toJson(QJsonDocument::Compact));
 }
 
 void ConfigBridge::saveEnv(const QJsonObject &values) {
+    if (m_writesBlocked) {
+        emit saved(false, QStringLiteral("接入方式正在切换，请稍后再保存密钥。"));
+        return;
+    }
     runArgs({"-m", "qq_onebot_whitelist.config_bridge", "env-patch", "--config",
-             Paths::repoRoot() + "/config.yaml", "--json",
+             m_configPath, "--json",
              "-"}, Mode::EnvSave, QJsonDocument(values).toJson(QJsonDocument::Compact));
 }
 

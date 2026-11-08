@@ -9,7 +9,7 @@ from qq_onebot_whitelist.config import AppConfig
 
 
 def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch):
-    calls = {'connect': 0, 'sleep': 0, 'status': []}
+    calls = {'connect': 0, 'sleep': 0, 'status': [], 'recovery': 0}
 
     class ConnRefused(ConnectionRefusedError):
         pass
@@ -30,7 +30,7 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
         async def __anext__(self):
             raise StopAsyncIteration
 
-    def fake_connect(url):
+    def fake_connect(url, **kwargs):
         calls['connect'] += 1
         if calls['connect'] == 1:
             raise ConnRefused()
@@ -64,8 +64,16 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
     monkeypatch.setattr(onebot, 'ai_context_loop', fake_noop)
     monkeypatch.setattr(onebot, 'keepalive_loop', fake_noop)
     monkeypatch.setattr(onebot, 'status_writer_loop', fake_noop)
+    monkeypatch.setattr(onebot, 'background_backup_loop', fake_noop)
+    from qq_onebot_whitelist import knowledge, knowledge_capture
+    monkeypatch.setattr(knowledge, 'knowledge_loop', fake_noop)
+    monkeypatch.setattr(knowledge_capture, 'capture_loop', fake_noop)
 
     from qq_onebot_whitelist import control
+    def recover():
+        calls['recovery'] += 1
+        return calls['recovery'] == 1
+    monkeypatch.setattr(control, 'ensure_gateway_running', recover)
     monkeypatch.setattr(control, 'write_status', lambda payload: calls['status'].append(payload))
     monkeypatch.setattr(control, 'port_open', lambda *a: False)
     monkeypatch.setattr(onebot, 'Store', lambda *a, **k: object())
@@ -74,6 +82,7 @@ def test_run_retries_ws_connect_and_marks_bot_down_on_exit(tmp_path, monkeypatch
     with pytest.raises(StopRetry):
         asyncio.run(onebot.run(config))
     assert calls['connect'] == 2  # 首次失败后重试成功
+    assert calls['recovery'] == 2  # 每轮断线尝试恢复已退出的 NapCat
     assert probe_calls['count'] == 1  # 登录探测在独立连接上完成
     assert calls['status'][-1]['bot'] is False  # 退出状态如实
     assert calls['status'][-1]['onebot'] is False

@@ -13,6 +13,19 @@ from .i18n import effective_language, normalize_language
 @dataclass(slots=True)
 class AppConfig:
     onebot_ws_url: str = 'ws://127.0.0.1:3001'
+    onebot_provider: str = 'napcat'
+    onebot_start_installed_runtime: bool = False
+    onebot_manage_process: bool = True
+    onebot_webui_url: str = 'http://127.0.0.1:6099/'
+    onebot_access_token: str = field(default='', repr=False)
+    onebot_max_message_mb: int = 16
+    onebot_disabled_actions: set[str] = field(default_factory=set)
+    official_app_id: str = ''
+    official_app_secret: str = field(default='', repr=False)
+    official_allowed_users: set[str] = field(default_factory=set)
+    official_allowed_groups: set[str] = field(default_factory=set)
+    official_report_users: set[str] = field(default_factory=set)
+    official_report_groups: set[str] = field(default_factory=set)
     data_dir: Path = Path('data')
     bot: BotConfig = field(default_factory=BotConfig)
     default_summary_limit: int = 100
@@ -127,6 +140,30 @@ def load_config(path: str | Path) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding='utf-8')) if path.exists() else {}
     raw = raw or {}
     onebot = raw.get('onebot') or {}
+    from .gateway import PROVIDERS
+    provider = str(onebot.get('provider') or 'napcat').lower()
+    if provider not in PROVIDERS:
+        raise ValueError('未知接入框架；可选 external/napcat/llbot/snowluma/lagrange/qqofficial')
+    if onebot.get('protocol', 'onebot11') not in ('onebot11', 'qqofficial'):
+        raise ValueError('支持 OneBot v11 与 QQ 官方通道；Milky/Satori 需要独立适配器')
+    from urllib.parse import urlsplit
+    ws_url = str(onebot.get('ws_url') or 'ws://127.0.0.1:3001')
+    if urlsplit(ws_url).scheme not in ('ws', 'wss') or not urlsplit(ws_url).hostname:
+        raise ValueError('OneBot 地址需要有效的 ws:// 或 wss:// 地址')
+    webui = str(onebot.get('webui_url', 'http://127.0.0.1:6099/' if provider == 'napcat' else '') or '')
+    if webui and (urlsplit(webui).scheme not in ('http', 'https') or not urlsplit(webui).hostname):
+        raise ValueError('框架管理地址需要 http:// 或 https://')
+    token_env = str(onebot.get('access_token_env') or 'ONEBOT_ACCESS_TOKEN')
+    from .config_bridge import _load_env
+    token = os.environ.get(token_env) or _load_env(path.parent / '.env').get(token_env, '')
+    official = raw.get('qq_official') or {}
+    official_app_id = str(official.get('app_id') or '')
+    if official_app_id and (not official_app_id.isdigit() or len(official_app_id) > 32):
+        raise ValueError('QQ 官方 AppID 应为开放平台提供的数字 ID')
+    official_secret = os.environ.get('QQBOT_APP_SECRET') or _load_env(path.parent / '.env').get('QQBOT_APP_SECRET', '')
+    max_message = int(onebot.get('max_message_mb', 16))
+    if not 1 <= max_message <= 64:
+        raise ValueError('OneBot 消息上限需要在 1–64 MB 之间')
     reply = raw.get('reply') or {}
     storage = raw.get('storage') or {}
     summary = raw.get('summary') or {}
@@ -149,10 +186,23 @@ def load_config(path: str | Path) -> AppConfig:
     backup = raw.get('backup') or {}
     file_sync = raw.get('file_sync') or {}
     configured_language = normalize_language(ui.get('language'))
-    return AppConfig(
+    config = AppConfig(
         source_path=path.resolve(),
         ai_context_provider_explicit=bool(ai_context.get('provider')),
-        onebot_ws_url=str(onebot.get('ws_url') or 'ws://127.0.0.1:3001'),
+        onebot_ws_url=ws_url,
+        onebot_provider=provider,
+        onebot_start_installed_runtime=bool(onebot.get('start_installed_runtime', False)),
+        onebot_manage_process=bool(onebot.get('manage_process', provider == 'napcat')),
+        onebot_webui_url=webui,
+        onebot_access_token=str(token),
+        onebot_max_message_mb=max_message,
+        onebot_disabled_actions={str(a) for a in (onebot.get('disabled_actions') or [])},
+        official_app_id=official_app_id,
+        official_app_secret=str(official_secret),
+        official_allowed_users={str(x) for x in (official.get('allowed_users') or [])},
+        official_allowed_groups={str(x) for x in (official.get('allowed_groups') or [])},
+        official_report_users={str(x) for x in (official.get('report_users') or [])},
+        official_report_groups={str(x) for x in (official.get('report_groups') or [])},
         data_dir=Path(storage.get('data_dir') or 'data'),
         bot=BotConfig(
             whitelist_users={str(x) for x in (reply.get('whitelist_users') or [])},
@@ -268,3 +318,8 @@ def load_config(path: str | Path) -> AppConfig:
         file_sync_scan_interval_minutes=max(5, int(file_sync.get('scan_interval_minutes') or 360)),
         knowledge=dict(raw.get('knowledge') or {}),
     )
+    if provider == 'qqofficial':
+        from .qq_official import identity
+        config.bot.whitelist_users.update(identity(config, x) for x in config.official_allowed_users if x)
+        config.bot.whitelist_groups.update(identity(config, x) for x in config.official_allowed_groups if x)
+    return config

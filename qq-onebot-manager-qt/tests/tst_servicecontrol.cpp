@@ -22,6 +22,7 @@ private slots:
     void nonzeroExitIsFailure();
     void failedToStartIsFailure();
     void breakawaySurvivesCommandAndManagerShutdown();
+    void gatewayPatchUsesStdin();
 };
 
 void TestServiceControl::completionBeforeDeadlineDispatchIsReconciled()
@@ -105,7 +106,6 @@ void TestServiceControl::runningCommandTimesOutAndIsCleanedUp()
     ServiceControl sibling;
     sibling.run({QStringLiteral("-c"), QStringLiteral("import time; time.sleep(30)")});
     QTRY_VERIFY_WITH_TIMEOUT(sibling.isRunning(), 5000);
-    runtime.beginTransition(700);
     QSignalSpy fault(&runtime, &ManagedRuntime::backendFault);
     QSignalSpy finished(&command, &ServiceControl::finished);
     QTemporaryDir evidence;
@@ -119,6 +119,9 @@ void TestServiceControl::runningCommandTimesOutAndIsCleanedUp()
     HANDLE child = OpenProcess(SYNCHRONIZE, FALSE, childPid.readAll().trimmed().toUInt());
     QVERIFY(child);
     const auto cleanup = qScopeGuard([&] { CloseHandle(child); });
+    // Start the deadline after the test child exists; interpreter startup can
+    // exceed 700 ms under load, before there is a child to verify cleanup on.
+    runtime.beginTransition(700);
     QTRY_COMPARE_WITH_TIMEOUT(fault.count(), 1, 5000);
     QCOMPARE(fatal.count(), 0);
     QTRY_VERIFY_WITH_TIMEOUT(!command.isRunning(), 5000);
@@ -194,6 +197,27 @@ void TestServiceControl::failedToStartIsFailure()
     QCOMPARE(finished.at(0).at(0).toBool(), false);
 #else
     QSKIP("Managed Job regression coverage requires Windows");
+#endif
+}
+
+void TestServiceControl::gatewayPatchUsesStdin()
+{
+#ifdef Q_OS_WIN
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    ManagedRuntime runtime(root.path());
+    QString error;
+    QVERIFY2(runtime.initialize(&error), qPrintable(error));
+    ServiceControl command;
+    QSignalSpy finished(&command, &ServiceControl::finished);
+    const QByteArray payload = R"({"onebot":{"provider":"external"}})";
+    command.run({"-c", "import sys,json; data=json.load(sys.stdin); print(data['onebot']['provider'],flush=True)"}, payload);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 10000);
+    QVERIFY(finished.at(0).at(0).toBool());
+    QCOMPARE(finished.at(0).at(1).toString().trimmed(), QString("external"));
+    runtime.shutdown();
+#else
+    QSKIP("Managed Job test requires Windows");
 #endif
 }
 

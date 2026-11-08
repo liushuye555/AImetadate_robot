@@ -96,6 +96,7 @@ def test_start_services_is_idempotent_for_current_manager_session(tmp_path, monk
     monkeypatch.setattr(control, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(control, "RUN_DIR", tmp_path / "run")
     monkeypatch.setattr(control, "require_manager", lambda _root: session)
+    monkeypatch.setattr(control, "port_open", lambda _port: True)
     monkeypatch.setattr(
         control, "read_owned_bot",
         lambda _root, current: read_calls.append(current) or 2468,
@@ -139,7 +140,7 @@ def test_start_services_breaks_napcat_out_of_job_and_keeps_bot_in_job(tmp_path, 
 
     napcat_command, napcat_options = spawned[0]
     bot_command, bot_options = spawned[1]
-    assert "napcat.bat" in napcat_command[-1]
+    assert isinstance(napcat_command, str) and "napcat.bat" in napcat_command
     assert napcat_options["creationflags"] & getattr(control.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
     assert bot_command == [str(python), "-u", "-m", "qq_onebot_whitelist.onebot", "--config", str(config)]
     assert not bot_options["creationflags"] & getattr(control.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
@@ -175,9 +176,14 @@ def test_pid_running_uses_windows_safe_probe(tmp_path, monkeypatch):
 
 
 def test_live_status_uses_current_process_and_ports(tmp_path, monkeypatch):
+    from qq_onebot_whitelist.config import AppConfig
+    monkeypatch.setattr(control, 'load_gateway_config', lambda: AppConfig(onebot_provider='napcat'))
     monkeypatch.setattr(control, "RUN_DIR", tmp_path)
     monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: port in {6099, 3001})
     monkeypatch.setattr(control, "pid_running", lambda path: path.name == "bot.pid")
+    monkeypatch.setattr(control.gateway, 'probe_sync', lambda _: {
+        'onebot': True, 'gatewayRunning': True, 'qqLoggedIn': True,
+        'qqNumber': '', 'qqNickname': '', 'qqStatusKnown': True})
     (tmp_path / "bot.pid").write_text("42", encoding="ascii")
     (tmp_path / "manual-stop").write_text("stop", encoding="ascii")
     (tmp_path / "status.json").write_text(
@@ -196,6 +202,11 @@ def test_live_status_uses_current_process_and_ports(tmp_path, monkeypatch):
 
 
 def test_live_status_survives_corrupt_heartbeat(tmp_path, monkeypatch):
+    from qq_onebot_whitelist.config import AppConfig
+    monkeypatch.setattr(control, 'load_gateway_config', lambda: AppConfig(onebot_provider='external'))
+    monkeypatch.setattr(control.gateway, 'probe_sync', lambda config: {
+        **control.gateway.info(config), 'gatewayRunning': False, 'onebot': False,
+        'qqLoggedIn': False, 'qqStatusKnown': False, 'qqNumber': '', 'qqNickname': ''})
     monkeypatch.setattr(control, "RUN_DIR", tmp_path)
     monkeypatch.setattr(control, "port_open", lambda port, timeout=0.5: False)
     monkeypatch.setattr(control, "pid_running", lambda path: False)

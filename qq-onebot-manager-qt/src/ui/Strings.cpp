@@ -69,10 +69,10 @@ QString Strings::zh(const QString &key) {
     if (key == "collectForwards") return "采集转发消息";
     if (key == "listPlaceholder") return "每行一个";
     if (key == "optionalPlaceholder") return "留空=不限";
-    if (key == "openNapcat") return "打开 NapCat WebUI";
-    if (key == "staleHint") return "状态未知：机器人未运行或状态文件过期。请先在 NapCat WebUI 登录 QQ，再点击“启动”。";
+    if (key == "openNapcat") return "打开接入框架管理页";
+    if (key == "staleHint") return "状态未知：机器人未运行或状态文件过期。请先启动接入框架并登录 QQ，再点击“启动”。";
     if (key == "scanGroups") return "扫描已加入的群";
-    if (key == "webui") return "NapCat WebUI";
+    if (key == "webui") return "接入框架管理页";
     if (key == "collectionOn") return "采集：采集中";
     if (key == "collectionOff") return "采集：已暂停";
     if (key == "customRules") return "自定义采集";
@@ -146,7 +146,7 @@ QString Strings::zh(const QString &key) {
     if (key == "sub_relay") return "群消息搬运规则";
     if (key == "sub_chat") return "人设与聊天回复";
     if (key == "sub_settings") return "机器人运行配置";
-    if (key == "sub_logs") return "bot 与 NapCat 实时日志";
+    if (key == "sub_logs") return "机器人与接入框架日志";
     if (key == "sub_reports") return "群知识、待跟进、术语与采集资料";
     return key;
 }
@@ -216,10 +216,10 @@ QString Strings::en(const QString &key) {
     if (key == "collectForwards") return "Collect forwarded messages";
     if (key == "listPlaceholder") return "One per line";
     if (key == "optionalPlaceholder") return "Leave empty = unlimited";
-    if (key == "openNapcat") return "Open NapCat WebUI";
-    if (key == "staleHint") return "Status unknown: bot is not running or status is stale. Log in via NapCat WebUI, then click Start.";
+    if (key == "openNapcat") return "Open gateway management";
+    if (key == "staleHint") return "Status unknown: bot is not running or status is stale. Start your gateway and log in, then click Start.";
     if (key == "scanGroups") return "Scan joined groups";
-    if (key == "webui") return "NapCat WebUI";
+    if (key == "webui") return "Gateway management";
     if (key == "collectionOn") return "Collect: on";
     if (key == "collectionOff") return "Collect: paused";
     if (key == "customRules") return "Custom collection";
@@ -293,7 +293,7 @@ QString Strings::en(const QString &key) {
     if (key == "sub_relay") return "Group message relay rules";
     if (key == "sub_chat") return "Persona and chat replies";
     if (key == "sub_settings") return "Bot runtime configuration";
-    if (key == "sub_logs") return "Live bot and NapCat logs";
+    if (key == "sub_logs") return "Bot and gateway logs";
     if (key == "sub_reports") return "Daily report and gallery views";
     return key;
 }

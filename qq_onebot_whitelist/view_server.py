@@ -1,4 +1,4 @@
-"""本地图库服务：http 提供 data/view 静态页面，并接收图库页面的导出请求。
+"""本地图库服务：实时数据库查询、归档图片、缩略图、报告页面与导出。
 
 只绑定 127.0.0.1。导出是状态变更操作，需要页面内嵌的构建 token
 （随视图重建轮换，防其他网页跨站盲发）；响应不带 CORS 头，
@@ -13,9 +13,14 @@ import subprocess
 import sys
 import threading
 import time
+import secrets
+import hashlib
+import shutil
+import sqlite3
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, parse_qs, urlencode
 
 _MAX_BODY = 64 * 1024
 _ORIENTATIONS = {'landscape', 'portrait', 'square'}
@@ -33,6 +38,7 @@ _MIME = {
 
 _job_lock = threading.Lock()
 _job: dict = {'status': 'idle'}
+_thumbnail_slots = threading.BoundedSemaphore(2)
 
 
 def _build_state_path(project_dir: Path) -> Path:
@@ -53,6 +59,13 @@ def accepted_tokens(project_dir: Path) -> set[str]:
 
 def _validate_params(payload: dict) -> tuple[list[str], str | None]:
     argv = ['--json']
+    if 'gallery_query' in payload:
+        from .gallery_store import normalize_query
+        try:
+            query = normalize_query(payload['gallery_query'])
+        except ValueError as exc:
+            return [], str(exc)
+        argv += ['--gallery-query', json.dumps(query, ensure_ascii=False)]
     out_dir = str(payload.get('out_dir') or '').strip().strip('"').strip()
     if out_dir:
         # 用户指定绝对路径（资源管理器"复制文件地址"会带引号，上面已剥掉）
@@ -150,7 +163,9 @@ def _run_export(project_dir: Path, argv: list[str]) -> None:
 
 
 def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
+    project_dir = project_dir.resolve()
     view_root = (project_dir / 'data' / 'view').resolve()
+    session_token = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = 'ViewServer/1'
@@ -164,7 +179,73 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != 'HEAD':
+                self.wfile.write(body)
+
+        def _html(self, body: str) -> None:
+            data = body.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(data)
+
+        def _local_request(self) -> bool:
+            host = urlsplit('http://' + self.headers.get('Host', '')).hostname
+            if host not in ('127.0.0.1', 'localhost', '::1'):
+                self._json(403, {'error': '仅允许本机访问'})
+                return False
+            origin = self.headers.get('Origin')
+            if origin and origin != 'http://' + self.headers.get('Host'):
+                self._json(403, {'error': '请求来源不正确'})
+                return False
+            return True
+
+        def _image(self, image_id: int, thumbnail: bool) -> None:
+            from .gallery_store import image_path
+            try:
+                path = image_path(project_dir, image_id)
+                stat = path.stat()
+                key = hashlib.sha256(f'{path}:{stat.st_mtime_ns}:{stat.st_size}:thumb-v1'.encode()).hexdigest()
+                etag = '"' + key + ('-thumb' if thumbnail else '') + '"'
+                if self.headers.get('If-None-Match') == etag:
+                    self.send_response(304)
+                    self.send_header('ETag', etag)
+                    self.end_headers()
+                    return
+                if thumbnail:
+                    cache = project_dir / 'data' / 'cache' / 'gallery-thumbnails'
+                    cache.mkdir(parents=True, exist_ok=True)
+                    target = cache / (key + '.jpg')
+                    with _thumbnail_slots:
+                        if not target.exists():
+                            from PIL import Image, ImageOps
+                            with Image.open(path) as img:
+                                img.seek(0)
+                                img.thumbnail((480, 480))
+                                thumb = ImageOps.exif_transpose(img).convert('RGB')
+                                with tempfile.NamedTemporaryFile(dir=cache, suffix='.tmp', delete=False) as tmp:
+                                    tmp_path = Path(tmp.name)
+                                try:
+                                    thumb.save(tmp_path, format='JPEG', quality=82)
+                                    tmp_path.replace(target)
+                                finally:
+                                    tmp_path.unlink(missing_ok=True)
+                    path = target
+                with path.open('rb') as stream:
+                    self.send_response(200)
+                    self.send_header('Content-Type', _MIME.get(path.suffix.lower(), 'application/octet-stream'))
+                    self.send_header('Content-Length', str(os.fstat(stream.fileno()).st_size))
+                    self.send_header('Cache-Control', 'private, max-age=600')
+                    self.send_header('ETag', etag)
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    if self.command != 'HEAD':
+                        shutil.copyfileobj(stream, self.wfile)
+            except (FileNotFoundError, OSError, ValueError):
+                self._json(404, {'error': '原图不存在或暂时无法读取'})
 
         def _static(self, rel: str) -> None:
             base = str(view_root) + os.sep
@@ -186,10 +267,53 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
             # html 不缓存：重建后立即生效；chunk URL 自带构建指纹，其余短缓存即可
             self.send_header('Cache-Control', 'no-cache' if target.suffix == '.html' else 'max-age=600')
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != 'HEAD':
+                self.wfile.write(data)
 
         def do_GET(self) -> None:  # noqa: N802 (http.server 命名约定)
+            if not self._local_request():
+                return
             path = unquote(urlsplit(self.path).path)
+            if path.startswith('/api/gallery/') or path.startswith('/media/images/'):
+                from .gallery_store import facets, query_images
+                try:
+                    if path == '/api/gallery/meta':
+                        self._json(200, {**facets(project_dir), 'token': session_token})
+                    elif path == '/api/gallery/images':
+                        params = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                        if any(len(v) != 1 for v in params.values()):
+                            raise ValueError('筛选条件不能重复')
+                        self._json(200, query_images(project_dir, {k: v[0] for k,v in params.items()}))
+                    elif match := re.fullmatch(r'/media/images/([1-9][0-9]{0,17})(/thumbnail)?', path):
+                        self._image(int(match[1]), bool(match[2]))
+                    else:
+                        self._json(404, {'error': 'not found'})
+                except ValueError as exc:
+                    self._json(400, {'error': str(exc)})
+                except sqlite3.Error:
+                    self._json(503, {'error': '图片数据库暂时不可用，请稍后重试'})
+                return
+            if path == '/view/gallery.html':
+                from .database_gallery import gallery_html
+                self._html(gallery_html(project_dir))
+                return
+            if path in ('/view/', '/view/index.html'):
+                from .gallery_store import facets
+                from .database_gallery import hub_html
+                try:
+                    self._html(hub_html(project_dir, facets(project_dir)))
+                except sqlite3.Error:
+                    self._json(503, {'error': '图片数据库暂时不可用'})
+                return
+            # Historic category URLs now query the catalogue, including categories with no directory.
+            if path.startswith('/view/') and (path.endswith('/index.html') or path.endswith('/')):
+                from .build_image_view import CATEGORY_NAMES, ALL_GALLERY_DIR, _SAVED_ROOT
+                category = path[len('/view/'):].removesuffix('index.html').rstrip('/')
+                if category == ALL_GALLERY_DIR or category.startswith(tuple(CATEGORY_NAMES.values()) + (_SAVED_ROOT,)):
+                    self.send_response(302)
+                    self.send_header('Location', '/view/gallery.html' + ('' if category == ALL_GALLERY_DIR else '?' + urlencode({'category': category})))
+                    self.end_headers()
+                    return
             if path == '/api/export/status':
                 with _job_lock:
                     snapshot = dict(_job)
@@ -209,6 +333,8 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
             self._json(404, {'error': 'not found'})
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._local_request():
+                return
             if urlsplit(self.path).path == '/api/knowledge/feedback':
                 from .config import load_config
                 from .knowledge_feedback import submit_feedback
@@ -252,7 +378,7 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
             if not isinstance(payload, dict):
                 self._json(400, {'error': 'JSON 解析失败'})
                 return
-            tokens = accepted_tokens(project_dir)
+            tokens = accepted_tokens(project_dir) | {session_token}
             if not tokens:
                 self._json(403, {'error': '视图尚未构建，请先运行维护构建页面'})
                 return
@@ -282,6 +408,8 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
                              daemon=True, name='export-job').start()
             self._json(202, {'status': 'running'})
 
+        do_HEAD = do_GET
+
     return Handler
 
 
@@ -300,3 +428,14 @@ def serve(project_dir: Path, port: int) -> None:
         return
     print(f'view server: http://127.0.0.1:{port}/view/ （仅本机可访问）')
     httpd.serve_forever()
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='启动仅本机可访问的图片与报告服务')
+    parser.add_argument('--project-dir', default='.')
+    parser.add_argument('--port', type=int)
+    args = parser.parse_args()
+    root = Path(args.project_dir).resolve()
+    from .database_gallery import port_for
+    serve(root, args.port if args.port is not None else port_for(root))

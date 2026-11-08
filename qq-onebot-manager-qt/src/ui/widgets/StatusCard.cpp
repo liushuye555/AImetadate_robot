@@ -38,6 +38,8 @@ StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *p
     m_dot->setObjectName("statusDot");
     m_dot->setFixedSize(8, 8);
     auto *titleLabel = new QLabel(title, this);
+    m_title = titleLabel;
+    titleLabel->setTextFormat(Qt::PlainText);
     titleLabel->setObjectName("cardTitle");
     titleRow->addWidget(m_dot);
     titleRow->addWidget(titleLabel);
@@ -58,6 +60,8 @@ StatusCard::StatusCard(const QString &title, const QString &iconPath, QWidget *p
     text->addWidget(m_detail);
     layout->addLayout(text, 1);
 }
+
+void StatusCard::setTitle(const QString &title) { m_title->setText(title); }
 
 void StatusCard::setIconPixmap(const QPixmap &pixmap) {
     if (!m_icon || pixmap.isNull()) return;

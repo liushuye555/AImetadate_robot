@@ -41,7 +41,7 @@ def test_write_view_index_renders_link_and_file_totals(tmp_path):
 def test_build_view_single_file_with_mask_marker_and_toggle(tmp_path):
     import sqlite3
     from pathlib import Path
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -86,7 +86,7 @@ def test_build_view_confused_metadata_image_shows_in_both_categories(tmp_path):
     """带元数据的确认混淆图：05 为主分类，同时交叉显示回来源 01 分类（同样遮罩）。"""
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -131,7 +131,7 @@ def test_build_view_confused_metadata_image_shows_in_both_categories(tmp_path):
 def test_build_view_batch_folds_12_but_not_31(tmp_path):
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -174,7 +174,7 @@ def test_build_view_batch_folds_12_but_not_31(tmp_path):
 def test_view_prompt_bound_card_and_batch_collapse(tmp_path):
     import sqlite3
     from pathlib import Path
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     data = tmp_path / "data"
     data.mkdir(parents=True)
     store = __import__("qq_onebot_whitelist.store", fromlist=["Store"]).Store(data / "bot.db")
@@ -212,7 +212,7 @@ def test_view_prompt_bound_card_and_batch_collapse(tmp_path):
 def test_view_prompt_bound_page_masks_deobfuscated(tmp_path):
     import sqlite3
     from pathlib import Path
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     data = tmp_path / "data"
     data.mkdir(parents=True)
     store = __import__("qq_onebot_whitelist.store", fromlist=["Store"]).Store(data / "bot.db")
@@ -253,7 +253,7 @@ def test_build_view_relinks_copy_fallbacks(tmp_path, monkeypatch):
     import sqlite3
 
     from qq_onebot_whitelist import build_image_view as module
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -540,7 +540,7 @@ def test_gallery_embeds_user_filter_with_nickname(tmp_path):
     """uid 进 chunk、用户下拉带昵称与数量；无名可查时退回 uid。"""
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -598,7 +598,7 @@ def test_saved_collection_index_links_single_encoded(tmp_path):
     """06 收藏入口页的子分类链接只编码一次（中文分类名二次编码会坏链）。"""
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -635,7 +635,7 @@ def test_gallery_page_has_export_dialog_and_token_history(tmp_path):
     import json as json_lib
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     from qq_onebot_whitelist.view_server import accepted_tokens
 
     data = tmp_path / "data"
@@ -683,7 +683,7 @@ def test_gallery_info_files_and_lightbox_panel(tmp_path):
     """大图信息面板：info/<id>.js 含元数据，页面有面板与一键筛选逻辑。"""
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -733,7 +733,7 @@ def test_build_view_masks_sibling_rows_and_merged_context(tmp_path):
     """
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     from qq_onebot_whitelist.maintenance import propagate_deobfuscated
 
     data = tmp_path / "data"
@@ -781,7 +781,7 @@ def test_build_view_creates_all_group_gallery_with_cat_filter(tmp_path):
     import json as json_lib
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -850,7 +850,7 @@ def test_build_view_all_group_gallery_skips_context_duplicates(tmp_path):
     """合并图库只收主落位：交叉显示副本（context_reason）不重复计入。"""
     import sqlite3
 
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
 
     data = tmp_path / "data"
     data.mkdir(parents=True)
@@ -939,7 +939,7 @@ def _gallery_chunk_items(cat_dir, subdir='chunks'):
 ])
 @pytest.mark.parametrize('deobfuscated', [False, True])
 def test_context_display_masks_only_restored_images(tmp_path, context_reason, category, deobfuscated):
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')
@@ -965,7 +965,7 @@ def test_context_display_masks_only_restored_images(tmp_path, context_reason, ca
     ('rejected', False),
 ])
 def test_params_discussion_report_uses_review_status_without_removing_image(tmp_path, status, visible):
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')
@@ -1000,7 +1000,7 @@ def test_params_discussion_report_uses_review_status_without_removing_image(tmp_
     ('rejected', False),
 ])
 def test_ai_image_param_cross_display_does_not_hide_ai_main_category(tmp_path, status, params_visible):
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')
@@ -1029,7 +1029,7 @@ def test_ai_image_param_cross_display_does_not_hide_ai_main_category(tmp_path, s
 
 
 def test_params_discussion_report_falls_back_when_discussion_table_is_missing(tmp_path):
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')
@@ -1054,7 +1054,7 @@ def test_params_discussion_report_falls_back_when_discussion_table_is_missing(tm
 def test_all_gallery_masks_restored_images_from_obfuscation_category(tmp_path):
     import json
     from PIL import Image
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')
@@ -1086,7 +1086,7 @@ def test_all_gallery_masks_restored_images_from_obfuscation_category(tmp_path):
 
 
 def test_saved_collection_masks_restored_images(tmp_path):
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
     from qq_onebot_whitelist.store import Store
 
     store = Store(tmp_path / 'data' / 'bot.db')

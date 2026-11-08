@@ -19,7 +19,7 @@ class FakeWs:
 
 
 def patch_ws(monkeypatch):
-    monkeypatch.setattr(websockets, 'connect', lambda url: FakeWs())
+    monkeypatch.setattr(websockets, 'connect', lambda url, **kwargs: FakeWs())
 
 
 def make_config(**over):

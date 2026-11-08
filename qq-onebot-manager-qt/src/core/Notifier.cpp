@@ -25,12 +25,12 @@ void Notifier::onStatusChanged(const StatusSnapshot &s) {
         m_last = s;
         return;
     }
-    if (!m_last.qqLoggedIn && s.qqLoggedIn)
+    if (s.qqStatusKnown && !m_last.qqLoggedIn && s.qqLoggedIn)
         notify(Strings::zh("qqLogin"), s.qqNickname + " (" + s.qqNumber + ")", "login");
-    if (m_last.qqLoggedIn && !s.qqLoggedIn)
+    if (s.qqStatusKnown && m_last.qqLoggedIn && !s.qqLoggedIn)
         notify(Strings::zh("qqLogout"), s.qqNickname, "logout");
-    if (m_last.napcat && !s.napcat)
-        notify(Strings::zh("error"), "NapCat", "napcat-down");
+    if (m_last.gatewayRunning && !s.gatewayRunning && m_last.gatewayProvider == s.gatewayProvider)
+        notify(Strings::zh("error"), s.gatewayName, "gateway-down");
     if (m_last.onebot && !s.onebot)
         notify(Strings::zh("error"), "OneBot", "onebot-down");
     if (m_last.bot && !s.bot)

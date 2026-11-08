@@ -1,6 +1,8 @@
 """群搬运：把输入群的合并消息/分享型消息转发到输出群（24 小时去重，可 AI 过滤）。"""
 from __future__ import annotations
 
+from . import gateway
+
 import hashlib
 import json
 from typing import Any
@@ -193,7 +195,7 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
         return
     messages: list[dict] = []
     # 独立连接收发指令，避免与主消息循环并发 recv 冲突
-    async with websockets.connect(config.onebot_ws_url) as action_ws:
+    async with gateway.connect(config) as action_ws:
         for fid in ids[:5]:
             try:
                 resp = await call_action(action_ws, 'get_forward_msg', {'id': fid})
@@ -215,13 +217,13 @@ async def relay_forward(ws, store, event: dict, config, targets: list[str]) -> N
             if store.forward_seen_in(target_scope, key, hours=config.relay_dedupe_hours):
                 continue  # 目标群已有人发过该内容，不重复搬
             try:
-                await call_action(action_ws, 'send_forward_msg', {'group_id': int(gid), 'messages': nodes})
+                await call_action(action_ws, 'send_forward_msg', {'group_id': int(gid) if str(gid).isdigit() else gid, 'messages': nodes})
                 sent = True
                 store.record_forward_seen(target_scope, key)
             except Exception as exc:
                 print(f'relay send_forward failed to {gid}: {type(exc).__name__}: {exc}; fallback text')
                 try:
-                    await call_action(action_ws, 'send_group_msg', {'group_id': int(gid), 'message': forward_text(messages)})
+                    await call_action(action_ws, 'send_group_msg', {'group_id': int(gid) if str(gid).isdigit() else gid, 'message': forward_text(messages)})
                     sent = True
                     store.record_forward_seen(target_scope, key)
                 except Exception as exc2:
@@ -258,10 +260,10 @@ async def relay_ordinary(ws, store, event: dict, config, targets: list[str]) -> 
         return
     message = _clean_segments(event) or (text or '[图片]')
     sent = False
-    async with websockets.connect(config.onebot_ws_url) as action_ws:
+    async with gateway.connect(config) as action_ws:
         for gid in targets:
             try:
-                await call_action(action_ws, 'send_group_msg', {'group_id': int(gid), 'message': message})
+                await call_action(action_ws, 'send_group_msg', {'group_id': int(gid) if str(gid).isdigit() else gid, 'message': message})
                 sent = True
             except Exception as exc:
                 print(f'relay ordinary failed to {gid}: {type(exc).__name__}: {exc}')

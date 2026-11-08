@@ -1,6 +1,8 @@
 #pragma once
 #include <QWidget>
 #include <QVector>
+#include <QJsonObject>
+#include <QVariant>
 #include "core/StatusMonitor.h"
 
 class StatusCard;
@@ -8,6 +10,9 @@ class QPushButton;
 class QLabel;
 class QGridLayout;
 class QResizeEvent;
+class QComboBox;
+class QLineEdit;
+class QCheckBox;
 
 class OverviewPage : public QWidget {
     Q_OBJECT
@@ -21,12 +26,33 @@ public:
     void setAutoRestartText(const QString &text);
     void setCollectionPaused(bool paused);
     bool collectionChecked() const;
+    void setGatewaySchema(const QVariant &schema);
+    void setGatewayBusy(bool busy);
+    void setGatewayResult(const QString &text);
 signals:
+    void gatewaySwitchRequested(const QJsonObject &patch);
+    void gatewayRestoreRequested();
+    void snowLumaActionRequested(const QString &action);
     void actionRequested(const QString &action); // start/stop/restart/refresh/logs/reports/config/history
 protected:
     void resizeEvent(QResizeEvent *event) override;
 private:
     void updateResponsiveLayout();
+    void updateGatewayFields();
+    QWidget *m_gatewayPanel = nullptr;
+    QWidget *m_gatewayDetails = nullptr;
+    QWidget *m_gatewaySnowActions = nullptr;
+    QPushButton *m_gatewayDetailsToggle = nullptr;
+    QComboBox *m_gatewayProvider = nullptr;
+    QLineEdit *m_gatewayWs = nullptr;
+    QLineEdit *m_gatewayTokenEnv = nullptr;
+    QLineEdit *m_gatewayWebui = nullptr;
+    QCheckBox *m_gatewayManaged = nullptr;
+    QCheckBox *m_gatewayInstalled = nullptr;
+    QLabel *m_gatewayMessage = nullptr;
+    QJsonObject m_gatewayConfig;
+    bool m_gatewayLoaded = false;
+    bool m_gatewayBusy = false;
     QWidget *m_body = nullptr;
     QGridLayout *m_servicesLayout = nullptr;
     QGridLayout *m_countsLayout = nullptr;

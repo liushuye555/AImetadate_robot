@@ -42,7 +42,7 @@ def make_image(path):
 
 def test_same_content_shown_once_with_occurrence_suffix(tmp_path):
     """同一张图被记 3 条（重发场景）：页面只显示 1 个，文件名带 _x3。"""
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     img = make_image(tmp_path / 'a.png')
     make_db(tmp_path, [
@@ -61,7 +61,7 @@ def test_same_content_shown_once_with_occurrence_suffix(tmp_path):
 
 def test_different_content_all_shown(tmp_path):
     """不同内容不受去重影响。"""
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     img1 = make_image(tmp_path / 'a.png')
     img2 = make_image(tmp_path / 'b.png')
@@ -75,7 +75,7 @@ def test_different_content_all_shown(tmp_path):
 
 def test_dedup_keeps_newest_record(tmp_path):
     """重复内容保留最新记录（id 最大）作代表。"""
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     img = make_image(tmp_path / 'a.png')
     make_db(tmp_path, [

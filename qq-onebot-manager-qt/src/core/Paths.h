@@ -20,7 +20,11 @@ public:
         // Only explicit HTML fragments are navigation; '#' in ordinary names stays literal.
         const qsizetype fragmentAt = relative.indexOf(QStringLiteral(".html#"));
         const QString path = fragmentAt < 0 ? relative : relative.left(fragmentAt + 5);
-        QUrl result = QUrl::fromLocalFile(repoRoot() + "/" + path);
+        // Gallery filters are URL queries; '#' in image filenames remains literal.
+        const qsizetype queryAt = path.indexOf(QStringLiteral("gallery.html?"));
+        const QString local = queryAt < 0 ? path : path.left(queryAt + 12);
+        QUrl result = QUrl::fromLocalFile(repoRoot() + "/" + local);
+        if (queryAt >= 0) result.setQuery(path.mid(queryAt + 13));
         if (fragmentAt >= 0) result.setFragment(relative.mid(fragmentAt + 6));
         return result;
     }

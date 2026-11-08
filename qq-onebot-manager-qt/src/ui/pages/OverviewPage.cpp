@@ -13,6 +13,13 @@
 #include <QRegularExpression>
 #include <QDate>
 #include <QTime>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QFormLayout>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QSignalBlocker>
 
 namespace {
 // Count and activity cards use separate type sizes so timestamps stay readable.
@@ -89,7 +96,7 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     m_servicesLayout = cards;
     cards->setHorizontalSpacing(12);
     cards->setVerticalSpacing(12);
-    m_napcat = new StatusCard("NapCat", ":/icons/card-napcat.png", this);
+    m_napcat = new StatusCard("接入框架", ":/icons/card-napcat.png", this);
     m_onebot = new StatusCard("OneBot", ":/icons/card-onebot.png", this);
     m_bot = new StatusCard("Bot", ":/icons/card-bot.png", this);
     m_qq = new StatusCard("QQ", ":/icons/card-qq.png", this);
@@ -99,6 +106,125 @@ OverviewPage::OverviewPage(QWidget *parent) : QWidget(parent) {
     cards->addWidget(m_qq, 0, 3);
     m_serviceCards = {m_napcat, m_onebot, m_bot, m_qq};
     layout->addLayout(cards);
+
+    auto *gatewayCard = new QFrame(m_body);
+    gatewayCard->setObjectName("card");
+    m_gatewayPanel = gatewayCard;
+    auto *gatewayLayout = new QVBoxLayout(gatewayCard);
+    gatewayLayout->setContentsMargins(18, 14, 18, 14);
+    auto *gatewayTitle = new QLabel(QStringLiteral("框架切换"), gatewayCard);
+    gatewayTitle->setObjectName("sectionTitle");
+    gatewayLayout->addWidget(gatewayTitle);
+    auto *gatewayCurrent = new QLabel(gatewayCard);
+    gatewayCurrent->setObjectName("homeGatewayCurrent");
+    gatewayCurrent->setTextFormat(Qt::PlainText);
+    gatewayLayout->addWidget(gatewayCurrent);
+    auto *gatewayForm = new QFormLayout;
+    gatewayForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    gatewayForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    m_gatewayProvider = new QComboBox(gatewayCard);
+    m_gatewayProvider->setObjectName("homeGatewayProvider");
+    const QList<QPair<QString, QString>> providers = {
+        {"通用 OneBot v11", "external"}, {"NapCat", "napcat"},
+        {"LuckyLilliaBot", "llbot"}, {"SnowLuma", "snowluma"},
+        {"Lagrange.OneBot", "lagrange"}, {"QQ 官方机器人", "qqofficial"}
+    };
+    for (const auto &provider : providers) m_gatewayProvider->addItem(provider.first, provider.second);
+    m_gatewayWs = new QLineEdit(gatewayCard);
+    m_gatewayWs->setObjectName("homeGatewayWs");
+    m_gatewayTokenEnv = new QLineEdit(gatewayCard);
+    m_gatewayTokenEnv->setObjectName("homeGatewayTokenEnv");
+    m_gatewayTokenEnv->setToolTip(QStringLiteral("填写保存 Token 的环境变量名，密钥本身保存在项目 .env 中。"));
+    m_gatewayWebui = new QLineEdit(gatewayCard);
+    m_gatewayWebui->setObjectName("homeGatewayWebui");
+    m_gatewayManaged = new QCheckBox(QStringLiteral("随管理器启动内置 NapCat"), gatewayCard);
+    m_gatewayInstalled = new QCheckBox(QStringLiteral("随管理器启动已安装的 SnowLuma"), gatewayCard);
+    gatewayForm->addRow(QStringLiteral("目标框架"), m_gatewayProvider);
+    gatewayLayout->addLayout(gatewayForm);
+    m_gatewayDetails = new QWidget(gatewayCard);
+    m_gatewayDetails->setObjectName("homeGatewayDetails");
+    gatewayForm = new QFormLayout;
+    gatewayForm->setContentsMargins(0, 0, 0, 0);
+    gatewayForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    gatewayForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    gatewayForm->addRow(QStringLiteral("连接地址"), m_gatewayWs);
+    gatewayForm->addRow(QStringLiteral("Token 变量名"), m_gatewayTokenEnv);
+    gatewayForm->addRow(QStringLiteral("管理页地址"), m_gatewayWebui);
+    gatewayForm->addRow(m_gatewayManaged);
+    gatewayForm->addRow(m_gatewayInstalled);
+    m_gatewayDetails->setLayout(gatewayForm);
+    gatewayLayout->addWidget(m_gatewayDetails);
+    m_gatewayDetails->hide();
+    auto *gatewayButtons = new QHBoxLayout;
+    auto *gatewaySwitch = new QPushButton(QStringLiteral("检查并切换"), gatewayCard);
+    gatewaySwitch->setObjectName("homeGatewaySwitch");
+    auto *gatewayRestore = new QPushButton(QStringLiteral("恢复上次框架"), gatewayCard);
+    gatewayRestore->setObjectName("homeGatewayRestore");
+    gatewayButtons->addWidget(gatewaySwitch);
+    gatewayButtons->addWidget(gatewayRestore);
+    m_gatewayDetailsToggle = new QPushButton(QStringLiteral("连接参数"), gatewayCard);
+    m_gatewayDetailsToggle->setObjectName("homeGatewayDetailsToggle");
+    gatewayButtons->addWidget(m_gatewayDetailsToggle);
+    connect(m_gatewayDetailsToggle, &QPushButton::clicked, this, [this] {
+        const bool expanded = m_gatewayDetails->isHidden();
+        m_gatewayDetails->setVisible(expanded);
+        m_gatewayDetailsToggle->setText(expanded ? QStringLiteral("收起参数") : QStringLiteral("连接参数"));
+    });
+    gatewayButtons->addStretch();
+    gatewayLayout->addLayout(gatewayButtons);
+    m_gatewaySnowActions = new QWidget(gatewayCard);
+    auto *snowButtons = new QGridLayout(m_gatewaySnowActions);
+    snowButtons->setContentsMargins(0, 0, 0, 0);
+    const QList<QPair<QString, QString>> snowActions = {
+        {"安装 SnowLuma", "install"}, {"启动 SnowLuma", "start"},
+        {"自动识别并切换 SnowLuma", "switch"}, {"SnowLuma 管理页", "webui"}
+    };
+    for (int i = 0; i < snowActions.size(); ++i) {
+        const auto action = snowActions[i];
+        auto *button = new QPushButton(action.first, gatewayCard);
+        button->setObjectName("homeSnowLuma_" + action.second);
+        snowButtons->addWidget(button, i / 2, i % 2);
+        connect(button, &QPushButton::clicked, this, [this, action] { emit snowLumaActionRequested(action.second); });
+    }
+    gatewayLayout->addWidget(m_gatewaySnowActions);
+    m_gatewayMessage = new QLabel(QStringLiteral("正在加载接入配置…"), gatewayCard);
+    m_gatewayMessage->setObjectName("homeGatewayMessage");
+    m_gatewayMessage->setWordWrap(true);
+    m_gatewayMessage->setTextFormat(Qt::PlainText);
+    gatewayLayout->addWidget(m_gatewayMessage);
+    layout->addWidget(gatewayCard);
+    gatewayCard->setEnabled(false);
+    connect(m_gatewayProvider, &QComboBox::currentIndexChanged, this, [this] {
+        const QString provider = m_gatewayProvider->currentData().toString();
+        const bool same = provider == m_gatewayConfig.value("onebot.provider").toString();
+        m_gatewayWs->setText(same ? m_gatewayConfig.value("onebot.ws_url").toString() : "ws://127.0.0.1:3001");
+        m_gatewayTokenEnv->setText(same ? m_gatewayConfig.value("onebot.access_token_env").toString()
+            : provider == "snowluma" ? "SNOWLUMA_ONEBOT_TOKEN" : "ONEBOT_ACCESS_TOKEN");
+        m_gatewayWebui->setText(same ? m_gatewayConfig.value("onebot.webui_url").toString()
+            : provider == "snowluma" ? "http://127.0.0.1:5099/"
+            : provider == "napcat" ? "http://127.0.0.1:6099/" : "");
+        m_gatewayManaged->setChecked(same ? m_gatewayConfig.value("onebot.manage_process").toBool() : provider == "napcat");
+        m_gatewayInstalled->setChecked(same && m_gatewayConfig.value("onebot.start_installed_runtime").toBool());
+        updateGatewayFields();
+        m_gatewayDetails->setVisible(provider != "qqofficial");
+        m_gatewayDetailsToggle->setText(QStringLiteral("收起参数"));
+    });
+    connect(gatewaySwitch, &QPushButton::clicked, this, [this] {
+        QJsonObject patch = m_gatewayConfig;
+        const QString provider = m_gatewayProvider->currentData().toString();
+        patch.insert("onebot.provider", provider);
+        patch.insert("onebot.protocol", provider == "qqofficial" ? "qqofficial" : "onebot11");
+        if (provider != "qqofficial") {
+            patch.insert("onebot.ws_url", m_gatewayWs->text().trimmed());
+            patch.insert("onebot.access_token_env", m_gatewayTokenEnv->text().trimmed());
+            patch.insert("onebot.webui_url", m_gatewayWebui->text().trimmed());
+        }
+        patch.insert("onebot.manage_process", provider == "napcat" && m_gatewayManaged->isChecked());
+        patch.insert("onebot.start_installed_runtime", provider == "snowluma" && m_gatewayInstalled->isChecked());
+        emit gatewaySwitchRequested(patch);
+    });
+    connect(gatewayRestore, &QPushButton::clicked, this, &OverviewPage::gatewayRestoreRequested);
+    updateGatewayFields();
 
     // Counts get a row of their own; activity timestamps have wider two-line cards.
     auto *stats = new QGridLayout;
@@ -222,14 +348,21 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
     }
     if (m_backendFault.isEmpty()) m_hint->hide();
     else setHint(m_backendFault);
-    m_napcat->setValue(s.napcat ? Strings::zh("running") : Strings::zh("stopped"), s.napcat);
+    if (!s.gatewayError.isEmpty()) setHint(s.gatewayError);
+    m_napcat->setTitle(s.gatewayName);
+    const bool gatewayRunning = s.gatewayRunning || (s.gatewayProvider == "napcat" && s.napcat);
+    m_napcat->setValue(gatewayRunning ? Strings::zh("running") : Strings::zh("stopped"), gatewayRunning,
+                     s.gatewayManaged ? "本项目管理" : "外部运行");
     m_onebot->setValue(s.onebot ? Strings::zh("running") : Strings::zh("stopped"), s.onebot);
+    m_onebot->setTitle(s.gatewayProvider == "qqofficial" ? "官方网关" : "OneBot");
     const bool botRunning = s.bot && m_backendFault.isEmpty();
     m_bot->setValue(botRunning ? Strings::zh("running") : Strings::zh("stopped"), botRunning);
-    const QString account = s.qqNumber.isEmpty()
-        ? (s.qqLoggedIn ? Strings::zh("running") : "未登录")
-        : (s.qqNickname.isEmpty() ? "QQ 账号" : s.qqNickname);
-    m_qq->setValue(account, s.qqLoggedIn, s.qqNumber.isEmpty() ? QString() : "QQ " + s.qqNumber);
+    const QString account = !s.qqStatusKnown ? "登录状态未确认"
+        : (!s.qqLoggedIn ? "未登录" : (s.qqNickname.isEmpty() ? Strings::zh("running") : s.qqNickname));
+    const QString idLabel = s.gatewayProvider == "qqofficial" ? "AppID " : "QQ ";
+    const QString identity = s.qqNumber.isEmpty() ? QString()
+        : (s.qqLoggedIn ? idLabel : (s.qqNickname.isEmpty() ? idLabel : s.qqNickname + " · " + idLabel)) + s.qqNumber;
+    m_qq->setValue(account, s.qqStatusKnown && s.qqLoggedIn, identity);
     // 采集健康度：队列积压 / 撤回记录 / 最近视图同步（随 30s 状态心跳更新）
     m_statQueue->setText(QString::number(s.imageQueue));
     m_statQueue->setToolTip(s.imageQueue > 0 ? QStringLiteral("等待处理：%1 张图片").arg(s.imageQueue)
@@ -238,7 +371,7 @@ void OverviewPage::setStatus(const StatusSnapshot &s) {
     setActivity(m_statViewSync, s.lastViewSync, "尚未同步");
     setActivity(m_statBackup, s.lastBackup, "暂无备份", !s.lastBackup.isEmpty() && !s.backupOk);
     updateResponsiveLayout();
-    if (!s.qqNumber.isEmpty() && s.qqNumber != m_avatarQQ) {
+    if (s.gatewayProvider != "qqofficial" && !s.qqNumber.isEmpty() && s.qqNumber != m_avatarQQ) {
         m_avatarQQ = s.qqNumber;  // 每个账号只拉一次（含磁盘缓存）
         AvatarCache::instance().fetch("user", s.qqNumber, [this](const QPixmap &pm) {
             m_qq->setIconPixmap(pm);
@@ -313,3 +446,49 @@ void OverviewPage::setCollectionPaused(bool paused) {
 bool OverviewPage::collectionChecked() const {
     return m_collection ? m_collection->isChecked() : m_collectionPaused;
 }
+
+void OverviewPage::setGatewaySchema(const QVariant &schema) {
+    m_gatewayConfig = {};
+    for (const auto &entry : QJsonDocument::fromVariant(schema).array()) {
+        const auto field = entry.toObject();
+        const QString key = field.value("key").toString();
+        if (key.startsWith("onebot.")) m_gatewayConfig.insert(key, field.value("default"));
+    }
+    m_gatewayLoaded = m_gatewayConfig.contains("onebot.provider");
+    const QSignalBlocker blocker(m_gatewayProvider);
+    m_gatewayProvider->setCurrentIndex(m_gatewayProvider->findData(m_gatewayConfig.value("onebot.provider").toString()));
+    m_gatewayPanel->findChild<QLabel *>("homeGatewayCurrent")->setText(
+        QStringLiteral("当前配置：%1").arg(m_gatewayProvider->currentText()));
+    m_gatewayWs->setText(m_gatewayConfig.value("onebot.ws_url").toString());
+    m_gatewayTokenEnv->setText(m_gatewayConfig.value("onebot.access_token_env").toString());
+    m_gatewayWebui->setText(m_gatewayConfig.value("onebot.webui_url").toString());
+    m_gatewayManaged->setChecked(m_gatewayConfig.value("onebot.manage_process").toBool());
+    m_gatewayInstalled->setChecked(m_gatewayConfig.value("onebot.start_installed_runtime").toBool());
+    m_gatewayPanel->setEnabled(m_gatewayLoaded && !m_gatewayBusy);
+    updateGatewayFields();
+    m_gatewayDetails->hide();
+    m_gatewayDetailsToggle->setText(QStringLiteral("连接参数"));
+    if (m_gatewayMessage->text() == QStringLiteral("正在加载接入配置…"))
+        setGatewayResult(QStringLiteral("先启动目标框架并完成登录，再检查切换。切换会暂停机器人，成功后点击首页“启动”。"));
+}
+
+void OverviewPage::updateGatewayFields() {
+    const QString provider = m_gatewayProvider->currentData().toString();
+    const bool onebot = provider != "qqofficial";
+    m_gatewayWs->setEnabled(onebot);
+    m_gatewayTokenEnv->setEnabled(onebot);
+    m_gatewayWebui->setEnabled(onebot);
+    m_gatewayManaged->setVisible(provider == "napcat");
+    m_gatewayInstalled->setVisible(provider == "snowluma");
+    m_gatewaySnowActions->setVisible(provider == "snowluma");
+    m_gatewayDetailsToggle->setVisible(onebot);
+    m_gatewayProvider->setToolTip(provider == "qqofficial"
+        ? QStringLiteral("请先在设置页绑定官方机器人；检查切换使用已保存的官方凭据。") : QString());
+}
+
+void OverviewPage::setGatewayBusy(bool busy) {
+    m_gatewayBusy = busy;
+    m_gatewayPanel->setEnabled(m_gatewayLoaded && !busy);
+}
+
+void OverviewPage::setGatewayResult(const QString &text) { m_gatewayMessage->setText(text); }

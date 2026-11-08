@@ -69,8 +69,9 @@ def test_live_answer_to_old_text_thread_is_extracted_without_images(tmp_path):
     with store._conn() as conn:
         assert conn.execute('SELECT COUNT(*) FROM images').fetchone()[0] == 0
     page = (store.path.parent / 'view' / 'knowledge.html').read_text(encoding='utf-8')
-    assert 'Krea2量化设置对比' in page and '文字讨论可独立收录' in page
-    assert '精选讨论' in page and '待确认讨论' in page and 'data-value="high"' in page
+    assert 'Krea2量化设置对比' in page and '文字讨论也可独立收录' in page
+    assert '<option value="knowledge">知识</option>' in page
+    assert '<option value="followup">待跟进</option>' in page and 'data-value="high"' in page
     assert '成员1' in page and '成员2' in page and '成员3' in page
 
 

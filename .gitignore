@@ -10,6 +10,9 @@ data/
 logs/
 run/
 runtime/
+scripts/qq-official/node_modules/
 
 scripts/windows/launcher.config.ps1
 *.lnk
+/knowledge-feedback-token.txt
+/tst_pages_dbg.txt

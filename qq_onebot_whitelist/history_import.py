@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import gateway
+
 import asyncio
 import argparse
 import json
@@ -8,7 +10,7 @@ from typing import Any
 import websockets
 
 from .config import AppConfig, load_config
-from .onebot import handle_event
+from .onebot import record_event, is_blocked_event
 from .store import Store
 
 
@@ -17,19 +19,14 @@ def message_key(event: dict[str, Any]) -> int | str | None:
 
 
 async def onebot_call(ws, action: str, params: dict[str, Any] | None = None, *, echo: str = 'call') -> dict[str, Any]:
-    await ws.send(json.dumps({'action': action, 'params': params or {}, 'echo': echo}, ensure_ascii=False))
-    while True:
-        raw = await ws.recv()
-        data = json.loads(raw)
-        if data.get('echo') == echo:
-            return data
+    return await gateway.call(ws, action, params, echo=echo)
 
 
 async def list_groups(config: AppConfig, *, mode: str | None = None) -> list[int]:
     selected_mode = (mode or config.startup_history_mode or 'whitelist').lower()
     if selected_mode == 'whitelist':
         return [int(x) for x in sorted(config.startup_history_groups)]
-    async with websockets.connect(config.onebot_ws_url) as ws:
+    async with gateway.connect(config) as ws:
         resp = await onebot_call(ws, 'get_group_list', echo='group-list')
     groups = []
     for item in (resp.get('data') or []):
@@ -58,12 +55,7 @@ async def import_group_history_once(
     resp = await onebot_call(
         ws,
         'get_group_msg_history',
-        {
-            'group_id': int(group_id),
-            'count': int(count),
-            'message_seq': str(message_seq or 0),
-            'reverse_order': bool(reverse_order),
-        },
+        gateway.history_params(config, group_id, message_seq, count, reverse_order),
         echo=echo,
     )
     seen = seen if seen is not None else set()
@@ -82,9 +74,9 @@ async def import_group_history_once(
             seen.add(key)
         if event.get('post_type') != 'message':
             event['post_type'] = 'message'
-        await handle_event(ws, event, config, store)
-        imported += 1
-    next_seq = batch_keys[0] if batch_keys else None
+        if not is_blocked_event(event, config):
+            imported += int(record_event(store, event, config))
+    next_seq = gateway.history_anchor(config, messages)
     return imported, next_seq
 
 
@@ -98,7 +90,7 @@ async def import_group_history(config: AppConfig, *, group_id: int, pages: int =
     message_seq: int | str = 0
     newest_seen: str | None = None
     oldest_seen: str | None = None
-    async with websockets.connect(config.onebot_ws_url) as ws:
+    async with gateway.connect(config) as ws:
         for page in range(max(1, int(pages))):
             imported, next_seq = await import_group_history_once(
                 ws,
@@ -116,7 +108,7 @@ async def import_group_history(config: AppConfig, *, group_id: int, pages: int =
             if next_seq:
                 oldest_seen = str(next_seq)
             total += imported
-            if not next_seq or imported == 0:
+            if not next_seq or str(next_seq) == str(message_seq) or (imported == 0 and stop_at_known_newest):
                 break
             message_seq = next_seq
             await asyncio.sleep(0.3)

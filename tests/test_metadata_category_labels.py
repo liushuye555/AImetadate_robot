@@ -92,7 +92,7 @@ def test_export_unknown_metadata_source_categories_match_report(tmp_path):
 
 
 def test_unknown_metadata_main_and_context_share_category_without_quality_claim(tmp_path):
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     _make_project_db(tmp_path)
     main = _image(tmp_path / 'main.png', (80, 20, 20))
@@ -116,7 +116,7 @@ def test_unknown_metadata_main_and_context_share_category_without_quality_claim(
 
 def test_candidate_stays_out_of_all_gallery_and_downgrade_removes_old_entry(tmp_path):
     import json
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, build_legacy_view as build_view
 
     _make_project_db(tmp_path)
     first = _image(tmp_path / 'first.png', (80, 20, 20))
@@ -168,7 +168,7 @@ def test_candidate_stays_out_of_all_gallery_and_downgrade_removes_old_entry(tmp_
 
 def test_changed_metadata_category_refreshes_existing_all_page_info(tmp_path):
     import json
-    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, UNKNOWN_AI_CATEGORY, build_view
+    from qq_onebot_whitelist.build_image_view import ALL_GALLERY_DIR, UNKNOWN_AI_CATEGORY, build_legacy_view as build_view
 
     _make_project_db(tmp_path)
     original = _image(tmp_path / 'source.png', (80, 20, 20))

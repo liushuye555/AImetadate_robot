@@ -323,6 +323,13 @@ class Store:
         if 'message_key' not in message_cols:
             conn.execute('ALTER TABLE messages ADD COLUMN message_key TEXT')
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_key ON messages(scope, message_key) WHERE message_key IS NOT NULL')
+        # Very old partial databases may lack dates; do not break their existing
+        # metadata migration while installing indexes for normal databases.
+        for table in ('messages', 'links'):
+            columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+            if 'seen_at' in columns:
+                conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_scope_date ON {table}(scope, seen_at, id)')
+                conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_date ON {table}(seen_at, id)')
         relay_cols = {row[1] for row in conn.execute('PRAGMA table_info(relay_log)').fetchall()}
         if 'scope' not in relay_cols:
             conn.execute('ALTER TABLE relay_log ADD COLUMN scope TEXT')
@@ -428,6 +435,42 @@ class Store:
                 )
             conn.commit()
         return links if inserted else []
+
+    def record_history_page(self, *, scope: str, events: list[dict[str, Any]]) -> int:
+        """Archive a page atomically, using original UTC dates in report indexes.
+
+        Existing live records retain their data. A committed page may safely be
+        replayed if its external checkpoint has not yet been saved.
+        """
+        from .policy import extract_text
+        prepared = []
+        for event in events:
+            key = canonical_message_key(event)
+            if key is None:
+                raise ValueError('History message has no stable identity')
+            timestamp = int(event.get('time') or 0)
+            seen_at = datetime.fromtimestamp(timestamp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S') if timestamp else datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            text = extract_text(event)
+            links = extract_links(text)
+            user_id = str(event.get('user_id') or '')
+            # Normalize/serialize outside the write transaction so live writers
+            # do not wait while a large historical page is processed.
+            prepared.append((seen_at, user_id, text, links, json.dumps(links, ensure_ascii=False), json.dumps(event, ensure_ascii=False), key))
+        inserted = 0
+        with self._conn() as conn:
+            for seen_at, user_id, text, links, links_json, raw_json, key in prepared:
+                row = conn.execute(
+                    'INSERT OR IGNORE INTO messages (seen_at, scope, user_id, text, links_json, raw_json, message_key) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (seen_at, scope, user_id, text, links_json, raw_json, key),
+                )
+                if row.rowcount:
+                    inserted += 1
+                    conn.executemany(
+                        'INSERT INTO links (seen_at, scope, user_id, url, message_text, quoted_text, kind) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        [(seen_at, scope, user_id, link, text, '', 'link') for link in links],
+                    )
+            conn.commit()
+        return inserted
 
     def message_row_id(self, scope: str, raw: dict[str, Any]) -> int | None:
         message_key = canonical_message_key(raw)
@@ -933,7 +976,7 @@ class Store:
     def recent_records(self, scope: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
-                'SELECT id, seen_at, user_id, text, links_json, raw_json FROM messages WHERE scope = ? ORDER BY id DESC LIMIT ?',
+                'SELECT id, seen_at, user_id, text, links_json, raw_json FROM messages WHERE scope = ? ORDER BY seen_at DESC, id DESC LIMIT ?',
                 (scope, int(limit)),
             ).fetchall()
             parsed = []
@@ -978,7 +1021,7 @@ class Store:
         with self._conn() as conn:
             rows = conn.execute(
                 'SELECT id, seen_at, user_id, text, links_json, raw_json '
-                'FROM messages WHERE scope = ? AND id <= ? ORDER BY id DESC LIMIT ?',
+                'FROM messages WHERE scope = ? AND id <= ? ORDER BY seen_at DESC, id DESC LIMIT ?',
                 (scope, int(before_id), int(limit)),
             ).fetchall()
             parsed = []
@@ -1015,7 +1058,7 @@ class Store:
     def recent_records_all(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
-                'SELECT id, seen_at, scope, user_id, text, links_json, raw_json FROM messages ORDER BY id DESC LIMIT ?',
+                'SELECT id, seen_at, scope, user_id, text, links_json, raw_json FROM messages ORDER BY seen_at DESC, id DESC LIMIT ?',
                 (int(limit),),
             ).fetchall()
         records = []
@@ -1049,9 +1092,9 @@ class Store:
     def recent_links(self, scope: str | None = None, limit: int = 20) -> list[str]:
         with self._conn() as conn:
             if scope:
-                rows = conn.execute('SELECT url FROM links WHERE scope = ? ORDER BY id DESC LIMIT ?', (scope, int(limit))).fetchall()
+                rows = conn.execute('SELECT url FROM links WHERE scope = ? ORDER BY seen_at DESC, id DESC LIMIT ?', (scope, int(limit))).fetchall()
             else:
-                rows = conn.execute('SELECT url FROM links ORDER BY id DESC LIMIT ?', (int(limit),)).fetchall()
+                rows = conn.execute('SELECT url FROM links ORDER BY seen_at DESC, id DESC LIMIT ?', (int(limit),)).fetchall()
         return [row[0] for row in rows]
 
     def recent_link_records(self, limit: int = 20, since: str | None = None, scope: str | None = None) -> list[dict[str, Any]]:
@@ -1062,15 +1105,15 @@ class Store:
                 if since:
                     sql += ' AND seen_at > ?'
                     args.append(since)
-                rows = conn.execute(sql + ' ORDER BY id DESC LIMIT ?', [*args, int(limit)]).fetchall()
+                rows = conn.execute(sql + ' ORDER BY seen_at DESC, id DESC LIMIT ?', [*args, int(limit)]).fetchall()
             elif since:
                 rows = conn.execute(
-                    'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links WHERE seen_at > ? ORDER BY id DESC LIMIT ?',
+                    'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links WHERE seen_at > ? ORDER BY seen_at DESC, id DESC LIMIT ?',
                     (since, int(limit)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links ORDER BY id DESC LIMIT ?',
+                    'SELECT seen_at, scope, user_id, url, message_text, quoted_text, kind FROM links ORDER BY seen_at DESC, id DESC LIMIT ?',
                     (int(limit),),
                 ).fetchall()
         return [dict(seen_at=r[0], scope=r[1], user_id=r[2], url=r[3], message_text=r[4] or '', quoted_text=r[5] or '', kind=r[6] or 'link') for r in rows]

@@ -1,7 +1,7 @@
 [project]
 name = "qq-onebot-whitelist"
 version = "0.1.0"
-description = "OneBot/NapCat whitelist-mention bot, non-official QQ API route"
+description = "QQ resource archive bot with OneBot v11 and QQ Open Platform transports"
 requires-python = ">=3.11"
 dependencies = [
   "websockets>=12",
@@ -18,4 +18,4 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.setuptools.package-data]
-qq_onebot_whitelist = ["knowledge_background.json"]
+qq_onebot_whitelist = ["knowledge_background.json", "gallery.html"]

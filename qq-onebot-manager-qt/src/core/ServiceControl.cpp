@@ -22,6 +22,10 @@ ServiceControl::ServiceControl(QObject *parent) : QObject(parent), m_native(std:
 #endif
     });
     connect(&m_proc, &QProcess::started, this, [this] {
+        if (!m_input.isEmpty()) {
+            m_proc.write(m_input);
+            m_proc.closeWriteChannel();
+        }
         emit commandStarted(m_proc.processId());
     });
     connect(&m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
@@ -56,8 +60,9 @@ void ServiceControl::reconcileFinished() {
         m_proc.waitForFinished(0); // Drain native completion without extending the deadline.
 }
 
-void ServiceControl::run(const QStringList &args) {
+void ServiceControl::run(const QStringList &args, const QByteArray &input) {
     if (m_proc.state() != QProcess::NotRunning) return;
+    m_input = input;
 #ifdef Q_OS_WIN
     if (m_native->job) CloseHandle(m_native->job);
     m_native->job = CreateJobObjectW(nullptr, nullptr);

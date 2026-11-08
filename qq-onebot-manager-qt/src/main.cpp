@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMap>
 #include <QTimer>
 #include <QStyleHints>
 #include <QUrl>
@@ -134,6 +135,7 @@ int main(int argc, char *argv[]) {
         : QStringLiteral("后台随管理器启停"));
     bool pendingRestart = false;
     bool launchFaulted = false;
+    bool gatewayMigrating = false;
     QObject::connect(&runtime, &ManagedRuntime::backendFault, serviceControl, [&] {
         launchFaulted = true;
         serviceControl->cancel();
@@ -141,6 +143,10 @@ int main(int argc, char *argv[]) {
     std::function<void(bool)> runBackend;
     runBackend = [&](bool restart) {
         if (shuttingDown) return;
+        if (gatewayMigrating) {
+            overview->setHint(QStringLiteral("接入切换正在进行，请稍候完成后再启动机器人。"));
+            return;
+        }
         if (recovering && QFileInfo::exists(Paths::repoRoot() + "/run/manager-user-stop")) {
             app.quit();
             return;
@@ -151,7 +157,8 @@ int main(int argc, char *argv[]) {
         }
         launchFaulted = false;
         runtime.beginTransition();
-        serviceControl->run({"-m", "qq_onebot_whitelist.control", restart ? "bot-restart" : "start"});
+        const bool resumeAfterStop = QFileInfo::exists(Paths::manualStopFile());
+        serviceControl->run({"-m", "qq_onebot_whitelist.control", restart && !resumeAfterStop ? "bot-restart" : "start"});
     };
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, overview, &OverviewPage::setStatus);
     QObject::connect(serviceControl, &ServiceControl::finished, overview, [&](bool ok, const QString &out) {
@@ -177,6 +184,19 @@ int main(int argc, char *argv[]) {
     const auto fetchStats = [overview, statsControl]() {
         statsControl->run({"-m", "qq_onebot_whitelist.control", "stats"});
     };
+    const auto openGateway = [&window]() {
+        auto *lookup = new ServiceControl(&window);
+        QObject::connect(lookup, &ServiceControl::finished, &window, [lookup, &window](bool ok, const QString &out) {
+            const QUrl target(QJsonDocument::fromJson(out.toUtf8()).object().value("gatewayWebuiUrl").toString());
+            if (ok && (target.scheme() == "http" || target.scheme() == "https") && !target.host().isEmpty())
+                QDesktopServices::openUrl(target);
+            else
+                QMessageBox::information(&window, QStringLiteral("接入框架管理页"),
+                    QStringLiteral("请先在设置的运行配置中填写接入框架管理地址；外部框架也可以使用自己的管理程序。"));
+            lookup->deleteLater();
+        });
+        lookup->run({"-m", "qq_onebot_whitelist.control", "gateway-info"});
+    };
     QObject::connect(statsControl, &ServiceControl::finished, overview, [overview](bool ok, QString out) {
         if (!ok) return;
         const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
@@ -187,7 +207,7 @@ int main(int argc, char *argv[]) {
                                  obj.value("links").toInt(),
                                  lastReport.isEmpty() ? QStringLiteral("无") : lastReport);
     });
-    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, &runBackend, &stopByUser, fetchStats, overview, collectionControl](const QString &action) {
+    QObject::connect(overview, &OverviewPage::actionRequested, [&window, statusMonitor, &runBackend, &stopByUser, &openGateway, fetchStats, overview, collectionControl](const QString &action) {
         if (action == "logs") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
         } else if (action == "reports") {
@@ -195,7 +215,7 @@ int main(int argc, char *argv[]) {
         } else if (action == "config") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot()));
         } else if (action == "napcat-webui") {
-            QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
+            openGateway();
         } else if (action == "refresh") {
             statusMonitor->refresh();
             fetchStats();
@@ -218,11 +238,176 @@ int main(int argc, char *argv[]) {
     settings->setTheme(ThemeManager::themeName(ThemeManager::current()));
     auto *collectionPage = qobject_cast<CollectionPage *>(window.pageWidget("collection"));
     auto *configBridge = new ConfigBridge(&window);
-    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, [settings](bool ok, const QVariant &schema) {
-        if (ok) settings->setSchema(schema);
-        else settings->showError("配置加载失败");
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings, [settings, overview](bool ok, const QVariant &schema) {
+        if (ok) {
+            settings->setSchema(schema);
+            overview->setGatewaySchema(schema);
+        } else {
+            settings->showError("配置加载失败");
+            overview->setGatewayResult(QStringLiteral("配置加载失败，请重新打开管理器。"));
+            overview->setGatewayBusy(true);
+        }
     });
     QObject::connect(settings, &SettingsPage::saveRequested, configBridge, &ConfigBridge::save);
+    QObject::connect(settings, &SettingsPage::officialBindRequested, &window, [&window, settings] {
+        auto *binding = new ServiceControl(&window);
+        QObject::connect(binding, &ServiceControl::finished, &window, [binding, settings](bool ok, const QString &out) {
+            const auto result = QJsonDocument::fromJson(out.toUtf8()).object();
+            if (ok && result.value("ok").toBool())
+                QDesktopServices::openUrl(QUrl::fromLocalFile(result.value("path").toString()));
+            else settings->showError("无法打开绑定页，请检查扫码组件或手工填写 AppID/AppSecret。");
+            binding->deleteLater();
+        });
+        binding->run({"-m", "qq_onebot_whitelist.control", "official-bind"});
+    });
+    auto *snowLumaControl = new ServiceControl(&window);
+    QString snowLumaActionInFlight;
+    bool snowLumaRefreshPending = false;
+    QObject::connect(configBridge, &ConfigBridge::schemaLoaded, settings,
+        [settings, overview, configBridge, &snowLumaRefreshPending, &gatewayMigrating](bool ok, const QVariant &) {
+            if (!snowLumaRefreshPending) return;
+            snowLumaRefreshPending = false;
+            gatewayMigrating = false;
+            settings->setSnowLumaBusy(!ok);
+            settings->setGatewaySwitchBusy(!ok);
+            overview->setGatewayBusy(!ok);
+            configBridge->setWritesBlocked(!ok);
+            if (!ok) {
+                const QString error = QStringLiteral("接入已切换，但设置刷新失败；请重新打开管理器后再修改设置。");
+                settings->setSnowLumaResult(error, false);
+                settings->setGatewaySwitchResult(error, false);
+                overview->setGatewayResult(error);
+            }
+        });
+    QJsonObject gatewayDraftInFlight;
+    QObject::connect(settings, &SettingsPage::gatewaySwitchRequested, settings,
+        [settings, &gatewayDraftInFlight](const QJsonObject &patch) {
+            gatewayDraftInFlight = patch;
+            emit settings->snowLumaActionRequested(QStringLiteral("gateway-switch"));
+        });
+    QObject::connect(settings, &SettingsPage::gatewayRestoreRequested, settings,
+        [settings] { emit settings->snowLumaActionRequested(QStringLiteral("gateway-restore")); });
+    // Home uses the same guarded switching path as Settings. Never discard a settings draft.
+    QObject::connect(overview, &OverviewPage::gatewaySwitchRequested, settings,
+        [settings, overview](const QJsonObject &patch) {
+            if (settings->hasUnsavedChanges()) {
+                overview->setGatewayResult(QStringLiteral("设置页还有未保存的修改，请先保存后再从首页切换。"));
+                return;
+            }
+            emit settings->gatewaySwitchRequested(patch);
+        });
+    QObject::connect(overview, &OverviewPage::gatewayRestoreRequested, settings, [settings, overview] {
+        if (settings->hasUnsavedChanges()) {
+            overview->setGatewayResult(QStringLiteral("设置页还有未保存的修改，请先保存后再恢复。"));
+            return;
+        }
+        emit settings->gatewayRestoreRequested();
+    });
+    QObject::connect(overview, &OverviewPage::snowLumaActionRequested, settings,
+        [settings, overview](const QString &action) {
+            if (action == "switch" && settings->hasUnsavedChanges()) {
+                overview->setGatewayResult(QStringLiteral("设置页还有未保存的修改，请先保存后再切换。"));
+                return;
+            }
+            emit settings->snowLumaActionRequested(action);
+        });
+    QObject::connect(settings, &SettingsPage::snowLumaActionRequested, &window,
+        [&window, settings, snowLumaControl, serviceControl, &runtime, &gatewayMigrating,
+         &snowLumaActionInFlight, overview, configBridge, &gatewayDraftInFlight](const QString &action) {
+            if (action == "webui") {
+                QDesktopServices::openUrl(QUrl(QStringLiteral("http://127.0.0.1:5099/")));
+                return;
+            }
+            if (action == "logs") {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/logs"));
+                return;
+            }
+            const QMap<QString, QString> commands = {
+                {"install", "snowluma-install"}, {"start", "snowluma-start"},
+                {"stop", "snowluma-stop"}, {"switch", "snowluma-switch"},
+                {"restore", "snowluma-restore"}, {"gateway-switch", "gateway-switch"},
+                {"gateway-restore", "gateway-restore"}
+            };
+            const QString command = commands.value(action);
+            if (command.isEmpty() || snowLumaControl->isRunning() || gatewayMigrating) return;
+            const bool genericSwitch = action == "gateway-switch";
+            const bool genericRestore = action == "gateway-restore";
+            const bool migratesGateway = action == "switch" || action == "restore" || genericSwitch || genericRestore;
+            const bool hasUnsafeEdits = genericSwitch || genericRestore
+                ? settings->hasUnsavedNonGatewayChanges()
+                : (action == "switch" || action == "restore") ? settings->hasUnsavedChanges() : false;
+            if (migratesGateway && (configBridge->isBusy() || hasUnsafeEdits)) {
+                overview->setGatewayResult(QStringLiteral("请先保存当前设置，并等待保存完成后再切换。"));
+                settings->setSnowLumaResult(QStringLiteral("请先保存当前设置，等待保存完成后再切换接入。"), false);
+                if (genericSwitch || genericRestore)
+                    settings->setGatewaySwitchResult(QStringLiteral("请先保存接入框架以外的设置，并等待保存完成后再切换。"), false);
+                return;
+            }
+            if (migratesGateway && serviceControl->isRunning()) {
+                overview->setGatewayResult(QStringLiteral("机器人正在启动或重启，请稍后再切换框架。"));
+                settings->setSnowLumaResult(
+                    QStringLiteral("机器人正在启动或重启，请稍后再切换接入方式。"), false);
+                settings->setGatewaySwitchResult(QStringLiteral("机器人正在启动或重启，请稍后再切换接入方式。"), false);
+                return;
+            }
+            if (migratesGateway) {
+                gatewayMigrating = true;
+                configBridge->setWritesBlocked(true);
+                runtime.pauseBackendObservation();
+                snowLumaActionInFlight = action;
+                overview->setHint(QStringLiteral("正在切换接入方式，完成后请在概览页启动机器人。"));
+            } else {
+                snowLumaActionInFlight.clear();
+            }
+            if (genericSwitch || genericRestore) settings->setGatewaySwitchBusy(true);
+            else settings->setSnowLumaBusy(true);
+            overview->setGatewayBusy(true);
+            overview->setGatewayResult(migratesGateway ? QStringLiteral("正在检查并切换，请稍候…")
+                : QStringLiteral("正在处理 SnowLuma，请稍候…"));
+            QByteArray input;
+            QStringList args{"-m", "qq_onebot_whitelist.control", command};
+            if (genericSwitch) {
+                args << "--json" << "-";
+                input = QJsonDocument(nestDottedPatch(gatewayDraftInFlight)).toJson(QJsonDocument::Compact);
+            }
+            snowLumaControl->run(args, input);
+        });
+    QObject::connect(snowLumaControl, &ServiceControl::finished, settings,
+        [settings, &gatewayMigrating, &snowLumaActionInFlight, &snowLumaRefreshPending, overview,
+         statusMonitor, configBridge, &gatewayDraftInFlight](bool processOk, const QString &out) {
+            const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+            const QJsonObject result = doc.object();
+            const bool ok = processOk && result.value("ok").toBool(false);
+            QString message = result.value("message").toString();
+            if (message.isEmpty())
+                message = ok ? QStringLiteral("操作已完成。") : QStringLiteral("操作失败，请查看运行日志后重试。");
+            settings->setSnowLumaResult(message, ok);
+            overview->setGatewayResult(message);
+            const bool genericGateway = snowLumaActionInFlight == "gateway-switch"
+                || snowLumaActionInFlight == "gateway-restore";
+            if (genericGateway) settings->setGatewaySwitchResult(message, ok);
+            if (!snowLumaActionInFlight.isEmpty()) {
+                overview->setHint(ok
+                    ? QStringLiteral("接入方式已切换，机器人已停止；请在概览页启动。")
+                    : QStringLiteral("接入切换未完成，机器人保持停止；请查看运行日志。"));
+                statusMonitor->refresh();
+                if (ok) {
+                    snowLumaRefreshPending = true;
+                    configBridge->fetch();
+                } else {
+                    gatewayMigrating = false;
+                    configBridge->setWritesBlocked(false);
+                    settings->setSnowLumaBusy(false);
+                    overview->setGatewayBusy(false);
+                    if (genericGateway) settings->setGatewaySwitchBusy(false);
+                }
+                snowLumaActionInFlight.clear();
+                gatewayDraftInFlight = {};
+            } else {
+                settings->setSnowLumaBusy(false);
+                overview->setGatewayBusy(false);
+            }
+        });
     QObject::connect(settings, &SettingsPage::providersChanged, configBridge, [configBridge](const QJsonObject &providers, const QString &keyEnv, const QString &secret) {
         QJsonObject patch;
         patch.insert("ai_context.providers", providers);
@@ -302,14 +487,12 @@ int main(int argc, char *argv[]) {
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, collectionPage, [collectionPage](const StatusSnapshot &s) {
         collectionPage->setCollectionPaused(s.collectionPaused);
     });
-    QObject::connect(settings, &SettingsPage::webuiRequested, [] {
-        QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
-    });
+    QObject::connect(settings, &SettingsPage::webuiRequested, &window, openGateway);
 
     auto *notifier = new Notifier(window.trayIcon(), &window);
     QObject::connect(settings, &SettingsPage::notificationsToggled, notifier, &Notifier::setEnabled);
     QObject::connect(statusMonitor, &StatusMonitor::statusChanged, notifier, &Notifier::onStatusChanged);
-    QObject::connect(&window, &MainWindow::trayAction, [&window, &runBackend, &stopByUser, overview](const QString &action) {
+    QObject::connect(&window, &MainWindow::trayAction, [&window, &runBackend, &stopByUser, &openGateway, overview](const QString &action) {
         if (action == "quit") {
             stopByUser();
         } else if (action == "start" || action == "restart") {
@@ -322,7 +505,7 @@ int main(int argc, char *argv[]) {
         } else if (action == "reports") {
             QDesktopServices::openUrl(QUrl::fromLocalFile(Paths::repoRoot() + "/data/view/index.html"));
         } else if (action == "napcat-webui") {
-            QDesktopServices::openUrl(QUrl("http://127.0.0.1:6099/"));
+            openGateway();
         }
     });
 

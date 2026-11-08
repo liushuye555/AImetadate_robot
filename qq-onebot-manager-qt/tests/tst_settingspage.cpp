@@ -28,6 +28,9 @@ private slots:
     void numericFieldsValidateOpenBoundsAndDecimals();
     void settingsCannotOverwriteCollectionKnowledgeSwitch_data();
     void settingsCannotOverwriteCollectionKnowledgeSwitch();
+    void saveRoutesGatewayOnlyAndOmitsUnchangedGateway();
+    void snowLumaActionsAndBusyState();
+    void gatewaySwitchUsesOnlyDraftAndHonorsBusyState();
 };
 
 static QByteArray sampleSchema() {
@@ -203,17 +206,143 @@ void TestSettingsPage::settingsCannotOverwriteCollectionKnowledgeSwitch() {
         if (field->text() == "ws://before") {
             field->setText("ws://after");
             edited = true;
+        } else if (field->text() == "15") {
+            field->setText("20");
         }
     }
     QVERIFY(edited);
     QSignalSpy saved(&page, &SettingsPage::saveRequested);
+    QSignalSpy switched(&page, &SettingsPage::gatewaySwitchRequested);
     page.findChild<QPushButton *>("primary")->click();
     QCOMPARE(saved.count(), 1);
     const auto patch = saved.takeFirst().at(0).toJsonObject();
-    QCOMPARE(patch.value("onebot.ws_url").toString(), QStringLiteral("ws://after"));
     QVERIFY(patch.contains("knowledge.defaults.interval_minutes"));
+    QCOMPARE(patch.value("knowledge.defaults.interval_minutes").toString(), QString("20"));
+    QVERIFY(!patch.contains("onebot.ws_url"));
     QVERIFY2(!patch.contains("knowledge.enabled"),
              "Saving settings must not write the separately owned collection knowledge switch");
+
+    const QJsonArray refreshedSchema{
+        QJsonObject{{"key", "knowledge.enabled"}, {"kind", "bool"},
+            {"default", cachedEnabled}, {"section", "knowledge"}},
+        QJsonObject{{"key", "knowledge.defaults.interval_minutes"}, {"kind", "number"},
+            {"default", 20}, {"min", 1}, {"max", 1440}, {"section", "knowledge"}},
+        QJsonObject{{"key", "onebot.ws_url"}, {"kind", "text"},
+            {"default", "ws://before"}, {"section", "runtime"}}
+    };
+    page.setSchema(refreshedSchema.toVariantList());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    bool draftRestored = false;
+    for (QLineEdit *field : page.findChildren<QLineEdit *>())
+        if (field->text() == "ws://after") draftRestored = true;
+    QVERIFY(draftRestored);
+    QVERIFY(page.findChild<QPushButton *>("primary")->isEnabled());
+    QVERIFY(page.findChild<QLabel *>("gatewaySwitchMessage")->text().contains(QStringLiteral("其他设置已保存")));
+    page.findChild<QPushButton *>("primary")->click();
+    QCOMPARE(switched.count(), 1);
+    const QJsonObject gatewayPatch = switched.takeFirst().at(0).toJsonObject();
+    QCOMPARE(gatewayPatch.value("onebot.ws_url").toString(), QStringLiteral("ws://after"));
+    QVERIFY(!gatewayPatch.contains("knowledge.enabled"));
+}
+
+void TestSettingsPage::saveRoutesGatewayOnlyAndOmitsUnchangedGateway() {
+    const QJsonArray schema{
+        QJsonObject{{"key", "onebot.ws_url"}, {"kind", "text"},
+            {"default", "ws://before"}, {"section", "runtime"}},
+        QJsonObject{{"key", "bot.name"}, {"kind", "text"},
+            {"default", "Bot"}, {"section", "runtime"}}
+    };
+    SettingsPage gatewayOnly;
+    gatewayOnly.setSchema(schema.toVariantList());
+    QSignalSpy saved(&gatewayOnly, &SettingsPage::saveRequested);
+    QSignalSpy switched(&gatewayOnly, &SettingsPage::gatewaySwitchRequested);
+    for (QLineEdit *edit : gatewayOnly.findChildren<QLineEdit *>())
+        if (edit->text() == QStringLiteral("ws://before")) edit->setText(QStringLiteral("ws://after"));
+    gatewayOnly.findChild<QPushButton *>("primary")->click();
+    QCOMPARE(saved.count(), 0);
+    QCOMPARE(switched.count(), 1);
+    QCOMPARE(switched.takeFirst().at(0).toJsonObject().value("onebot.ws_url").toString(),
+             QStringLiteral("ws://after"));
+
+    SettingsPage businessOnly;
+    businessOnly.setSchema(schema.toVariantList());
+    QSignalSpy businessSave(&businessOnly, &SettingsPage::saveRequested);
+    for (QLineEdit *edit : businessOnly.findChildren<QLineEdit *>())
+        if (edit->text() == QStringLiteral("Bot")) edit->setText(QStringLiteral("New bot"));
+    businessOnly.findChild<QPushButton *>("primary")->click();
+    QCOMPARE(businessSave.count(), 1);
+    const QJsonObject patch = businessSave.takeFirst().at(0).toJsonObject();
+    QCOMPARE(patch.value("bot.name").toString(), QStringLiteral("New bot"));
+    QVERIFY(!patch.contains("onebot.ws_url"));
+}
+
+void TestSettingsPage::snowLumaActionsAndBusyState() {
+    SettingsPage page;
+    page.setSchema(QJsonArray{}.toVariantList());
+    QSignalSpy requested(&page, &SettingsPage::snowLumaActionRequested);
+    auto *install = page.findChild<QPushButton *>("snowLuma_install");
+    auto *webui = page.findChild<QPushButton *>("snowLuma_webui");
+    QVERIFY(install);
+    QVERIFY(webui);
+    install->click();
+    QCOMPARE(requested.count(), 1);
+    QCOMPARE(requested.takeFirst().at(0).toString(), QStringLiteral("install"));
+    page.setSnowLumaBusy(true);
+    QVERIFY(!install->isEnabled());
+    QVERIFY(webui->isEnabled());
+    page.setSnowLumaBusy(false);
+    QVERIFY(install->isEnabled());
+    page.setSnowLumaResult(QStringLiteral("切换完成"), true);
+    page.setSchema(QJsonArray{}.toVariantList());
+    QCOMPARE(page.findChild<QLabel *>("snowLumaMessage")->text(), QStringLiteral("切换完成"));
+}
+
+void TestSettingsPage::gatewaySwitchUsesOnlyDraftAndHonorsBusyState() {
+    const QJsonArray schema{
+        QJsonObject{{"key", "onebot.provider"}, {"kind", "select"}, {"default", "external"},
+            {"options", QJsonArray{"external", "napcat", "snowluma"}}, {"section", "runtime"}},
+        QJsonObject{{"key", "onebot.ws_url"}, {"kind", "text"}, {"default", "ws://127.0.0.1:3001"},
+            {"section", "runtime"}},
+        QJsonObject{{"key", "bot.name"}, {"kind", "text"}, {"default", "Bot"}, {"section", "runtime"}}
+    };
+    SettingsPage page;
+    page.setSchema(schema.toVariantList());
+    QSignalSpy switchRequested(&page, &SettingsPage::gatewaySwitchRequested);
+    QSignalSpy restoreRequested(&page, &SettingsPage::gatewayRestoreRequested);
+    auto *switchButton = page.findChild<QPushButton *>("gatewaySwitch");
+    auto *restoreButton = page.findChild<QPushButton *>("gatewayRestore");
+    QVERIFY(switchButton);
+    QVERIFY(restoreButton);
+
+    QLineEdit *wsUrl = nullptr;
+    for (QLineEdit *edit : page.findChildren<QLineEdit *>())
+        if (edit->text() == QStringLiteral("ws://127.0.0.1:3001")) wsUrl = edit;
+    QVERIFY(wsUrl);
+    wsUrl->setText(QStringLiteral("ws://127.0.0.1:4000"));
+    switchButton->click();
+    QCOMPARE(switchRequested.count(), 1);
+    const QJsonObject patch = switchRequested.takeFirst().at(0).toJsonObject();
+    QCOMPARE(patch.size(), 2);
+    QCOMPARE(patch.value("onebot.ws_url").toString(), QStringLiteral("ws://127.0.0.1:4000"));
+    QVERIFY(patch.contains(QStringLiteral("onebot.provider")));
+    QVERIFY(!patch.contains(QStringLiteral("bot.name")));
+
+    page.setGatewaySwitchBusy(true);
+    QVERIFY(!switchButton->isEnabled());
+    QVERIFY(!restoreButton->isEnabled());
+    page.setGatewaySwitchBusy(false);
+
+    for (QLineEdit *edit : page.findChildren<QLineEdit *>())
+        if (edit->text() == QStringLiteral("Bot")) edit->setText(QStringLiteral("Changed"));
+    switchButton->click();
+    QCOMPARE(switchRequested.count(), 0);
+    QVERIFY(page.findChild<QLabel *>("gatewaySwitchMessage")->text().contains(QStringLiteral("接入框架以外")));
+
+    SettingsPage cleanPage;
+    cleanPage.setSchema(schema.toVariantList());
+    QSignalSpy cleanRestore(&cleanPage, &SettingsPage::gatewayRestoreRequested);
+    cleanPage.findChild<QPushButton *>("gatewayRestore")->click();
+    QCOMPARE(cleanRestore.count(), 1);
 }
 QTEST_MAIN(TestSettingsPage)
 #include "tst_settingspage.moc"

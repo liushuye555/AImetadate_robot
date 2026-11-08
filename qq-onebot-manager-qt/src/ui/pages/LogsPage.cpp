@@ -23,6 +23,7 @@ LogsPage::LogsPage(QWidget *parent) : QWidget(parent) {
     m_selector = new QComboBox(this);
     m_selector->addItem("bot.log");
     m_selector->addItem("napcat.log");
+    m_selector->addItem("gateway.log");
     m_filter = new QLineEdit(this);
     m_filter->setPlaceholderText(Strings::zh("search"));
     m_autoScroll = new QCheckBox(Strings::zh("autoScroll"), this);
@@ -42,7 +43,8 @@ LogsPage::LogsPage(QWidget *parent) : QWidget(parent) {
     layout->addWidget(m_view, 1);
 
     m_reader = new LogReader({Paths::repoRoot() + "/logs/bot.log",
-                              Paths::repoRoot() + "/logs/napcat.log"}, this);
+                              Paths::repoRoot() + "/logs/napcat.log",
+                              Paths::repoRoot() + "/logs/gateway.log"}, this);
     connect(m_selector, &QComboBox::currentIndexChanged, m_reader, &LogReader::setActive);
     connect(m_reader, &LogReader::newChunk, this, &LogsPage::appendChunk);
     connect(openDir, &QPushButton::clicked, this, [] {

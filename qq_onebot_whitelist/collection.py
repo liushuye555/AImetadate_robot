@@ -435,7 +435,7 @@ def collect_event(store: Store, event: dict[str, Any], config: AppConfig) -> boo
                     raw={'file': file_item, 'message_text': text},
                 )
             # 上云队列：全部类型的群文件都入队（file_sync.enabled 时由后台循环搬运）
-            if config.file_sync_enabled:
+            if config.file_sync_enabled and config.onebot_provider != 'qqofficial':
                 file_id = str(
                     file_item.get('file_id')
                     or file_item.get('url')

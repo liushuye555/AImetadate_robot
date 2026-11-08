@@ -735,12 +735,18 @@ def retain_selected_files(config_path: Path, db: KnowledgeDB, records: list[dict
             if allowed and Path(source['file_name']).suffix.lower() not in allowed:
                 db.asset(source, {'status':'skipped','error':'PolicyExcluded'})
                 continue
-            root = config.data_dir / 'knowledge-files' / scope.split(':')[1]
+            from .knowledge_config import archive_scope_component
+            root = config.data_dir / 'knowledge-files' / archive_scope_component(scope)
             def fetch_url(f):
                 current = load_config(config_path)
-                return fetch_download_url_once(f['scope'].split(':')[1], f['file_id'],
+                if current.onebot_provider == 'qqofficial':
+                    raise RuntimeError('官方附件链接已失效，请重新发送附件')
+                return fetch_download_url_once(f['scope'].split(':', 1)[1], f['file_id'],
                                                **({'busid':f['busid']} if f.get('busid') is not None else {}),
                                                ws_url=current.onebot_ws_url,
+                                               access_token=current.onebot_access_token,
+                                               max_message_mb=current.onebot_max_message_mb,
+                                               disabled_actions=current.onebot_disabled_actions,
                                                file_name=f.get('file_name'), file_size=f.get('file_size'))
             # Record the intention before network I/O so interrupted downloads
             # remain visible and recoverable through the existing retry queue.

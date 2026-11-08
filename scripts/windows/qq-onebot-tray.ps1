@@ -1,4 +1,4 @@
-# Compatibility entry: the Qt manager is the only backend owner.
+﻿# Compatibility entry: the Qt manager is the only backend owner.
 & (Join-Path $PSScriptRoot 'start-qq-onebot-manager.ps1')
 exit $LASTEXITCODE
 
@@ -92,25 +92,32 @@ function Stop-PendingLauncher {
 }
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$napcatStatus = $menu.Items.Add((T 'napcat_check' 'NapCat: checking'))
+$napcatStatus = $menu.Items.Add((T 'napcat_check' 'Gateway: checking'))
 $qqStatus = $menu.Items.Add((T 'qq_check' 'QQ: checking'))
 $onebotStatus = $menu.Items.Add((T 'onebot_check' 'OneBot: checking'))
 $botStatus = $menu.Items.Add((T 'bot_check' 'Bot: checking'))
 foreach ($item in @($napcatStatus,$qqStatus,$onebotStatus,$botStatus)) { $item.Enabled = $false }
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $startItem = $menu.Items.Add((T 'start' 'Start / check status'))
-$restartItem = $menu.Items.Add((T 'restart' 'Restart bot and NapCat'))
-$webuiItem = $menu.Items.Add((T 'webui' 'Open NapCat WebUI'))
+$restartItem = $menu.Items.Add((T 'restart' 'Restart bot'))
+$webuiItem = $menu.Items.Add((T 'webui' 'Open gateway management'))
 $viewItem = $menu.Items.Add((T 'pages' 'Open local pages'))
 $logsItem = $menu.Items.Add((T 'logs' 'Open logs'))
 $settingsItem = $menu.Items.Add((T 'windows' 'Set analysis windows'))
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
-$stopItem = $menu.Items.Add((T 'stop' 'Stop bot and NapCat'))
+$stopItem = $menu.Items.Add((T 'stop' 'Stop bot'))
 $stopExitItem = $menu.Items.Add((T 'stop_exit' 'Stop all and exit'))
 $exitItem = $menu.Items.Add((T 'exit' 'Exit tray (keep services running)'))
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Icon = [System.Drawing.SystemIcons]::Application
+$ProjectTrayIcon = Join-Path $BotDir 'qq-onebot-manager-qt\resources\icons\app-character.ico'
+$OwnedTrayIcon = $null
+if (Test-Path -LiteralPath $ProjectTrayIcon) {
+    $OwnedTrayIcon = [System.Drawing.Icon]::new($ProjectTrayIcon)
+    $tray.Icon = $OwnedTrayIcon
+} else {
+    $tray.Icon = [System.Drawing.SystemIcons]::Application
+}
 $tray.Text = (T 'bot_check' 'Bot: checking')
 $tray.ContextMenuStrip = $menu
 $tray.Visible = $true
@@ -119,7 +126,8 @@ $script:StartProcess = $null
 
 function Refresh-Status {
     $status = Get-ServiceStatus
-    $napcatStatus.Text = (T 'napcat_prefix' 'NapCat: ') + $(if ($status.napcat) { T 'running' 'running' } else { T 'stopped' 'stopped' })
+    $gatewayName = if ($status.gatewayName) { $status.gatewayName } else { 'Gateway' }
+    $napcatStatus.Text = $gatewayName + ': ' + $(if ($status.gatewayRunning) { T 'running' 'running' } else { T 'stopped' 'stopped' })
     $onebotStatus.Text = (T 'onebot_prefix' 'OneBot: ') + $(if ($status.onebot) { T 'connected' 'connected' } else { T 'disconnected' 'disconnected' })
     $botStatus.Text = (T 'bot_prefix' 'Bot: ') + $(if ($status.bot) { T 'running' 'running' } else { T 'stopped' 'stopped' })
     if ($status.qqLoggedIn) {
@@ -127,12 +135,12 @@ function Refresh-Status {
     } else {
         $qqStatus.Text = (T 'not_logged' 'QQ: not logged in')
     }
-    $healthy = $status.napcat -and $status.onebot -and $status.bot -and $status.qqLoggedIn
+    $healthy = $status.onebot -and $status.bot
     $tray.Text = if ($healthy) { T 'healthy' 'QQ OneBot: running' } else { T 'problem' 'QQ OneBot: service problem' }
     if ((Test-Path $StartSignalPath)) {
         Remove-Item $StartSignalPath -Force -ErrorAction SilentlyContinue
         Start-Services
-    } elseif ((Get-AutoRestartEnabled) -and -not (Test-Path $ManualStopPath) -and -not $healthy -and (Get-Date) -ge $script:NextRestartAt -and (-not $script:StartProcess -or $script:StartProcess.HasExited)) {
+    } elseif ((Get-AutoRestartEnabled) -and -not (Test-Path $ManualStopPath) -and -not (Test-Path (Join-Path $RunDir 'manager-user-stop')) -and -not $healthy -and (Get-Date) -ge $script:NextRestartAt -and (-not $script:StartProcess -or $script:StartProcess.HasExited)) {
         Start-Services
     }
 }
@@ -144,7 +152,13 @@ $restartItem.add_Click({
     Invoke-BotScript 'stop-qq-onebot-whitelist-hidden.ps1' -Wait
     Start-Services
 })
-$webuiItem.add_Click({ Start-Process 'http://127.0.0.1:6099/' | Out-Null })
+$webuiItem.add_Click({
+    Push-Location $BotDir
+    try {
+        $gatewayInfo = & (Join-Path $BotDir '.venv\Scripts\python.exe') -m qq_onebot_whitelist.control gateway-info | ConvertFrom-Json
+        if ($gatewayInfo.gatewayWebuiUrl -match '^https?://') { Start-Process $gatewayInfo.gatewayWebuiUrl | Out-Null }
+    } finally { Pop-Location }
+})
 $viewItem.add_Click({ Open-Path $ViewPath })
 $logsItem.add_Click({ Open-Path $LogDir })
 $settingsItem.add_Click({ Invoke-BotScript 'set-analysis-windows.ps1' })
@@ -176,6 +190,7 @@ try {
 } finally {
     $timer.Dispose()
     $tray.Dispose()
+    if ($OwnedTrayIcon) { $OwnedTrayIcon.Dispose() }
     $mutex.ReleaseMutex()
     $mutex.Dispose()
 }

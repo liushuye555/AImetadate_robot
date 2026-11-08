@@ -9,7 +9,7 @@ void AutoRestart::setManualStop(bool manualStop) { m_manualStop = manualStop; }
 
 void AutoRestart::onStatusChanged(const StatusSnapshot &s) {
     if (!m_enabled || m_manualStop || s.manualStop || !s.valid) return;
-    if (s.napcat && s.onebot && s.bot) return;
+    if (s.onebot && s.bot) return;
     if (m_lastRestart.isValid() && m_lastRestart.secsTo(QDateTime::currentDateTime()) < 30) return;
     m_lastRestart = QDateTime::currentDateTime();
     m_control->run({"-m", "qq_onebot_whitelist.control", "start"});

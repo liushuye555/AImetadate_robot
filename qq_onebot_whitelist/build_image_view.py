@@ -50,6 +50,10 @@ def image_category(reason: str, ai_source: object = None) -> str:
 
 def stale_view_counts(view: Path) -> dict[str, int]:
     """不重建视图，直接从现有视图目录统计各分类图片数（低开销，供负载忙时兜底）。"""
+    if (view / 'gallery.html').exists():
+        from .gallery_store import facets
+        meta = facets(view.parent.parent)
+        return {ALL_GALLERY_DIR: meta['total'], **{c['name']: c['count'] for c in meta['categories']}}
     image_exts = IMAGE_EXTENSIONS
     counts: dict[str, int] = {}
     if view.exists():
@@ -2076,6 +2080,12 @@ def _apply_cat_plan(cat_dir: Path, plan: _CatPlan, copy_fallbacks: list[tuple[Pa
 
 
 def build_view(project_dir: Path) -> dict[str, int]:
+    """Update report entry points without placing images in category directories."""
+    from .database_gallery import build_database_view
+    return build_database_view(project_dir)
+
+
+def build_legacy_view(project_dir: Path) -> dict[str, int]:
     """构建/增量更新图片视图目录。
 
     每个类目的期望状态完全由数据库推导；签名与上次一致、页面骨架完整、

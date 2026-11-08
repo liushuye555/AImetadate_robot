@@ -91,7 +91,7 @@ def test_repair_command_parser_accepts_id_or_scan():
 
 def test_saved_view_uses_real_png_fixture(tmp_path):
     """The production verifier must keep rejecting fake bytes; saved view uses valid media."""
-    from qq_onebot_whitelist.build_image_view import build_view
+    from qq_onebot_whitelist.build_image_view import build_legacy_view as build_view
 
     data = tmp_path / "data"
     store = Store(data / "bot.db")

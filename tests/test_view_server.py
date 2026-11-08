@@ -68,7 +68,9 @@ def test_serves_static_pages_and_blocks_traversal(tmp_path):
             assert b'gallery' in resp.read()
         # 根路径跳转到视图入口
         with urlopen(base + '/') as resp:
-            assert b'hub' in resp.read()
+            body = resp.read().decode('utf-8')
+            assert '图片与资源总览' in body
+            assert 'knowledge.html' in body and 'gallery.html' in body
         # 目录穿越被拒绝（../ 与 %5C 反斜杠两种路径）
         with pytest.raises(HTTPError) as ei:
             urlopen(base + '/view/../bot.db')

@@ -399,33 +399,27 @@ def _remote_size_ok(client: WebDavClient, remote: str, size: int) -> bool:
 
 def fetch_download_url_once(group_id: str, file_id: str, busid: int | None = None, *,
                             ws_url: str = 'ws://127.0.0.1:3001', timeout: float = 20,
+                            access_token: str = '', max_message_mb: int = 16,
+                            disabled_actions=None,
                             file_name: str | None = None, file_size: int | None = None) -> str:
     """独立进程取新下载链接（群文件 URL 会过期）：开一条短 ws 连接。"""
     import json as _json
 
     async def _once() -> str:
-        import websockets
+        from . import gateway
+        from .config import AppConfig
         deadline = time.monotonic() + timeout
         try:
-            async with websockets.connect(ws_url, open_timeout=timeout) as ws:
+            config = AppConfig(onebot_ws_url=ws_url, onebot_access_token=access_token,
+                               onebot_max_message_mb=max_message_mb,
+                               onebot_disabled_actions=set(disabled_actions or []))
+            async with gateway.connect(config, open_timeout=timeout) as ws:
                 async def call_action(action: str, params: dict[str, Any]) -> dict[str, Any]:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError('群文件引用恢复超时')
-                    echo = f'fs-{time.time()}-{id(params)}'
                     try:
-                        await ws.send(_json.dumps({'action': action, 'params': params, 'echo': echo}, ensure_ascii=False))
-                        while True:
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                raise TimeoutError('群文件引用恢复超时')
-                            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                            data = _json.loads(raw)
-                            if not isinstance(data, dict) or data.get('echo') != echo:
-                                continue
-                            if isinstance(data.get('status'), str) and data['status'].lower() in ('failed', 'false'):
-                                raise RuntimeError('OneBot 群文件请求失败')
-                            return data
+                        return await gateway.call(ws, action, params, timeout=remaining)
                     except asyncio.TimeoutError as exc:
                         raise TimeoutError('群文件引用恢复超时') from exc
 

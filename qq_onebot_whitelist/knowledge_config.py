@@ -11,9 +11,14 @@ FEATURES = ('summary', 'extraction', 'glossary', 'files', 'history', 'feedback')
 
 def group_scope(value: str) -> str:
     value = str(value).removeprefix('group:')
-    if not re.fullmatch(r'[1-9][0-9]*', value):
+    if not re.fullmatch(r'(?:[1-9][0-9]*|qqofficial:[0-9]+:[A-Za-z0-9_.-]{1,256})', value):
         raise ValueError('需要有效的群号')
     return 'group:' + value
+
+
+def archive_scope_component(scope: str) -> str:
+    """Stable Windows-safe folder name; preserve existing numeric group folders."""
+    return group_scope(scope).removeprefix('group:').replace(':', '_')
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -77,7 +82,7 @@ def profile_for(config, scope: str) -> GroupProfile:
     if not isinstance(topics, list) or not all(isinstance(v, str) for v in topics):
         raise ValueError('topics 必须是主题名称列表')
     return GroupProfile(scope, raw.get('enabled') is True,
-                        explicit.get('enabled') is True and scope.split(':')[1] not in config.blocked_groups,
+                        explicit.get('enabled') is True and scope.split(':', 1)[1] not in config.blocked_groups,
                         settings, explicit)
 
 

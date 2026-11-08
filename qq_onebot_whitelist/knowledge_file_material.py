@@ -90,9 +90,14 @@ def prepare_file_previews(config_path: Path, scope: str, records: list[dict]) ->
                     if not enabled():
                         raise PermissionError("PreviewDisabled")
                     fresh = load_config(config_path)
+                    if fresh.onebot_provider == 'qqofficial':
+                        raise RuntimeError('官方附件链接已失效，请重新发送附件')
                     return fetch_download_url_once(
                         scope.split(":", 1)[1], str(file_id), source.get("busid"),
                         ws_url=fresh.onebot_ws_url,
+                        access_token=fresh.onebot_access_token,
+                        max_message_mb=fresh.onebot_max_message_mb,
+                        disabled_actions=fresh.onebot_disabled_actions,
                     )
 
                 try:

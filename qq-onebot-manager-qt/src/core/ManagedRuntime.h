@@ -20,6 +20,7 @@ public:
     bool initialize(QString *error = nullptr);
     static void bind(QProcess *process, std::function<quintptr()> commandJob = {});
     void beginTransition(int timeoutMs = 45000);
+    void pauseBackendObservation();
     void expectBot(qint64 pid);
     void startupCommandStarted(qint64 pid);
     void startupCommandCompleted(int exitCode, int exitStatus, qint64 elapsedMs);

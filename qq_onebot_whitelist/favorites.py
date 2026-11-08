@@ -1,6 +1,8 @@
 """私聊引用合并聊天记录后的显式图片保存。"""
 from __future__ import annotations
 
+from . import gateway
+
 import asyncio
 import re
 from pathlib import Path
@@ -115,7 +117,7 @@ async def save_replied_forward_images(store: Store, event: dict[str, Any], confi
     from .onebot import call_action
 
     try:
-        async with websockets.connect(config.onebot_ws_url) as action_ws:
+        async with gateway.connect(config) as action_ws:
             reply_resp = await call_action(action_ws, 'get_msg', {'message_id': reply_id})
             reply_message = (reply_resp.get('data') or {}) if isinstance(reply_resp, dict) else {}
             if not isinstance(reply_message, dict):

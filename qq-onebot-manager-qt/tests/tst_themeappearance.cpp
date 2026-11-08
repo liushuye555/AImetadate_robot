@@ -1,8 +1,12 @@
 #include <QtTest>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDir>
 #include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QSettings>
@@ -54,6 +58,120 @@ void preview(MainWindow &window, const QString &name) {
 class TestThemeAppearance : public QObject {
     Q_OBJECT
 private slots:
+    void cachedAccountDoesNotImplyOnline() {
+        OverviewPage page;
+        StatusSnapshot status;
+        status.valid = true;
+        status.gatewayProvider = "external";
+        status.gatewayName = "通用 OneBot v11";
+        status.qqNumber = "1234567890";
+        status.qqNickname = "缓存昵称";
+        status.qqStatusKnown = false;
+        page.setStatus(status);
+        auto hasText = [&](const QString &text) {
+            for (auto *label : page.findChildren<QLabel *>())
+                if (label->text().contains(text)) return true;
+            return false;
+        };
+        QVERIFY(hasText("登录状态未确认"));
+        QVERIFY(hasText("缓存昵称"));
+        status.qqStatusKnown = true;
+        page.setStatus(status);
+        QVERIFY(hasText("未登录"));
+        status.qqLoggedIn = true;
+        page.setStatus(status);
+        QVERIFY(!hasText("未登录"));
+        QVERIFY(!hasText("登录状态未确认"));
+    }
+    void overviewGatewaySwitchControlsAndSignals() {
+        OverviewPage page;
+        auto *provider = page.findChild<QComboBox *>("homeGatewayProvider");
+        auto *ws = page.findChild<QLineEdit *>("homeGatewayWs");
+        auto *token = page.findChild<QLineEdit *>("homeGatewayTokenEnv");
+        auto *webui = page.findChild<QLineEdit *>("homeGatewayWebui");
+        QCheckBox *managed = nullptr;
+        QCheckBox *installed = nullptr;
+        for (auto *check : page.findChildren<QCheckBox *>()) {
+            if (check->text().contains("内置 NapCat")) managed = check;
+            if (check->text().contains("已安装的 SnowLuma")) installed = check;
+        }
+        auto *switchButton = page.findChild<QPushButton *>("homeGatewaySwitch");
+        auto *restoreButton = page.findChild<QPushButton *>("homeGatewayRestore");
+        QVERIFY(provider && ws && token && webui && managed && installed && switchButton && restoreButton);
+        const QJsonArray schema = QJsonArray{
+            QJsonObject{{"key", "unrelated.setting"}, {"default", "ignore-me"}},
+            QJsonObject{{"key", "onebot.provider"}, {"default", "external"}},
+            QJsonObject{{"key", "onebot.protocol"}, {"default", "onebot11"}},
+            QJsonObject{{"key", "onebot.ws_url"}, {"default", "ws://existing:3001"}},
+            QJsonObject{{"key", "onebot.access_token_env"}, {"default", "EXISTING_TOKEN"}},
+            QJsonObject{{"key", "onebot.webui_url"}, {"default", "http://existing/"}},
+            QJsonObject{{"key", "onebot.manage_process"}, {"default", true}},
+            QJsonObject{{"key", "onebot.start_installed_runtime"}, {"default", false}},
+            QJsonObject{{"key", "onebot.disabled_actions"}, {"default", QJsonArray{"get_group_files"}}},
+            QJsonObject{{"key", "onebot.max_message_mb"}, {"default", 12}}
+        };
+        page.setGatewaySchema(schema.toVariantList());
+        QCOMPARE(provider->currentData().toString(), QString("external"));
+        QCOMPARE(ws->text(), QString("ws://existing:3001"));
+        QCOMPARE(token->text(), QString("EXISTING_TOKEN"));
+        QCOMPARE(webui->text(), QString("http://existing/"));
+
+        QSignalSpy switchSpy(&page, &OverviewPage::gatewaySwitchRequested);
+        QSignalSpy restoreSpy(&page, &OverviewPage::gatewayRestoreRequested);
+        QSignalSpy snowSpy(&page, &OverviewPage::snowLumaActionRequested);
+        provider->setCurrentIndex(provider->findData("snowluma"));
+        QCOMPARE(ws->text(), QString("ws://127.0.0.1:3001"));
+        QCOMPARE(token->text(), QString("SNOWLUMA_ONEBOT_TOKEN"));
+        QCOMPARE(webui->text(), QString("http://127.0.0.1:5099/"));
+        QVERIFY(!installed->isHidden());
+        installed->setChecked(true);
+        ws->setText(" ws://snow:3001 ");
+        switchButton->click();
+        QCOMPARE(switchSpy.size(), 1);
+        const QJsonObject patch = qvariant_cast<QJsonObject>(switchSpy.takeFirst().at(0));
+        QCOMPARE(patch.value("onebot.provider").toString(), QString("snowluma"));
+        QCOMPARE(patch.value("onebot.protocol").toString(), QString("onebot11"));
+        QCOMPARE(patch.value("onebot.ws_url").toString(), QString("ws://snow:3001"));
+        QCOMPARE(patch.value("onebot.access_token_env").toString(), QString("SNOWLUMA_ONEBOT_TOKEN"));
+        QCOMPARE(patch.value("onebot.start_installed_runtime").toBool(), true);
+        QCOMPARE(patch.value("onebot.manage_process").toBool(), false);
+        QCOMPARE(patch.value("onebot.disabled_actions").toArray(), QJsonArray{"get_group_files"});
+        QCOMPARE(patch.value("onebot.max_message_mb").toInt(), 12);
+        QVERIFY(!patch.contains("unrelated.setting"));
+
+        provider->setCurrentIndex(provider->findData("qqofficial"));
+        QVERIFY(!ws->isEnabled());
+        QVERIFY(!token->isEnabled());
+        QVERIFY(!webui->isEnabled());
+        switchButton->click();
+        const QJsonObject officialPatch = qvariant_cast<QJsonObject>(switchSpy.takeFirst().at(0));
+        QCOMPARE(officialPatch.value("onebot.provider").toString(), QString("qqofficial"));
+        QCOMPARE(officialPatch.value("onebot.protocol").toString(), QString("qqofficial"));
+        QCOMPARE(officialPatch.value("onebot.ws_url").toString(), QString("ws://existing:3001"));
+        QCOMPARE(officialPatch.value("onebot.access_token_env").toString(), QString("EXISTING_TOKEN"));
+        QCOMPARE(officialPatch.value("onebot.webui_url").toString(), QString("http://existing/"));
+        QCOMPARE(officialPatch.value("onebot.disabled_actions").toArray(), QJsonArray{"get_group_files"});
+        QCOMPARE(officialPatch.value("onebot.max_message_mb").toInt(), 12);
+        QVERIFY(!officialPatch.contains("unrelated.setting"));
+
+        auto *snowStart = page.findChild<QPushButton *>("homeSnowLuma_start");
+        QVERIFY(snowStart);
+        snowStart->click();
+        QCOMPARE(snowSpy.size(), 1);
+        QCOMPARE(snowSpy.takeFirst().at(0).toString(), QString("start"));
+        restoreButton->click();
+        QCOMPARE(restoreSpy.size(), 1);
+        page.setGatewayBusy(true);
+        QVERIFY(!switchButton->isEnabled());
+        QVERIFY(!restoreButton->isEnabled());
+        const int switchesBefore = switchSpy.size();
+        switchButton->click();
+        QCOMPARE(switchSpy.size(), switchesBefore);
+        page.setGatewayBusy(false);
+        QVERIFY(switchButton->isEnabled());
+        page.setGatewayResult("配置已更新");
+        QCOMPARE(page.findChild<QLabel *>("homeGatewayMessage")->text(), QString("配置已更新"));
+    }
     void initTestCase() {
         QVERIFY(m_settingsDir.isValid());
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -185,6 +303,11 @@ private slots:
             MainWindow window(pages);
             auto *page = qobject_cast<OverviewPage *>(window.pageWidget("overview"));
             QVERIFY(page);
+            page->setGatewaySchema(QJsonArray{
+                QJsonObject{{"key", "onebot.provider"}, {"default", "external"}},
+                QJsonObject{{"key", "onebot.ws_url"}, {"default", "ws://127.0.0.1:3001"}},
+                QJsonObject{{"key", "onebot.access_token_env"}, {"default", "ONEBOT_ACCESS_TOKEN"}}
+            }.toVariantList());
             StatusSnapshot status;
             status.valid = true;
             status.napcat = status.onebot = status.bot = true;
@@ -224,7 +347,7 @@ private slots:
                                  qPrintable(QString("Clipped %1 at %2").arg(key).arg(size.width())));
                 }
                 for (auto *button : page->findChildren<QPushButton *>())
-                    QVERIFY(button->width() >= button->minimumSizeHint().width());
+                    if (button->isVisible()) QVERIFY(button->width() >= button->minimumSizeHint().width());
                 auto *actionCard = page->findChild<QPushButton *>("primary")->parentWidget();
                 QTRY_COMPARE(actionCard->height(), actionCard->sizeHint().height());
                 preview(window, QString("overview-%1-%2").arg(ThemeManager::themeName(appearance)).arg(size.width()));
