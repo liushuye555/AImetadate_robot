@@ -185,3 +185,15 @@ def image_path(project_dir: Path, image_id: int) -> Path:
     if not path.is_relative_to(project_dir.resolve()) or path.suffix.lower() not in {'.png','.jpg','.jpeg','.gif','.webp','.bmp'} or not path.is_file():
         raise FileNotFoundError('原图不存在或不在项目归档范围内')
     return path
+
+
+def image_details(project_dir: Path, image_id: int) -> dict:
+    """Read the original prompt lazily, as the former static lightbox did."""
+    from .export_dataset import extract_caption
+    with closing(connect(project_dir)) as conn:
+        row = conn.execute(_base(conn) + 'SELECT file_id FROM available WHERE id=?',
+                           (image_id,)).fetchone()
+    if not row or not row['file_id']:
+        raise FileNotFoundError('图片未归档')
+    path = image_path(project_dir, row['file_id'])
+    return {'filename': path.name, 'prompt': extract_caption(path)}

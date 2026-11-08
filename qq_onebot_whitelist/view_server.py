@@ -275,7 +275,7 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
                 return
             path = unquote(urlsplit(self.path).path)
             if path.startswith('/api/gallery/') or path.startswith('/media/images/'):
-                from .gallery_store import facets, query_images
+                from .gallery_store import facets, query_images, image_details
                 try:
                     if path == '/api/gallery/meta':
                         self._json(200, {**facets(project_dir), 'token': session_token})
@@ -284,10 +284,14 @@ def make_handler(project_dir: Path) -> type[BaseHTTPRequestHandler]:
                         if any(len(v) != 1 for v in params.values()):
                             raise ValueError('筛选条件不能重复')
                         self._json(200, query_images(project_dir, {k: v[0] for k,v in params.items()}))
+                    elif match := re.fullmatch(r'/api/gallery/images/([1-9][0-9]{0,17})', path):
+                        self._json(200, image_details(project_dir, int(match[1])))
                     elif match := re.fullmatch(r'/media/images/([1-9][0-9]{0,17})(/thumbnail)?', path):
                         self._image(int(match[1]), bool(match[2]))
                     else:
                         self._json(404, {'error': 'not found'})
+                except FileNotFoundError as exc:
+                    self._json(404, {'error': str(exc)})
                 except ValueError as exc:
                     self._json(400, {'error': str(exc)})
                 except sqlite3.Error:

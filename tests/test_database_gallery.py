@@ -223,3 +223,24 @@ def test_frontend_exports_and_pages_the_applied_query():
     script = Path(__file__).with_name('gallery_frontend_harness.cjs')
     gallery = Path(__file__).parents[1] / 'qq_onebot_whitelist' / 'gallery.html'
     subprocess.run([node, str(script), str(gallery)], check=True, capture_output=True, text=True, timeout=10)
+
+
+def test_lightbox_reads_original_prompt_and_merged_file_without_exposing_paths(project):
+    from PIL.PngImagePlugin import PngInfo
+    image = add(project, sha256='original', text_excerpt='truncated')
+    prompt = 'a detailed original prompt ' * 40
+    meta = PngInfo()
+    meta.add_text('parameters', prompt + '\nNegative prompt: blurry\nSteps: 20, Sampler: Euler')
+    Image.new('RGB', (800, 1200), 'navy').save(project / 'data/images/ai/100.png', pnginfo=meta)
+    merged = add(project, sha256='original', kept_path=None, merged_into=image,
+                 context_reason='positive_feedback')
+    outside = add(project, kept_path=str(project.parent / 'outside.png'))
+    with server(project) as base:
+        for selected in (image, merged):
+            detail = get(base, f'/api/gallery/images/{selected}')
+            assert detail == {'filename': '100.png', 'prompt': prompt.strip()}
+            assert 'truncated' not in detail['prompt']
+        for selected in (outside, 999999):
+            with pytest.raises(HTTPError) as exc:
+                get(base, f'/api/gallery/images/{selected}')
+            assert exc.value.code == 404
